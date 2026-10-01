@@ -327,10 +327,25 @@ struct TodayView: View {
         case .cancelled:
             Button("View job") { handle(presentation.jobDestination) }
             Button("OK", role: .cancel) {}
-        case .missingJob, .unconvertedActive:
-            // Native-only rows (Phase 8 addition); RN has no alert copy for
-            // these. "View job" always falls back to the Jobs tab per
-            // `bookingRowPresentation`'s documented no-dead-action rule.
+        case .missingJob:
+            // P12-026: the linked job is gone, so offer what needs no job and
+            // always a way to clear the row. A reschedule request is
+            // answered with RN's Decline booking, a portal change with RN's
+            // Done; any other booking is dismissed.
+            Button("View job") { handle(presentation.jobDestination) }
+            switch NativeBookingAttention.missingJobAction(for: row.request) {
+            case .decline:
+                Button("Decline booking", role: .destructive) { declineBooking(row) }
+            case .markDone:
+                Button("Done") { markBookingHandled(row) }
+            case .dismiss:
+                Button("Dismiss") { markBookingHandled(row) }
+            }
+            Button("Cancel", role: .cancel) {}
+        case .unconvertedActive:
+            // Native-only row (Phase 8 addition); RN has no alert copy for
+            // it. "View job" falls back to the Jobs tab per
+            // `bookingRowPresentation`'s no-dead-action rule.
             Button("View job") { handle(presentation.jobDestination) }
             Button("OK", role: .cancel) {}
         }

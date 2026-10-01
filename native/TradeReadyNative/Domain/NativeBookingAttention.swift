@@ -20,7 +20,11 @@ import Foundation
 /// - `missingJob`: actionable. A booked-family request points at
 ///   `convertedJobId` (or a portal change at `jobRef`) with no matching job —
 ///   e.g. the job was deleted on another device. RN drops these silently;
-///   native surfaces them so the owner can reconcile.
+///   native surfaces them so the owner can reconcile. Phase 12 (P12-026):
+///   every such row can be answered or cleared without the job
+///   (`missingJobAction`): a reschedule request is declined, a portal change
+///   is marked Done, and any other row is dismissed with the `handledAt`
+///   stamp, after which it stops surfacing.
 /// - `unconvertedActive`: inspection. A convertible request with no
 ///   `convertedJobId` (`new`, unconverted `booked`/`confirmed`) that has no
 ///   more specific actionable row. `reschedule_requested` rows already
@@ -121,9 +125,12 @@ public enum NativeBookingAttention {
                 guard let stamped = linked else { continue }
                 guard let job = jobsByID[stamped] else {
                     // The linked job is gone — surface for reconciliation
-                    // instead of silently clearing the row.
-                    rows.append(Row(kind: .missingJob, request: request, jobID: stamped,
-                                    note: nil))
+                    // instead of silently clearing the row, until the owner
+                    // dismisses it (P12-026: `handledAt`).
+                    if isUnhandled(request) {
+                        rows.append(Row(kind: .missingJob, request: request, jobID: stamped,
+                                        note: nil))
+                    }
                     continue
                 }
                 if jobStillHoldsSlot(request: request, job: job) {
@@ -140,7 +147,8 @@ public enum NativeBookingAttention {
                 continue
             }
             if let stamped = request.convertedJobId, jobsByID[stamped] == nil
-                && (request.status == "booked" || request.status == "confirmed") {
+                && (request.status == "booked" || request.status == "confirmed")
+                && isUnhandled(request) {
                 rows.append(Row(kind: .missingJob, request: request, jobID: stamped,
                                 note: nil))
             }
@@ -155,6 +163,30 @@ public enum NativeBookingAttention {
             let rDate = $1.request.slot?.date ?? ""
             if lDate != rDate { return lDate < rDate }
             return $0.request.id < $1.request.id
+        }
+    }
+
+    /// What the owner can do with a `missingJob` row (P12-026). The linked job
+    /// is gone, so nothing that needs the job is offered; each row keeps the
+    /// answer RN gives its kind, and every row can be cleared.
+    public enum MissingJobAction: Equatable {
+        /// `Decline booking`: answer a customer's open reschedule request
+        /// (the server decline needs no job). The row clears when the
+        /// request's status changes.
+        case decline
+        /// `Done`: RN's dismissal of a portal change request.
+        case markDone
+        /// `Dismiss`: the row was a record, not a question. A cancelled,
+        /// declined, booked or confirmed booking whose job is gone is cleared
+        /// with the same `handledAt` stamp.
+        case dismiss
+    }
+
+    public static func missingJobAction(for request: Canonical.BookingRequest) -> MissingJobAction {
+        switch request.status {
+        case "reschedule_requested": return .decline
+        case "portal_change_requested": return .markDone
+        default: return .dismiss
         }
     }
 

@@ -131,6 +131,16 @@ final class LinkServer: NativeBookingAdministrationHTTPDataLoading, NativePortal
     /// (`backend-workers/lib/booking/respond.js:61`).
     var statuslessConflicts = false
     var unreachable = false
+    /// P12-027: how the booking-link and portal-link admin routes answer a
+    /// mutation. `lostAfterCommit` commits and then fails the response (a
+    /// timeout after the work); `lostBeforeCommit` fails before any change.
+    enum AdminMode { case normal, lostAfterCommit, lostBeforeCommit }
+    var adminMode = AdminMode.normal
+    /// The operation ID each admin mutation carried, in order.
+    private(set) var operationIDs: [String] = []
+    /// The stored response per operation ID, as the server keeps them for 30
+    /// days (contract §1.3): a repeated ID replays instead of mutating again.
+    private var replays: [String: (Int, [String: Any])] = [:]
     /// Every request as "family/action", for example "booking/status".
     private(set) var log: [String] = []
     /// The token each status read carried (nil when it sent none).
@@ -155,6 +165,7 @@ final class LinkServer: NativeBookingAdministrationHTTPDataLoading, NativePortal
     var mutations: [String] { log.filter { !$0.hasSuffix("/status") } }
 
     func resetLog() {
+        operationIDs = []
         log = []
         statusTokens = []
         respondProofs = []
@@ -193,12 +204,29 @@ final class LinkServer: NativeBookingAdministrationHTTPDataLoading, NativePortal
             duringNextRespond = nil
             await hook()
         }
-        let reply: (Int, [String: Any])
-        switch family {
-        case "booking": reply = booking(action, body)
-        case "portal": reply = portal(action, body)
-        case "respond": reply = await respond(action, body)
-        default: reply = (404, ["error": "Not found"])
+        var reply: (Int, [String: Any])
+        let adminID = body["operationId"] as? String ?? ""
+        if (family == "booking" || family == "portal"), action != "status", !adminID.isEmpty {
+            operationIDs.append(adminID)
+        }
+        if (family == "booking" || family == "portal"), action != "status", let stored = replays[adminID] {
+            reply = stored
+        } else if (family == "booking" || family == "portal"), action != "status", adminMode == .lostBeforeCommit {
+            reply = (500, ["error": "Database error"])
+        } else {
+            switch family {
+            case "booking": reply = booking(action, body)
+            case "portal": reply = portal(action, body)
+            case "respond": reply = await respond(action, body)
+            default: reply = (404, ["error": "Not found"])
+            }
+            if (family == "booking" || family == "portal"), action != "status", reply.0 == 200, !adminID.isEmpty {
+                replays[adminID] = reply
+            }
+            if (family == "booking" || family == "portal"), action != "status", adminMode == .lostAfterCommit,
+               reply.0 == 200 {
+                reply = (500, ["error": "Database error"])
+            }
         }
         let bytes = (try? JSONSerialization.data(withJSONObject: reply.1)) ?? Data("{}".utf8)
         let http = HTTPURLResponse(url: request.url!, statusCode: reply.0, httpVersion: "HTTP/1.1", headerFields: nil)!
@@ -406,7 +434,14 @@ func isPassMarker(_ item: NativeScheduleBookingPendingWork) -> Bool {
 func isMirror(_ item: NativeScheduleBookingPendingWork) -> Bool {
     switch item.kind {
     case .bookingMirror, .portalMirror: return true
-    case .rescheduleProof: return false
+    case .rescheduleProof, .stagedBatch, .adminOperation: return false
+    }
+}
+
+@MainActor func stagedBatches(_ d: Device) -> [[NativeScheduleBookingStagedDraft]] {
+    d.items.compactMap { item in
+        if case let .stagedBatch(drafts, _) = item.kind { return drafts }
+        return nil
     }
 }
 
@@ -584,6 +619,22 @@ final class Device {
 
     func queued(_ table: String) -> Int { queue.load().filter { $0.table == table }.count }
 
+    /// Makes the mutation queue's file unwritable (a directory stands where
+    /// the file is, as a full disk or a lost data-protection class would),
+    /// or restores it. A blocked queue reads as empty and refuses writes.
+    func blockQueue(_ block: Bool) {
+        let url = dir.appendingPathComponent("mutation-queue.json")
+        try? FileManager.default.removeItem(at: url)
+        if block { try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
+    }
+
+    /// The same for the pending-work store's file, so nothing can be staged.
+    func blockWorkStore(_ block: Bool) {
+        let url = dir.appendingPathComponent("schedule-booking-pending-work.json")
+        try? FileManager.default.removeItem(at: url)
+        if block { try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
+    }
+
     /// The booking link in the cloud settings row (what other devices and
     /// the Expo rollback build read).
     func cloudBookingLink() async -> (token: String?, enabled: Bool?) {
@@ -696,6 +747,23 @@ struct ScheduleBookingRecoveryTests {
         await nothingBeforeTheInitialSync()
         await nothingWhileReadOnly()
         await aFailedIntakeSaveLeavesNoMessage()
+        await aLostBookingCreateIsReplayedByItsOperationID()
+        await aLostBookingRotateNeverIssuesASecondLink()
+        await aDifferentActionWaitsForAnUnknownOne()
+        await definiteFailuresClearAndRetriesKeepTheOperation()
+        await aLostPortalCreateIsReplayedByItsOperationID()
+        await anExpiredOperationStartsFresh()
+        await anOperationThatCannotBeRememberedIsNotSent()
+        adminOperationRules()
+        adminOperationSources(root)
+        await aDeletedJobsRowsCanBeAnsweredOrCleared()
+        missingJobSources(root)
+        await aFailedIntakeQueueWriteIsStagedAndReplayed()
+        await anIntakeThatCannotStageCommitsNothing()
+        await aSupersededStagedDraftIsNotReplayed()
+        await stagedReplayNeverQueuesTwice()
+        await aStagedBatchBlocksRollbackReadiness()
+        await anEndedCommitIsReplayedAtLaunch()
         await acceptAfterIntakeIsLinkedToTheJob()
         await declineKeepsTheServersHistory()
         await aQueuedCopyNeverOverwritesTheDecline()
@@ -3222,6 +3290,488 @@ struct ScheduleBookingRecoveryTests {
         expectEqual(code, "intake/local-commit", "\(id) [P12-016]: the sync status carries the bounded code")
         await store.performForegroundRefresh()
         expectConverted(d, "\(id): the next activation")
+    }
+
+    // MARK: Section M (12.00b.2-M, P12-028): stage before save, replay after
+
+    /// M1: the snapshot save succeeds and the queue write fails. Before the
+    /// fix the closure that should have staged recovery was empty: the
+    /// converted job, customer and request stayed on this device only (the
+    /// next intake pass saw the request linked and queued nothing, and a
+    /// pull never pushes local records). Now the exact batch is staged before
+    /// the save, stays after the failed queue write, and the next activation
+    /// queues it and the push brings it to the cloud.
+    @MainActor
+    static func aFailedIntakeQueueWriteIsStagedAndReplayed() async {
+        let id = "M1 queue write fails"
+        let (d, store) = await intakeDevice("m1")
+        defer { d.cleanup() }
+        d.blockQueue(true)
+        await store.performForegroundRefresh()
+        let code = store.syncStatus.diagnosticCode
+        observed(id, intakeState(d) + " staged=\(stagedBatches(d).map(\.count)) code=\(code ?? "nil")")
+        expectConverted(d, "\(id): the records are saved on the device")
+        expectEqual(stagedBatches(d).map(\.count), [3], "\(id) [P12-028]: the three upserts are staged durably")
+        expectEqual(Set(stagedBatches(d).first?.map(\.table) ?? []), ["jobs", "customers", "bookingRequests"],
+                    "\(id) [P12-028]: …for the job, the customer and the request")
+        // The refresh's own recovery pass also fails to queue it and records the
+        // later bounded code; either way a queue failure is what the status shows.
+        expect(code == "queue/enqueue-booking-intake" || code == "recovery/queue",
+               "\(id): the sync status carries a bounded queue code (\(code ?? "nil"))")
+        expectEqual(store.migrationMessage, nil, "\(id): nothing is left in migrationMessage")
+        d.blockQueue(false)
+        await store.performForegroundRefresh()
+        await syncAndWait(d)
+        expectEqual(d.links.row("jobs", leadJobID)?["status"] as? String, "lead",
+                    "\(id) [P12-028]: the next activation queued the batch, and the cloud has the lead job")
+        expectEqual(d.links.requestRow("req-1")?["convertedJobId"] as? String, leadJobID,
+                    "\(id) [P12-028]: …and the linked request")
+        expectEqual(d.data.liveRowCount(table: "customers", userID: d.subject), 1, "\(id) [P12-028]: …and the customer")
+        expectEqual(stagedBatches(d).count, 0, "\(id) [P12-028]: the staged batch is cleared once queued")
+        expectEqual(d.queue.load().count, 0, "\(id): everything reached the server")
+    }
+
+    /// M2: a batch that cannot be staged is not committed. Success is never
+    /// reported for records with no durable trace: nothing is saved, nothing
+    /// is queued, and the next pass converts normally.
+    @MainActor
+    static func anIntakeThatCannotStageCommitsNothing() async {
+        let id = "M2 stage fails"
+        let (d, store) = await intakeDevice("m2")
+        defer { d.cleanup() }
+        d.blockWorkStore(true)
+        await store.performForegroundRefresh()
+        let code = store.syncStatus.diagnosticCode
+        observed(id, intakeState(d) + " code=\(code ?? "nil")")
+        expect(bookingRequest(d) != nil, "\(id): sanity: the pull brought the booking")
+        expect(leadJob(d) == nil && bookedCustomers(d).isEmpty && bookingRequest(d)?.convertedJobId == nil,
+               "\(id) [P12-028]: nothing is converted")
+        expectEqual(d.queued("jobs") + d.queued("customers") + d.queued("bookingRequests"), 0,
+                    "\(id): nothing is queued")
+        expectEqual(code, "intake/local-commit", "\(id): the sync status carries the bounded code")
+        expectEqual(store.migrationMessage, nil, "\(id): nothing is left in migrationMessage")
+        d.blockWorkStore(false)
+        await store.performForegroundRefresh()
+        expectConverted(d, "\(id): the next activation")
+        expectEqual(stagedBatches(d).count, 0, "\(id): nothing stays staged after a clean commit")
+    }
+
+    /// M3: a staged draft is replayed only while the record on the device
+    /// still equals it. A record edited since queued its own newer upsert
+    /// (replaying the old one could overwrite it), so the old draft is not
+    /// queued; the others are.
+    @MainActor
+    static func aSupersededStagedDraftIsNotReplayed() async {
+        let id = "M3 superseded draft"
+        let (d, store) = await intakeDevice("m3")
+        defer { d.cleanup() }
+        d.blockQueue(true)
+        await store.performForegroundRefresh()
+        d.blockQueue(false)
+        expectEqual(stagedBatches(d).map(\.count), [3], "\(id): sanity: the batch is staged")
+        // The staged job is an older copy: the job on the device has moved on.
+        let current = d.items
+        try? d.workStore.removeAll()
+        for var item in current {
+            if case .stagedBatch(var drafts, let stage) = item.kind,
+               let index = drafts.firstIndex(where: { $0.table == "jobs" }) {
+                drafts[index].payload = .object(["id": .string(leadJobID), "title": .string("An older title")])
+                item.kind = .stagedBatch(drafts: drafts, stage: stage)
+            }
+            try? d.workStore.stage(item)
+        }
+        let recovery = await store.recoverScheduleBookingPendingWorkIfPossible()
+        observed(id, "queued jobs=\(d.queued("jobs")) customers=\(d.queued("customers")) requests=\(d.queued("bookingRequests"))")
+        expectEqual(recovery?.replayedBatches, 1, "\(id): the pass finished the batch")
+        expectEqual(d.queued("jobs"), 0, "\(id) [P12-028]: the superseded job draft is not queued")
+        expectEqual(d.queued("customers"), 1, "\(id): the customer draft is")
+        expectEqual(d.queued("bookingRequests"), 1, "\(id): …and the request draft")
+        expectEqual(stagedBatches(d).count, 0, "\(id): the item is cleared")
+    }
+
+    /// M4: replay is idempotent. A second pass, and a batch staged twice,
+    /// queue nothing again; a record the queue already holds is skipped.
+    @MainActor
+    static func stagedReplayNeverQueuesTwice() async {
+        let id = "M4 replay is idempotent"
+        let (d, store) = await intakeDevice("m4")
+        defer { d.cleanup() }
+        d.blockQueue(true)
+        await store.performForegroundRefresh()
+        d.blockQueue(false)
+        let staged = d.items
+        let first = await store.recoverScheduleBookingPendingWorkIfPossible()
+        let after = d.queue.load().count
+        expectEqual(first?.replayedBatches, 1, "\(id): the first pass replays")
+        expectEqual(after, 3, "\(id): three upserts are queued")
+        // The app ended after the queue write and before the stage was cleared.
+        for item in staged { try? d.workStore.stage(item) }
+        expectEqual(stagedBatches(d).count, 1, "\(id): sanity: the batch is staged again")
+        let second = await store.recoverScheduleBookingPendingWorkIfPossible()
+        expectEqual(second?.replayedBatches, 1, "\(id): the second pass finishes the item")
+        expectEqual(d.queue.load().count, after, "\(id) [P12-028]: nothing is queued twice")
+        expectEqual(stagedBatches(d).count, 0, "\(id): and the item is cleared")
+        // The same commit retried stages one item, not two.
+        for _ in 0..<2 { for item in staged { try? d.workStore.stage(item) } }
+        expectEqual(stagedBatches(d).count, 1, "\(id): an identical batch staged twice is one item")
+    }
+
+    /// M5: a staged batch is business data that only this device holds, so
+    /// the rollback-readiness check counts its drafts as waiting changes and
+    /// is not Ready (a mirror or a proof stays a note).
+    @MainActor
+    static func aStagedBatchBlocksRollbackReadiness() async {
+        let id = "M5 rollback readiness"
+        let (d, store) = await intakeDevice("m5")
+        defer { d.cleanup() }
+        d.blockQueue(true)
+        await store.performForegroundRefresh()
+        let blocked = store.rollbackReadiness()
+        observed(id, "blockers=\(blocked.blockers) pending=\(blocked.pendingChangeCount) work=\(blocked.bookingWorkCount)")
+        expect(blocked.blockers.contains(.pendingChanges), "\(id) [P12-028]: staged records block the check")
+        expectEqual(blocked.pendingChangeCount, 3, "\(id): …counted as three waiting changes")
+        expectEqual(blocked.bookingWorkCount, 0, "\(id): …and not as a link-work note")
+        d.blockQueue(false)
+        await store.performForegroundRefresh()
+        await syncAndWait(d)
+        expect(!store.rollbackReadiness().blockers.contains(.pendingChanges), "\(id): clear once everything reached the server")
+    }
+
+    /// M6: the app ended after the snapshot save and before any queue write
+    /// (nothing ran after the save). The stage written before the save is
+    /// all that is left; a fresh launch queues it.
+    @MainActor
+    static func anEndedCommitIsReplayedAtLaunch() async {
+        let id = "M6 ended commit"
+        let (d, store) = await intakeDevice("m6")
+        defer { d.cleanup() }
+        d.blockQueue(true)
+        await store.performForegroundRefresh()
+        d.blockQueue(false)
+        expectEqual(d.queue.load().count, 0, "\(id): sanity: nothing was queued")
+        let relaunched = d.launch()
+        await d.signIn(relaunched)
+        // The pass the signed-in gate starts at launch (its wiring is pinned
+        // by `launchGateOpenRecovers`).
+        let pass = await relaunched.recoverScheduleBookingPendingWorkIfPossible()
+        expectEqual(pass?.replayedBatches, 1, "\(id): the launch pass replays the batch")
+        await syncAndWait(d)
+        expectEqual(d.links.row("jobs", leadJobID)?["status"] as? String, "lead",
+                    "\(id) [P12-028]: a fresh launch queued the staged batch and the cloud has the lead job")
+        expectEqual(stagedBatches(d).count, 0, "\(id): the stage is cleared")
+    }
+
+    // MARK: Section N (12.00b.2-N, P12-027): durable operation IDs
+
+    /// N1: a first Create whose response is lost. Before the fix each tap sent
+    /// a new operation ID and an unknown outcome recorded nothing, so no retry
+    /// reused one: the second Create answered `already_exists` and, with no
+    /// local token, the screen offered only Create, so no native device could
+    /// get a shareable link. Now the ID is staged before the request, survives
+    /// a relaunch, and the retry replays it: the server answers with the SAME
+    /// stored response (the raw token), and nothing is minted twice.
+    @MainActor
+    static func aLostBookingCreateIsReplayedByItsOperationID() async {
+        let id = "N1 lost Create"
+        let d = bookingDevice("n1", link: nil)
+        defer { d.cleanup() }
+        let first = d.launch()
+        await d.signIn(first)
+        await d.sync()
+        d.links.adminMode = .lostAfterCommit
+        let lost = await first.administerBookingLink(action: .mint, adminService: d.bookingService)
+        let sent = d.links.operationIDs
+        expectEqual(lost, .unknownOutcome, "\(id): sanity: the response is lost after the server committed")
+        expect(d.links.bookingToken != nil && d.localBookingLink?.token == nil,
+               "\(id): sanity: the server has a link and this device has no copy")
+        expectEqual(sent.count, 1, "\(id): one request was sent")
+        expectEqual(first.pendingAdminOperation(target: AppStore.bookingAdminTarget)?.operationId, sent.first,
+                    "\(id) [P12-027]: its operation ID is kept")
+        let relaunched = d.launch()
+        await d.signIn(relaunched)
+        expectEqual(relaunched.pendingAdminOperation(target: AppStore.bookingAdminTarget)?.operationId, sent.first,
+                    "\(id) [P12-027]: …across a relaunch")
+        d.links.adminMode = .normal
+        let retry = await relaunched.administerBookingLink(action: .mint, adminService: d.bookingService)
+        observed(id, "retry=\(retry) ids=\(d.links.operationIDs.count) revision=\(d.links.bookingRevision)")
+        expectEqual(d.links.operationIDs, sent + sent, "\(id) [P12-027]: the retry carries the same operation ID")
+        expectEqual(d.links.bookingRevision, 1, "\(id) [P12-027]: the server minted once")
+        expect({ if case .applied = retry { return true } else { return false } }(), "\(id): the retry is applied")
+        expectEqual(d.localBookingLink?.token, d.links.bookingToken,
+                    "\(id) [P12-027]: the owner has the link the first request made")
+        expectEqual(relaunched.pendingAdminOperation(target: AppStore.bookingAdminTarget)?.operationId, nil,
+                    "\(id): the operation is cleared once settled")
+        expectEqual(d.items.count, 0, "\(id): nothing is left on the device")
+    }
+
+    /// N2: a lost Rotate is retried under its ID: one rotation, not two. The
+    /// old behaviour made a second new link on the next tap.
+    @MainActor
+    static func aLostBookingRotateNeverIssuesASecondLink() async {
+        let id = "N2 lost Rotate"
+        let d = bookingDevice("n2", link: (bookingTokenA, true))
+        defer { d.cleanup() }
+        let first = d.launch()
+        await d.signIn(first)
+        await d.sync()
+        d.links.adminMode = .lostAfterCommit
+        let lost = await first.administerBookingLink(action: .rotate, adminService: d.bookingService)
+        expectEqual(lost, .unknownOutcome, "\(id): sanity: the response is lost")
+        let rotatedTo = d.links.bookingToken
+        expect(rotatedTo != nil && rotatedTo != bookingTokenA, "\(id): sanity: the server rotated")
+        d.links.adminMode = .normal
+        let retry = await first.administerBookingLink(action: .rotate, adminService: d.bookingService)
+        expect({ if case .applied = retry { return true } else { return false } }(), "\(id): the retry is applied")
+        expectEqual(d.links.bookingRevision, 2, "\(id) [P12-027]: exactly one rotation reached the server")
+        expectEqual(d.links.bookingToken, rotatedTo, "\(id) [P12-027]: the server link is the first rotation's")
+        expectEqual(d.localBookingLink?.token, rotatedTo, "\(id): …and so is this device's copy")
+        expectEqual(Set(d.links.operationIDs).count, 1, "\(id): both requests carried one operation ID")
+    }
+
+    /// N3: while a change may be in flight on the server, a different change
+    /// waits (nothing is sent). The same change retries.
+    @MainActor
+    static func aDifferentActionWaitsForAnUnknownOne() async {
+        let id = "N3 different action waits"
+        let d = bookingDevice("n3", link: (bookingTokenA, true))
+        defer { d.cleanup() }
+        let first = d.launch()
+        await d.signIn(first)
+        await d.sync()
+        d.links.adminMode = .lostAfterCommit
+        _ = await first.administerBookingLink(action: .setEnabled, enabled: false, adminService: d.bookingService)
+        d.links.adminMode = .normal
+        d.links.resetLog()
+        let rotate = await first.administerBookingLink(action: .rotate, adminService: d.bookingService)
+        let enable = await first.administerBookingLink(action: .setEnabled, enabled: true, adminService: d.bookingService)
+        expectEqual(rotate, .failed(reason: "operation-pending"), "\(id) [P12-027]: Rotate waits")
+        expectEqual(enable, .failed(reason: "operation-pending"), "\(id): …and so does the opposite Enable")
+        expectEqual(d.links.mutations, [], "\(id): neither sent anything")
+        let retry = await first.administerBookingLink(action: .setEnabled, enabled: false, adminService: d.bookingService)
+        expect({ if case .applied = retry { return true } else { return false } }(), "\(id): the same change retries")
+        expectEqual(d.links.bookingEnabled, false, "\(id): the link is disabled")
+        expectEqual(first.pendingAdminOperation(target: AppStore.bookingAdminTarget)?.operationId, nil,
+                    "\(id): and the operation is cleared")
+    }
+
+    /// N4: a new request that fails before it is sent leaves nothing pending;
+    /// a retry that fails before it is sent leaves the ORIGINAL pending.
+    @MainActor
+    static func definiteFailuresClearAndRetriesKeepTheOperation() async {
+        let id = "N4 definite failures"
+        let d = bookingDevice("n4", link: nil)
+        defer { d.cleanup() }
+        let store = d.launch()
+        await d.signIn(store)
+        await d.sync()
+        d.links.unreachable = true
+        let offline = await store.administerBookingLink(action: .mint, adminService: d.bookingService)
+        expectEqual(offline, .failed(reason: "status-unavailable"), "\(id): sanity: the status read fails")
+        expectEqual(store.pendingAdminOperation(target: AppStore.bookingAdminTarget)?.operationId, nil,
+                    "\(id) [P12-027]: a request never sent leaves nothing pending")
+        d.links.unreachable = false
+        d.links.adminMode = .lostBeforeCommit
+        let lost = await store.administerBookingLink(action: .mint, adminService: d.bookingService)
+        let original = store.pendingAdminOperation(target: AppStore.bookingAdminTarget)?.operationId
+        expectEqual(lost, .unknownOutcome, "\(id): sanity: the mutation's response is an error")
+        expect(original != nil, "\(id): it is pending")
+        d.links.unreachable = true
+        let again = await store.administerBookingLink(action: .mint, adminService: d.bookingService)
+        expectEqual(again, .failed(reason: "status-unavailable"), "\(id): a retry that cannot start")
+        expectEqual(store.pendingAdminOperation(target: AppStore.bookingAdminTarget)?.operationId, original,
+                    "\(id) [P12-027]: …keeps the original operation")
+        d.links.unreachable = false
+        d.links.adminMode = .normal
+        let done = await store.administerBookingLink(action: .mint, adminService: d.bookingService)
+        expect({ if case .applied = done { return true } else { return false } }(), "\(id): the retry is applied")
+        expectEqual(d.links.operationIDs.last, original, "\(id): it carried the original ID")
+        expectEqual(d.links.bookingRevision, 1, "\(id): the server minted once (the first never committed)")
+    }
+
+    /// N5: the same for a portal link, per customer.
+    @MainActor
+    static func aLostPortalCreateIsReplayedByItsOperationID() async {
+        let id = "N5 lost portal Create"
+        let d = portalDevice("n5", portal: nil)
+        defer { d.cleanup() }
+        let first = d.launch()
+        await d.signIn(first)
+        await d.sync()
+        d.links.adminMode = .lostAfterCommit
+        let lost = await first.administerPortalLink(customerID: "cust-1", action: .mint, portalService: d.portalService)
+        let sent = d.links.operationIDs
+        expectEqual(lost, .unknownOutcome, "\(id): sanity: the response is lost")
+        let target = AppStore.portalAdminTarget("cust-1")
+        expectEqual(first.pendingAdminOperation(target: target)?.operationId, sent.first, "\(id) [P12-027]: its ID is kept")
+        expectEqual(first.pendingAdminOperation(target: AppStore.portalAdminTarget("cust-2")) == nil, true,
+                    "\(id): …for that customer only")
+        let relaunched = d.launch()
+        await d.signIn(relaunched)
+        d.links.adminMode = .normal
+        let retry = await relaunched.administerPortalLink(customerID: "cust-1", action: .mint, portalService: d.portalService)
+        expectEqual(retry, .applied, "\(id): the retry is applied")
+        expectEqual(d.links.operationIDs, sent + sent, "\(id) [P12-027]: the retry carries the same operation ID")
+        expectEqual(d.localPortal?.token, d.links.portals["cust-1"]?.token,
+                    "\(id) [P12-027]: the owner has the link the first request made")
+        expectEqual(relaunched.pendingAdminOperation(target: target)?.operationId, nil, "\(id): cleared once settled")
+    }
+
+    /// N6: past the server's 30-day replay window an old ID is not retried
+    /// (it would be a new mutation under an old ID): a new operation starts.
+    @MainActor
+    static func anExpiredOperationStartsFresh() async {
+        let id = "N6 expired operation"
+        let d = bookingDevice("n6", link: nil)
+        defer { d.cleanup() }
+        let store = d.launch()
+        await d.signIn(store)
+        await d.sync()
+        let old = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-31 * 24 * 60 * 60))
+        d.stage(.adminOperation(target: AppStore.bookingAdminTarget, action: "mint", enabled: nil,
+                                operationId: "old-operation", stagedAt: old))
+        expectEqual(store.pendingAdminOperation(target: AppStore.bookingAdminTarget)?.operationId, nil,
+                    "\(id): an expired operation is not offered for Retry")
+        let outcome = await store.administerBookingLink(action: .mint, operationId: "5e5e5e5e-0000-4000-8000-000000000001", adminService: d.bookingService)
+        observed(id, "outcome=\(outcome)")
+        expect({ if case .applied = outcome { return true } else { return false } }(), "\(id): a new Create works")
+        expectEqual(d.links.operationIDs, ["5e5e5e5e-0000-4000-8000-000000000001"], "\(id) [P12-027]: it used a new ID")
+    }
+
+    /// N7: a mutation whose ID cannot be remembered is not sent (a lost
+    /// response would leave nothing to replay).
+    @MainActor
+    static func anOperationThatCannotBeRememberedIsNotSent() async {
+        let id = "N7 cannot stage"
+        let d = bookingDevice("n7", link: nil)
+        defer { d.cleanup() }
+        let store = d.launch()
+        await d.signIn(store)
+        await d.sync()
+        d.blockWorkStore(true)
+        d.links.resetLog()
+        let outcome = await store.administerBookingLink(action: .mint, adminService: d.bookingService)
+        expectEqual(outcome, .failed(reason: "persist"), "\(id) [P12-027]: the change is refused")
+        expectEqual(d.links.mutations, [], "\(id): nothing was sent")
+        expectEqual(d.links.bookingToken, nil, "\(id): the server has no link")
+    }
+
+    /// The pure rules: which operation a call uses and which outcomes settle it.
+    @MainActor
+    static func adminOperationRules() {
+        let id = "N8 rules"
+        let now = Date()
+        let iso = ISO8601DateFormatter().string(from: now.addingTimeInterval(-60))
+        let pending = NativeScheduleBookingPolicy.PendingAdminOperation(
+            target: "booking", action: "rotate", enabled: nil, operationId: "p1", stagedAt: iso)
+        typealias P = NativeScheduleBookingPolicy
+        expectEqual(P.planAdminOperation(pending: nil, action: "mint", enabled: nil, proposedID: "n", now: now),
+                    .fresh("n"), "\(id): nothing pending: a new operation")
+        expectEqual(P.planAdminOperation(pending: pending, action: "rotate", enabled: nil, proposedID: "n", now: now),
+                    .reuse("p1"), "\(id): the same action reuses its ID")
+        expectEqual(P.planAdminOperation(pending: pending, action: "mint", enabled: nil, proposedID: "n", now: now),
+                    .blocked(pendingAction: "rotate"), "\(id): another action waits")
+        var toggle = pending
+        toggle.action = "set_enabled"; toggle.enabled = false
+        expectEqual(P.planAdminOperation(pending: toggle, action: "set_enabled", enabled: true, proposedID: "n", now: now),
+                    .blocked(pendingAction: "set_enabled"), "\(id): the opposite toggle waits")
+        expectEqual(P.planAdminOperation(pending: pending, action: "rotate", enabled: nil, proposedID: "n",
+                                         now: now.addingTimeInterval(30 * 24 * 60 * 60)),
+                    .fresh("n"), "\(id): past the replay window it is a new operation")
+        expect(P.adminOutcomeSettlesOperation(failureReason: nil, unknown: false, createdThisCall: false),
+               "\(id): success settles")
+        expect(!P.adminOutcomeSettlesOperation(failureReason: nil, unknown: true, createdThisCall: true),
+               "\(id): an unknown outcome never settles")
+        expect(P.adminOutcomeSettlesOperation(failureReason: "status-unavailable", unknown: false, createdThisCall: true),
+               "\(id): a new request that never left settles")
+        expect(!P.adminOutcomeSettlesOperation(failureReason: "status-unavailable", unknown: false, createdThisCall: false),
+               "\(id): a retry that never left does not")
+        expect(P.adminOutcomeSettlesOperation(failureReason: "operationConflict", unknown: false, createdThisCall: false),
+               "\(id): an ID the server rejects settles")
+        expect(!P.adminOutcomeSettlesOperation(failureReason: "transport", unknown: false, createdThisCall: true),
+               "\(id): a transport failure stays pending")
+        expect(!P.adminOutcomeSettlesOperation(failureReason: "no-settings", unknown: false, createdThisCall: true),
+               "\(id): a failure after the server committed stays pending")
+    }
+
+    /// The screens: Retry, the blocked other changes, and Replace for a link
+    /// the server has and this device does not.
+    @MainActor
+    static func adminOperationSources(_ root: URL) {
+        func read(_ path: String) -> String {
+            (try? String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)) ?? ""
+        }
+        for (name, path, target) in [
+            ("booking", "native/TradeReadyNative/NativeBookingSettingsView.swift", "AppStore.bookingAdminTarget"),
+            ("portal", "native/TradeReadyNative/NativeCustomerPortalView.swift", "AppStore.portalAdminTarget(customerID)"),
+        ] {
+            let view = read(path)
+            expect(!view.isEmpty, "N9: the \(name) screen is readable")
+            expect(view.contains("store.pendingAdminOperation(target: \(target))"),
+                   "N9 [P12-027]: the \(name) screen reads the pending operation")
+            expect(view.contains("retryPending(") && view.contains("Retry \\("),
+                   "N9 [P12-027]: …and offers Retry")
+            expect(view.contains("changesBlocked"), "N9 [P12-027]: …and holds other changes while one is pending")
+            expect(view.contains("serverHasLinkWithoutLocalCopy") && view.contains("Replace link"),
+                   "N9 [P12-027]: …and offers Replace when the server has a link this device lacks")
+            expect(!view.contains("Check the status before trying again"),
+                   "N9: …and no longer tells the owner to give up on the request")
+        }
+    }
+
+    // MARK: Section O (12.00b.2-O, P12-026): rows whose job was deleted
+
+    /// O1: a booking whose linked job was deleted on another device. Today
+    /// offered only "View job" and "OK", so the row could never be cleared.
+    /// Dismiss stamps `handledAt` (queued as an upsert of the request) and the
+    /// row stops surfacing; a reschedule request is answered with Decline.
+    @MainActor
+    static func aDeletedJobsRowsCanBeAnsweredOrCleared() async {
+        let id = "O1 deleted job"
+        var cancelled = fixtureRequest(status: "cancelled")
+        cancelled.convertedJobId = "job-gone"
+        var reschedule = fixtureRequest(status: "reschedule_requested")
+        reschedule.id = "req-2"
+        reschedule.convertedJobId = "job-gone"
+        let d = Device("o1", requests: [cancelled, reschedule])
+        defer { d.cleanup() }
+        let store = d.launch()
+        await d.signIn(store)
+        await d.sync()
+        let rows = store.bookingAttentionRows()
+        observed(id, "rows=\(rows.map { "\($0.kind):\($0.request.id)" })")
+        expectEqual(rows.filter { $0.kind == .missingJob }.count, 2, "\(id): sanity: both rows surface as missing-job")
+        expectEqual(NativeBookingAttention.missingJobAction(for: cancelled), .dismiss, "\(id) [P12-026]: the booking is dismissed")
+        expectEqual(NativeBookingAttention.missingJobAction(for: reschedule), .decline, "\(id) [P12-026]: the reschedule is declined")
+        let outcome = store.stampBookingRequestHandled(requestID: "req-1")
+        expectEqual(outcome, .handled, "\(id) [P12-026]: Dismiss stamps the request")
+        expectEqual(store.bookingAttentionRows().map(\.request.id), ["req-2"],
+                    "\(id) [P12-026]: the dismissed row stops surfacing; the reschedule stays")
+        expect(d.disk?.payload.bookingRequests?.first { $0.id == "req-1" }?.handledAt?.isEmpty == false,
+               "\(id): the stamp is saved on the device")
+        expectEqual(d.queued("bookingRequests"), 1, "\(id): …and queued for the server")
+        // The reschedule row is answered by the owner's decline; the stamp never clears it.
+        _ = store.stampBookingRequestHandled(requestID: "req-2")
+        expectEqual(store.bookingAttentionRows().map(\.request.id), ["req-2"],
+                    "\(id) [P12-026]: a reschedule request stays until it is answered")
+    }
+
+    /// Today's dialog for a missing-job row carries the action for its kind and
+    /// always a way to clear it.
+    @MainActor
+    static func missingJobSources(_ root: URL) {
+        let today = (try? String(contentsOf: root.appendingPathComponent("native/TradeReadyNative/TodayView.swift"),
+                                 encoding: .utf8)) ?? ""
+        let start = today.range(of: "        case .missingJob:\n            // P12-026")
+        let end = today.range(of: "        case .unconvertedActive:")
+        expect(start != nil && end != nil, "O2: Today's missing-job dialog exists")
+        let block = (start != nil && end != nil && start!.lowerBound < end!.lowerBound)
+            ? String(today[start!.lowerBound..<end!.lowerBound]) : ""
+        expect(block.contains("NativeBookingAttention.missingJobAction(for: row.request)"),
+               "O2 [P12-026]: it asks the domain which action the row gets")
+        expect(block.contains("case .decline:") && block.contains("declineBooking(row)"), "O2: Decline booking for a reschedule request")
+        expect(block.contains("case .markDone:") && block.contains("Button(\"Done\")"), "O2: Done for a portal change")
+        expect(block.contains("case .dismiss:") && block.contains("Button(\"Dismiss\")"), "O2: Dismiss for any other booking")
+        expect(block.contains("Button(\"View job\")"), "O2: View job stays")
     }
 
     /// K9 (with P12-015): after intake, the customer asks to reschedule, and

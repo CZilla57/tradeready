@@ -218,5 +218,51 @@ do {
     expect(rows.count == 1 && rows[0].jobID == "jbk_bk1", "duplicate job id selects without trapping")
 }
 
+// 11. P12-026: a row whose linked job is gone can always be answered or cleared.
+// Characterized before the fix: Today offered only "View job" (the Jobs tab) and "OK",
+// so a reschedule request could never be answered, a portal change never marked Done,
+// and the row never cleared.
+do {
+    let handledAt = "2026-08-10T15:00:00.000Z"
+    // Each kind of missing row maps to the action RN gives that kind.
+    let reschedule = booked(status: "reschedule_requested")
+    expect(NativeBookingAttention.select(requests: [reschedule], jobs: []).first?.kind == .missingJob,
+           "sanity: a reschedule request with no job is a missing-job row")
+    expect(NativeBookingAttention.missingJobAction(for: reschedule) == .decline,
+           "P12-026: a reschedule request is declined (the server decline needs no job)")
+    expect(NativeBookingAttention.missingJobAction(for: change()) == .markDone,
+           "P12-026: a portal change is marked Done")
+    for status in ["cancelled", "declined", "booked", "confirmed"] {
+        expect(NativeBookingAttention.missingJobAction(for: booked(status: status)) == .dismiss,
+               "P12-026: a \(status) booking is dismissed")
+    }
+    // Dismissing stamps handledAt and the row stops surfacing; the stamp changes nothing else.
+    for status in ["cancelled", "declined", "booked", "confirmed"] {
+        let row = booked(status: status)
+        expect(NativeBookingAttention.select(requests: [row], jobs: []).count == 1,
+               "sanity: a \(status) booking with no job surfaces")
+        guard let stamped = NativeBookingAttention.stampedHandled(row, nowISO: handledAt) else {
+            expect(false, "P12-026: a \(status) row can be stamped"); continue
+        }
+        expect(stamped.handledAt == handledAt && stamped.status == status && stamped.id == row.id,
+               "P12-026: the stamp sets handledAt only")
+        expect(NativeBookingAttention.select(requests: [stamped], jobs: []).isEmpty,
+               "P12-026: a dismissed \(status) row stops surfacing")
+    }
+    // Declining answers the reschedule row: the status moves on and the row clears.
+    expect(NativeBookingAttention.select(requests: [booked(status: "declined")], jobs: []).first?.kind == .missingJob,
+           "sanity: the declined copy is itself a dismissible missing-job row")
+    // A reschedule request is not cleared by a stamp: only its answer clears it.
+    var stampedReschedule = reschedule
+    stampedReschedule.handledAt = handledAt
+    expect(NativeBookingAttention.select(requests: [stampedReschedule], jobs: []).first?.kind == .missingJob,
+           "P12-026: a reschedule request stays until it is answered")
+    // A dismissed booking whose job comes back is unaffected (no rows while it holds the slot).
+    var back = booked(status: "cancelled")
+    back.handledAt = handledAt
+    expect(NativeBookingAttention.select(requests: [back], jobs: [job()]).count == 1,
+           "a dismissal never hides a cancellation that still holds a live job's slot")
+}
+
 if failures == 0 { print("PASS: native booking attention tests") }
 else { print("\(failures) booking attention test(s) failed"); exit(1) }

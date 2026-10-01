@@ -8292,7 +8292,19 @@ final class AppStore: ObservableObject {
             // Another binding's items are that account's (its boundary
             // scrubs them), never this one's.
             if let work = pendingScheduleBookingWorkStore().loadIfReadable() {
-                readiness.bookingWorkCount = work.filter { $0.ownerBinding == binding }.count
+                // A staged record batch (P12-028) is business data saved on
+                // this device and not yet queued, so it is a waiting change
+                // and blocks; mirrors and proofs stay a note.
+                var stagedCount = 0
+                var noteCount = 0
+                for item in work where item.ownerBinding == binding {
+                    if case let .stagedBatch(drafts, _) = item.kind { stagedCount += drafts.count } else { noteCount += 1 }
+                }
+                if stagedCount > 0 {
+                    readiness.pendingChangeCount += stagedCount
+                    readiness.block(.pendingChanges)
+                }
+                readiness.bookingWorkCount = noteCount
                 if readiness.bookingWorkCount > 0 { readiness.note(.bookingWorkPending) }
             } else {
                 readiness.note(.bookingWorkUnreadable)
@@ -9516,6 +9528,9 @@ extension AppStore {
         /// change replaced the staged token, or the server does not know the
         /// customer) or because there is nothing to merge them into.
         var droppedMirrors: Int = 0
+        /// P12-028: staged record batches finished (queued, or found already
+        /// queued, superseded or gone).
+        var replayedBatches: Int = 0
         var proofsReady: [String] = []
         var proofsSuperseded: [String] = []
         /// Phase 12 (12.00b.2-I): proofs whose request no longer asks for a
@@ -9580,27 +9595,37 @@ extension AppStore {
         return formatter.string(from: Date())
     }
 
+    /// P12-028 (fix plan F10): the exact batch is staged in the pending-work
+    /// store BEFORE the snapshot is saved (`commitLocalStaged`), so a queue
+    /// failure or the app ending between the save and the queue write leaves a
+    /// durable record that a launch or activation pass replays. A batch that
+    /// cannot be staged is not committed at all.
     private func commitScheduleBookingLocal(
+        drafts: [Canonical.MutationDraft],
         saveSnapshot: () throws -> Void,
-        queueWork: () throws -> Void,
         queueStage: String
     ) -> Bool {
-        let outcome = NativeScheduleBookingPolicy.commitLocal(
+        guard let binding = verifiedAccountBinding, !binding.isEmpty else { return false }
+        let store = pendingScheduleBookingWorkStore()
+        let item = NativeScheduleBookingPendingWork(
+            kind: .stagedBatch(drafts: drafts.map(NativeScheduleBookingStagedDraft.init), stage: queueStage),
+            ownerBinding: binding
+        )
+        let outcome = NativeScheduleBookingPolicy.commitLocalStaged(
+            stageBatch: { try store.stage(item) },
             saveSnapshot: saveSnapshot,
-            publishToQueue: queueWork,
-            stageRecovery: {}
+            publishToQueue: { try self.mutationQueue.enqueueBatch(drafts) },
+            clearStage: { try? store.remove { $0 == item } }
         )
         switch outcome {
         case .committed:
             scheduleSyncAfterLocalChange()
             return true
-        case .snapshotFailed:
+        case .stageFailed, .snapshotFailed:
             return false
-        case .queueFailedRecoveryStaged:
-            // The snapshot is durable; the idempotent pull reconciles and
-            // the next edit re-enqueues (the `commitCustomerMerge`
-            // convention). Capability-sensitive server mutations use the
-            // pending-work store instead — see the admin paths below.
+        case .queueFailedStaged:
+            // The snapshot is durable and the batch is staged: the next
+            // launch or activation pass queues it.
             print("TradeReadyMutationQueue stage=\(queueStage)")
             recordLocalSyncFailure("queue/\(queueStage)")
             scheduleSyncAfterLocalChange()
@@ -9974,11 +9999,11 @@ extension AppStore {
         updated.payload.customers = rechecked.customers
         let drafts = rechecked.drafts
         let committed = commitScheduleBookingLocal(
+            drafts: drafts,
             saveSnapshot: {
                 try self.repository.save(updated)
                 try self.apply(updated)
             },
-            queueWork: { try self.mutationQueue.enqueueBatch(drafts) },
             queueStage: "enqueue-booking-intake"
         )
         guard committed else {
@@ -10499,6 +10524,44 @@ extension AppStore {
         adminService: NativeBookingAdministrationService? = nil,
         sessionBytes: Data? = nil
     ) async -> BookingLinkAdminOutcome {
+        // P12-027: the operation ID is durable. `operationId` is only the ID
+        // for a NEW operation; an unfinished operation of the same action is
+        // retried under its own staged ID, and a different action waits.
+        guard action != .status, !bookingAdminInFlight, hasExactSignedInWorkspace,
+              let binding = verifiedAccountBinding, !binding.isEmpty
+        else {
+            return await performBookingLinkAdmin(
+                action: action, enabled: enabled, operationId: operationId,
+                adminService: adminService, sessionBytes: sessionBytes)
+        }
+        let begun = beginAdminOperation(
+            target: Self.bookingAdminTarget, action: Self.adminActionName(action), enabled: enabled,
+            proposedID: operationId, binding: binding)
+        guard case let .run(id, created) = begun else { return .failed(reason: begun.failureReason) }
+        let outcome = await performBookingLinkAdmin(
+            action: action, enabled: enabled, operationId: id,
+            adminService: adminService, sessionBytes: sessionBytes)
+        let settled: Bool
+        switch outcome {
+        case .applied, .stale, .alreadyExists, .recoveryStaged:
+            settled = true
+        case .unknownOutcome:
+            settled = false
+        case let .failed(reason):
+            settled = NativeScheduleBookingPolicy.adminOutcomeSettlesOperation(
+                failureReason: reason, unknown: false, createdThisCall: created)
+        }
+        if settled { finishAdminOperation(target: Self.bookingAdminTarget, operationId: id, binding: binding) }
+        return outcome
+    }
+
+    private func performBookingLinkAdmin(
+        action: NativeBookingAdminAction,
+        enabled: Bool?,
+        operationId: String,
+        adminService: NativeBookingAdministrationService?,
+        sessionBytes: Data?
+    ) async -> BookingLinkAdminOutcome {
         guard !bookingAdminInFlight else { return .failed(reason: "already-running") }
         guard hasExactSignedInWorkspace else { return .failed(reason: "not-signed-in") }
         bookingAdminInFlight = true
@@ -10660,6 +10723,105 @@ extension AppStore {
         }
     }
 
+    // MARK: Durable admin operation IDs (P12-027)
+
+    static let bookingAdminTarget = "booking"
+    static func portalAdminTarget(_ customerID: String) -> String { "portal/\(customerID)" }
+
+    fileprivate static func adminActionName(_ action: NativeBookingAdminAction) -> String {
+        switch action {
+        case .mint: return "mint"
+        case .setEnabled: return "set_enabled"
+        case .rotate: return "rotate"
+        case .status: return "status"
+        }
+    }
+
+    fileprivate static func adminActionName(_ action: NativePortalAdminAction) -> String {
+        switch action {
+        case .mint: return "mint"
+        case .setEnabled: return "set_enabled"
+        case .rotate: return "rotate"
+        case .status: return "status"
+        }
+    }
+
+    fileprivate enum AdminOperationStart {
+        case run(id: String, created: Bool)
+        case blocked
+        case persistFailed
+
+        var failureReason: String {
+            switch self {
+            case .blocked: return "operation-pending"
+            case .persistFailed: return "persist"
+            case .run: return ""
+            }
+        }
+    }
+
+    /// The unfinished operation for `target`, for the screen to offer Retry.
+    /// Expired ones (past the server's replay window) are not offered.
+    func pendingAdminOperation(target: String) -> NativeScheduleBookingPolicy.PendingAdminOperation? {
+        guard let binding = verifiedAccountBinding else { return nil }
+        let pending = storedAdminOperation(target: target, binding: binding)
+        guard let pending else { return nil }
+        let plan = NativeScheduleBookingPolicy.planAdminOperation(
+            pending: pending, action: pending.action, enabled: pending.enabled, proposedID: "", now: Date())
+        if case .reuse = plan { return pending }
+        return nil
+    }
+
+    private func storedAdminOperation(
+        target: String, binding: String
+    ) -> NativeScheduleBookingPolicy.PendingAdminOperation? {
+        for item in pendingScheduleBookingWorkStore().load() where item.ownerBinding == binding {
+            if case let .adminOperation(t, action, enabled, operationId, stagedAt) = item.kind, t == target {
+                return .init(target: t, action: action, enabled: enabled, operationId: operationId, stagedAt: stagedAt)
+            }
+        }
+        return nil
+    }
+
+    /// Decides the operation ID for one administration call and, for a new
+    /// operation, stages it BEFORE the request is sent. A staging failure
+    /// refuses the call: a mutation whose ID cannot be remembered must not be
+    /// sent (a lost response would leave no way to replay it).
+    fileprivate func beginAdminOperation(
+        target: String, action: String, enabled: Bool?, proposedID: String, binding: String
+    ) -> AdminOperationStart {
+        let plan = NativeScheduleBookingPolicy.planAdminOperation(
+            pending: storedAdminOperation(target: target, binding: binding),
+            action: action, enabled: enabled, proposedID: proposedID, now: Date())
+        switch plan {
+        case .blocked:
+            return .blocked
+        case let .reuse(id):
+            return .run(id: id, created: false)
+        case let .fresh(id):
+            do {
+                try pendingScheduleBookingWorkStore().stage(.init(
+                    kind: .adminOperation(target: target, action: action, enabled: enabled,
+                                          operationId: id, stagedAt: isoNow()),
+                    ownerBinding: binding))
+            } catch {
+                return .persistFailed
+            }
+            return .run(id: id, created: true)
+        }
+    }
+
+    /// Clears an operation once its outcome is definite. Matches by ID, so a
+    /// newer operation staged meanwhile is never removed.
+    fileprivate func finishAdminOperation(target: String, operationId: String, binding: String) {
+        try? pendingScheduleBookingWorkStore().remove {
+            if case let .adminOperation(t, _, _, id, _) = $0.kind {
+                return t == target && id == operationId && $0.ownerBinding == binding
+            }
+            return false
+        }
+    }
+
     // MARK: Portal-link administration (P1)
 
     /// Server-first per-customer portal administration with per-customer
@@ -10676,6 +10838,45 @@ extension AppStore {
         operationId: String = UUID().uuidString,
         portalService: NativePortalAdministrationService? = nil,
         sessionBytes: Data? = nil
+    ) async -> PortalLinkAdminOutcome {
+        // P12-027: see `administerBookingLink`; one pending operation per customer.
+        guard action != .status, !portalAdminInFlight.contains(customerID), hasExactSignedInWorkspace,
+              snapshot.payload.customers?.contains(where: { $0.id == customerID }) == true,
+              let binding = verifiedAccountBinding, !binding.isEmpty
+        else {
+            return await performPortalLinkAdmin(
+                customerID: customerID, action: action, enabled: enabled, operationId: operationId,
+                portalService: portalService, sessionBytes: sessionBytes)
+        }
+        let target = Self.portalAdminTarget(customerID)
+        let begun = beginAdminOperation(
+            target: target, action: Self.adminActionName(action), enabled: enabled,
+            proposedID: operationId, binding: binding)
+        guard case let .run(id, created) = begun else { return .failed(reason: begun.failureReason) }
+        let outcome = await performPortalLinkAdmin(
+            customerID: customerID, action: action, enabled: enabled, operationId: id,
+            portalService: portalService, sessionBytes: sessionBytes)
+        let settled: Bool
+        switch outcome {
+        case .applied, .alreadyExists, .needsExplicitRotate, .recoveryStaged, .missingCustomer:
+            settled = true
+        case .unknownOutcome, .alreadyRunning:
+            settled = false
+        case let .failed(reason):
+            settled = NativeScheduleBookingPolicy.adminOutcomeSettlesOperation(
+                failureReason: reason, unknown: false, createdThisCall: created)
+        }
+        if settled { finishAdminOperation(target: target, operationId: id, binding: binding) }
+        return outcome
+    }
+
+    private func performPortalLinkAdmin(
+        customerID: String,
+        action: NativePortalAdminAction,
+        enabled: Bool?,
+        operationId: String,
+        portalService: NativePortalAdministrationService?,
+        sessionBytes: Data?
     ) async -> PortalLinkAdminOutcome {
         guard !portalAdminInFlight.contains(customerID) else { return .alreadyRunning }
         guard hasExactSignedInWorkspace else { return .failed(reason: "not-signed-in") }
@@ -10977,7 +11178,7 @@ extension AppStore {
         var unfinished = 0
         defer {
             if !owned.isEmpty {
-                let applied = recovery.reappliedMirrors
+                let applied = recovery.reappliedMirrors + recovery.replayedBatches
                 let dropped = recovery.droppedMirrors + recovery.proofsSuperseded.count + recovery.proofsClosed.count
                 let kept = recovery.retained + recovery.proofsReady.count
                 Self.stageLogger.notice(
@@ -11003,10 +11204,23 @@ extension AppStore {
                 )
             case let .rescheduleProof(requestID, proof, _):
                 step = recoverRescheduleProof(requestID: requestID, proof: proof)
+            case let .stagedBatch(drafts, _):
+                step = replayStagedBatch(drafts)
+            case let .adminOperation(target, action, enabled, operationId, stagedAt):
+                // Retried only by the owner's Retry (the screen replays the
+                // exact ID); the pass drops it once the server's replay row
+                // can no longer exist.
+                let plan = NativeScheduleBookingPolicy.planAdminOperation(
+                    pending: .init(target: target, action: action, enabled: enabled,
+                                   operationId: operationId, stagedAt: stagedAt),
+                    action: action, enabled: enabled, proposedID: "", now: Date())
+                if case .reuse = plan { step = .retained } else { step = .dropped }
             }
             switch step {
             case .applied:
                 recovery.reappliedMirrors += 1
+            case .replayed:
+                recovery.replayedBatches += 1
             case .dropped:
                 recovery.droppedMirrors += 1
             case let .proofReady(requestID):
@@ -11031,11 +11245,12 @@ extension AppStore {
 
     private enum PendingWorkStep {
         case applied, dropped, retained, stopped
+        case replayed
         case proofReady(String), proofSuperseded(String), proofClosed(String)
 
         var removesItem: Bool {
             switch self {
-            case .applied, .dropped, .proofSuperseded, .proofClosed: return true
+            case .applied, .replayed, .dropped, .proofSuperseded, .proofClosed: return true
             case .retained, .stopped, .proofReady: return false
             }
         }
@@ -11134,6 +11349,49 @@ extension AppStore {
         }
         return mergePortalDisplayFields(customerID: customerID, token: token, enabled: status.enabled, automatic: true)
             ? .applied : .retained
+    }
+
+    /// P12-028: a staged record batch from a local commit whose queue write
+    /// did not finish. Needs no pull and no network: it reads the device's own
+    /// records and queue. Drafts whose record changed or vanished since, or
+    /// that the queue already holds, are not queued (see
+    /// `stagedDraftsToReplay`). The item is removed only after the queue
+    /// accepted what remained; a queue that still cannot be written keeps it.
+    private func replayStagedBatch(_ staged: [NativeScheduleBookingStagedDraft]) -> PendingWorkStep {
+        let payloads = currentRecordPayloads()
+        let drafts = NativeScheduleBookingPolicy.stagedDraftsToReplay(
+            staged,
+            currentPayload: { table, id in payloads[table]?[id] },
+            queued: mutationQueue.load()
+        )
+        if !drafts.isEmpty {
+            do { try mutationQueue.enqueueBatch(drafts) } catch {
+                recordLocalSyncFailure("recovery/queue")
+                return .retained
+            }
+            scheduleSyncAfterLocalChange()
+        }
+        return .replayed
+    }
+
+    /// The canonical upsert payload of each record a staged batch can name,
+    /// keyed by table and id.
+    private func currentRecordPayloads() -> [String: [String: Canonical.JSONValue]] {
+        func payloads<Record: Encodable>(_ table: String, _ records: [Record]?, id: (Record) -> String)
+            -> [String: Canonical.JSONValue] {
+            var out: [String: Canonical.JSONValue] = [:]
+            for record in records ?? [] {
+                if let payload = NativeScheduleBookingPolicy.mutationDraft(table: table, id: id(record), record: record).payload {
+                    out[id(record)] = payload
+                }
+            }
+            return out
+        }
+        return [
+            "jobs": payloads("jobs", snapshot.payload.jobs, id: { $0.id }),
+            "customers": payloads("customers", snapshot.payload.customers, id: { $0.id }),
+            "bookingRequests": payloads("bookingRequests", snapshot.payload.bookingRequests, id: { $0.id }),
+        ]
     }
 
     /// A reschedule proof, from local state only. At the foreground refresh
