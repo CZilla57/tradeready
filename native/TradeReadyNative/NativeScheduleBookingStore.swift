@@ -520,22 +520,30 @@ enum NativeScheduleBookingPolicy {
     /// The stage is cleared only when nothing durable is left to send: the
     /// save failed (nothing was saved), or the queue holds the batch. A failed
     /// APPLY after a successful save never clears it before the queue write.
+    /// Save and apply stay one closure because the save-first pin
+    /// (`SaveRollbackTests`) requires `apply(X)` to directly follow
+    /// `repository.save(X)`.
     static func commitLocalStaged(
         stageBatch: () throws -> Void,
-        saveSnapshot: () throws -> Void,
-        applyState: () throws -> Void,
+        saveAndApply: () throws -> Void,
+        snapshotLanded: () -> Bool,
         publishToQueue: () throws -> Void,
         clearStage: () -> Void
     ) -> StagedCommitOutcome {
         do { try stageBatch() } catch { return .stageFailed }
-        do {
-            try saveSnapshot()
-        } catch {
-            clearStage()
-            return .snapshotFailed
-        }
         var applied = true
-        do { try applyState() } catch { applied = false }
+        do {
+            try saveAndApply()
+        } catch {
+            // `saveAndApply` saves and then applies, so a throw may come from
+            // either. When the saved snapshot holds the batch's records the
+            // save landed and only the apply failed: keep going.
+            guard snapshotLanded() else {
+                clearStage()
+                return .snapshotFailed
+            }
+            applied = false
+        }
         do {
             try publishToQueue()
         } catch {

@@ -9602,8 +9602,7 @@ extension AppStore {
     /// cannot be staged is not committed at all.
     private func commitScheduleBookingLocal(
         drafts: [Canonical.MutationDraft],
-        saveSnapshot: () throws -> Void,
-        applyState: () throws -> Void,
+        saveAndApply: () throws -> Void,
         queueStage: String
     ) -> Bool {
         guard let binding = verifiedAccountBinding, !binding.isEmpty else { return false }
@@ -9614,8 +9613,11 @@ extension AppStore {
         )
         let outcome = NativeScheduleBookingPolicy.commitLocalStaged(
             stageBatch: { try store.stage(item) },
-            saveSnapshot: saveSnapshot,
-            applyState: applyState,
+            saveAndApply: saveAndApply,
+            snapshotLanded: { [unowned self] in
+                guard let saved = savedRecordPayloads() else { return false }
+                return drafts.allSatisfy { saved[$0.table]?[$0.recordId] == $0.payload }
+            },
             publishToQueue: { try self.mutationQueue.enqueueBatch(drafts) },
             clearStage: { try? store.remove { $0 == item } }
         )
@@ -10006,8 +10008,10 @@ extension AppStore {
         let drafts = rechecked.drafts
         let committed = commitScheduleBookingLocal(
             drafts: drafts,
-            saveSnapshot: { try self.repository.save(updated) },
-            applyState: { try self.apply(updated) },
+            saveAndApply: {
+                try self.repository.save(updated)
+                try self.apply(updated)
+            },
             queueStage: "enqueue-booking-intake"
         )
         guard committed else {

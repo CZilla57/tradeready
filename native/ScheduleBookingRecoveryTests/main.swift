@@ -3862,19 +3862,19 @@ struct ScheduleBookingRecoveryTests {
         var queued = 0
         typealias P = NativeScheduleBookingPolicy
         let applyFails = P.commitLocalStaged(
-            stageBatch: {}, saveSnapshot: {}, applyState: { throw Boom() },
+            stageBatch: {}, saveAndApply: { throw Boom() }, snapshotLanded: { true },
             publishToQueue: { queued += 1 }, clearStage: { cleared += 1 })
         expectEqual(applyFails, .savedNotApplied, "\(id) [review]: saved but not applied is its own outcome")
         expectEqual(queued, 1, "\(id): …and the batch is still queued")
         expectEqual(cleared, 1, "\(id): …after which the stage is cleared")
         cleared = 0; queued = 0
         let queueAlsoFails = P.commitLocalStaged(
-            stageBatch: {}, saveSnapshot: {}, applyState: { throw Boom() },
+            stageBatch: {}, saveAndApply: { throw Boom() }, snapshotLanded: { true },
             publishToQueue: { throw Boom() }, clearStage: { cleared += 1 })
         expectEqual(queueAlsoFails, .queueFailedStaged, "\(id): a failed queue write after a failed apply")
         expectEqual(cleared, 0, "\(id) [review]: keeps the stage")
         let saveFails = P.commitLocalStaged(
-            stageBatch: {}, saveSnapshot: { throw Boom() }, applyState: {},
+            stageBatch: {}, saveAndApply: { throw Boom() }, snapshotLanded: { false },
             publishToQueue: { queued += 1 }, clearStage: { cleared += 1 })
         expectEqual(saveFails, .snapshotFailed, "\(id): a failed save")
         expectEqual(cleared, 1, "\(id): clears the stage (nothing was saved)")
