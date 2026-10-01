@@ -203,6 +203,27 @@ named for it. The owner creates `<EXPO_RELEASE_BRANCH>` from the commit that bui
 - the version bump to R;
 - any fix the owner rules is required.
 
+**Status 2026-10-01 (branch prepared, not built).** The local branch
+`expo/rollback-candidate-r` is cut from `b57f304` ("bump version to 1.2.1"), which the
+owner has still to confirm is the commit that built L. It holds two cherry-picked commits
+and nothing else from `master`'s unreleased Expo work:
+
+1. `0ce360b` (from `703064c`): the pull cursor v2. It stores database timestamps and
+   pages every pull. **This is a prerequisite of the §5.3 change, not an extra.** E-1 clears
+   the local collection copies and relies on a full pull to bring them back. The 1.2.1
+   pull does not page, and Supabase caps one response at about 1,000 rows, so E-1 on the
+   1.2.1 code could silently leave rows missing on a large account. Rule (1) needs the
+   paged pull.
+2. `277f680` (from `525acb8`): E-1 to E-4. It applied with no code conflict once (1)
+   was in. Checked on the branch: `tsc --noEmit` clean, the full Expo suite passes (207
+   suites, 2,845 tests, `TZ=America/Phoenix`) and lint is clean with zero warnings.
+
+Still open before R is built: the owner confirms the commit that built L; the pending
+notice and the E-2 warning wording are placeholders awaiting owner approval; the marker
+read through `expo-file-system` is unverified on a device (§5.3 E-1 is not done without
+it); `app.json` still reads 1.2.1, so the R version (§3.2) is not set; and nothing has
+been built or uploaded.
+
 Charter §1 rule 4 freezes non-critical Expo feature work from Stage C entry.
 
 **Keep the pipeline green.** Build the branch with EAS at Stage B entry (charter §4.4:
