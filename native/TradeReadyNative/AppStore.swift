@@ -9603,6 +9603,7 @@ extension AppStore {
     private func commitScheduleBookingLocal(
         drafts: [Canonical.MutationDraft],
         saveSnapshot: () throws -> Void,
+        applyState: () throws -> Void,
         queueStage: String
     ) -> Bool {
         guard let binding = verifiedAccountBinding, !binding.isEmpty else { return false }
@@ -9614,6 +9615,7 @@ extension AppStore {
         let outcome = NativeScheduleBookingPolicy.commitLocalStaged(
             stageBatch: { try store.stage(item) },
             saveSnapshot: saveSnapshot,
+            applyState: applyState,
             publishToQueue: { try self.mutationQueue.enqueueBatch(drafts) },
             clearStage: { try? store.remove { $0 == item } }
         )
@@ -9622,6 +9624,10 @@ extension AppStore {
             scheduleSyncAfterLocalChange()
             return true
         case .stageFailed, .snapshotFailed:
+            return false
+        case .savedNotApplied:
+            // Saved and queued; only the in-memory state is behind the disk.
+            scheduleSyncAfterLocalChange()
             return false
         case .queueFailedStaged:
             // The snapshot is durable and the batch is staged: the next
@@ -10000,10 +10006,8 @@ extension AppStore {
         let drafts = rechecked.drafts
         let committed = commitScheduleBookingLocal(
             drafts: drafts,
-            saveSnapshot: {
-                try self.repository.save(updated)
-                try self.apply(updated)
-            },
+            saveSnapshot: { try self.repository.save(updated) },
+            applyState: { try self.apply(updated) },
             queueStage: "enqueue-booking-intake"
         )
         guard committed else {
@@ -11365,7 +11369,12 @@ extension AppStore {
             recordLocalSyncFailure("recovery/queue")
             return .retained
         }
-        let payloads = currentRecordPayloads()
+        // The records as saved on disk, not the in-memory copy: a commit whose
+        // state apply failed has its records only there until the next launch.
+        guard let payloads = savedRecordPayloads() else {
+            recordLocalSyncFailure("recovery/queue")
+            return .retained
+        }
         let drafts = NativeScheduleBookingPolicy.stagedDraftsToReplay(
             staged,
             currentPayload: { table, id in payloads[table]?[id] },
@@ -11382,22 +11391,25 @@ extension AppStore {
     }
 
     /// The canonical upsert payload of each record a staged batch can name,
-    /// keyed by table and id.
-    private func currentRecordPayloads() -> [String: [String: Canonical.JSONValue]] {
+    /// keyed by table and id, read from the saved snapshot. Nil when it cannot
+    /// be read (the item then waits).
+    private func savedRecordPayloads() -> [String: [String: Canonical.JSONValue]]? {
+        guard let outcome = (try? repository.load()) ?? nil else { return nil }
+        let payload = outcome.snapshot.payload
         func payloads<Record: Encodable>(_ table: String, _ records: [Record]?, id: (Record) -> String)
             -> [String: Canonical.JSONValue] {
             var out: [String: Canonical.JSONValue] = [:]
             for record in records ?? [] {
-                if let payload = NativeScheduleBookingPolicy.mutationDraft(table: table, id: id(record), record: record).payload {
-                    out[id(record)] = payload
+                if let value = NativeScheduleBookingPolicy.mutationDraft(table: table, id: id(record), record: record).payload {
+                    out[id(record)] = value
                 }
             }
             return out
         }
         return [
-            "jobs": payloads("jobs", snapshot.payload.jobs, id: { $0.id }),
-            "customers": payloads("customers", snapshot.payload.customers, id: { $0.id }),
-            "bookingRequests": payloads("bookingRequests", snapshot.payload.bookingRequests, id: { $0.id }),
+            "jobs": payloads("jobs", payload.jobs, id: { $0.id }),
+            "customers": payloads("customers", payload.customers, id: { $0.id }),
+            "bookingRequests": payloads("bookingRequests", payload.bookingRequests, id: { $0.id }),
         ]
     }
 

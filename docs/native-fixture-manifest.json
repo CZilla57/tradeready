@@ -240,7 +240,7 @@
    "testSources": [
     {
      "path": "native/BookingAttentionTests",
-     "sha256": "d4d96aa84a823ed4c1a91e6cdfca1a1c374887a11a4dfac0d91c7c353b2caefb"
+     "sha256": "b70529d8bf1e87d1369b274f0a5f6d48f0b12aa001f39af92b167475eaa5854a"
     }
    ],
    "fixtures": []
@@ -1431,7 +1431,7 @@
    "testSources": [
     {
      "path": "native/ScheduleBookingRecoveryTests",
-     "sha256": "fbd8c8845d36e27958424ac3acf5803c0d8abf3c21167fa3dd1601df6022eae9"
+     "sha256": "232469f6612dad357defe8ed2a58e13f2225f1cd62e8ca1577e0c57bf0d25ce8"
     }
    ],
    "fixtures": []

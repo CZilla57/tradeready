@@ -766,6 +766,8 @@ struct ScheduleBookingRecoveryTests {
         await anEndedCommitIsReplayedAtLaunch()
         await anOlderQueuedUpsertIsReplacedByTheStagedOne()
         await anUnreadableQueueKeepsTheStagedBatch()
+        await aPullThatRevertedAGuardedStampStillReplaysIt()
+        stagedCommitKeepsTheStageUntilSavedWorkIsQueued()
         await acceptAfterIntakeIsLinkedToTheJob()
         await declineKeepsTheServersHistory()
         await aQueuedCopyNeverOverwritesTheDecline()
@@ -3817,6 +3819,66 @@ struct ScheduleBookingRecoveryTests {
         expectEqual(recovery?.replayedBatches, 0, "\(id): nothing was replayed")
         expectEqual(recovery?.retained, 1, "\(id): the item is retained")
         expectEqual(stagedBatches(d).map(\.count), [3], "\(id) [review]: the staged batch is kept")
+    }
+
+    /// M9 (review): after the snapshot saved but the queue write failed, a
+    /// cold launch pulls before recovery, and the pull puts the server's
+    /// unstamped copy of the request back. The staged request stamp is
+    /// guarded (`ifUnchangedSince`), so it is still queued, and the server
+    /// drops it if the row moved; skipping it would repeat intake and never
+    /// send the stamp.
+    @MainActor
+    static func aPullThatRevertedAGuardedStampStillReplaysIt() async {
+        let id = "M9 guarded stamp after a pull"
+        let (d, store) = await intakeDevice("m9")
+        defer { d.cleanup() }
+        d.blockQueue(true)
+        await store.performForegroundRefresh()
+        d.blockQueue(false)
+        let stamp = stagedBatches(d).first?.first { $0.table == "bookingRequests" }
+        expect(stamp?.ifUnchangedSince != nil, "\(id): sanity: the staged stamp is guarded")
+        // The pull's effect: the local copy is the server's, unstamped.
+        if var snapshot = d.disk {
+            snapshot.payload.bookingRequests = snapshot.payload.bookingRequests?.map {
+                var request = $0; request.convertedJobId = nil; request.convertedCustomerId = nil; return request
+            }
+            try? d.repository().save(snapshot)
+        }
+        _ = await store.recoverScheduleBookingPendingWorkIfPossible()
+        expectEqual(d.queued("bookingRequests"), 1, "\(id) [review]: the guarded stamp is queued")
+        expectEqual(d.queue.load().first { $0.table == "bookingRequests" }?.ifUnchangedSince, stamp?.ifUnchangedSince,
+                    "\(id): …still guarded, so a moved server row drops it")
+        expectEqual(stagedBatches(d).count, 0, "\(id): the batch is cleared")
+    }
+
+    /// M10 (review): the stage is cleared only when nothing durable is left to
+    /// send. A snapshot that saved and then failed to APPLY must not lose it
+    /// before the queue write.
+    @MainActor
+    static func stagedCommitKeepsTheStageUntilSavedWorkIsQueued() {
+        let id = "M10 staged commit"
+        struct Boom: Error {}
+        var cleared = 0
+        var queued = 0
+        typealias P = NativeScheduleBookingPolicy
+        let applyFails = P.commitLocalStaged(
+            stageBatch: {}, saveSnapshot: {}, applyState: { throw Boom() },
+            publishToQueue: { queued += 1 }, clearStage: { cleared += 1 })
+        expectEqual(applyFails, .savedNotApplied, "\(id) [review]: saved but not applied is its own outcome")
+        expectEqual(queued, 1, "\(id): …and the batch is still queued")
+        expectEqual(cleared, 1, "\(id): …after which the stage is cleared")
+        cleared = 0; queued = 0
+        let queueAlsoFails = P.commitLocalStaged(
+            stageBatch: {}, saveSnapshot: {}, applyState: { throw Boom() },
+            publishToQueue: { throw Boom() }, clearStage: { cleared += 1 })
+        expectEqual(queueAlsoFails, .queueFailedStaged, "\(id): a failed queue write after a failed apply")
+        expectEqual(cleared, 0, "\(id) [review]: keeps the stage")
+        let saveFails = P.commitLocalStaged(
+            stageBatch: {}, saveSnapshot: { throw Boom() }, applyState: {},
+            publishToQueue: { queued += 1 }, clearStage: { cleared += 1 })
+        expectEqual(saveFails, .snapshotFailed, "\(id): a failed save")
+        expectEqual(cleared, 1, "\(id): clears the stage (nothing was saved)")
+        expectEqual(queued, 0, "\(id): and queues nothing")
     }
 
     /// K9 (with P12-015): after intake, the customer asks to reschedule, and

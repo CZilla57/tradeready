@@ -590,8 +590,7 @@ it adds **P12-023** (S1) and **P12-024 to P12-029** (S2) as open Stage A blocker
 P12-030 to P12-034 (S3 backlog). The open Stage A blockers are now P12-012, P12-023 and
 P12-024 to P12-029. **2026-09-30 (later):** P12-029 is Closed as an accepted S3 limitation (§9 row 18); P12-012 is ruled R43 (§9 row 19) and no longer blocks Stage A entry. **2026-09-30:** P12-024, P12-026, P12-027 and P12-028 are fixed on the
 branch (host evidence). P12-023 and P12-025 have landed fixes that are host-proved on a
-local PostgreSQL; the owner accepted that proof in place of staging (§9 rows 20 and 21), so both are Fixed. P12-029 and P12-012 need the
-owner's decision.
+local PostgreSQL; the owner accepted that proof in place of staging (§9 rows 20 and 21), so both are Fixed. No Stage A blocker remains open on the defect list.
 
 What each handling means: **12.00b.1 / 12.00b.2** — fixed in that build item; blocks Stage
 A. **rider** — S3 fixed inside 12.00b.2 because that change edits the same code; does not

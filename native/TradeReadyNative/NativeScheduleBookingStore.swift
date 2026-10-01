@@ -493,7 +493,7 @@ enum NativeScheduleBookingPolicy {
     }
 
     enum StagedCommitOutcome: Equatable {
-        /// Staged, snapshot saved, queue written, stage cleared.
+        /// Staged, snapshot saved and applied, queue written, stage cleared.
         case committed
         /// The stage could not be written, so the commit did not start:
         /// nothing was saved and nothing was queued.
@@ -505,6 +505,11 @@ enum NativeScheduleBookingPolicy {
         /// happen): the staged batch stays, and a launch or activation pass
         /// replays it.
         case queueFailedStaged
+        /// The snapshot is saved (and the batch queued) but the in-memory
+        /// state could not be applied from it. The records are durable and
+        /// reach the server; the screen state catches up at the next launch
+        /// or pull. The caller reports the local commit as failed.
+        case savedNotApplied
     }
 
     /// The booking-intake boundary (P12-028, fix plan F10). The batch is
@@ -512,10 +517,13 @@ enum NativeScheduleBookingPolicy {
     /// (a failed queue write, the app ending mid-commit) leaves a durable
     /// record of what must still reach the server. A failed stage aborts the
     /// commit: success is never reported for a batch with no durable trace.
-    /// The stage is cleared only once the queue holds the batch.
+    /// The stage is cleared only when nothing durable is left to send: the
+    /// save failed (nothing was saved), or the queue holds the batch. A failed
+    /// APPLY after a successful save never clears it before the queue write.
     static func commitLocalStaged(
         stageBatch: () throws -> Void,
         saveSnapshot: () throws -> Void,
+        applyState: () throws -> Void,
         publishToQueue: () throws -> Void,
         clearStage: () -> Void
     ) -> StagedCommitOutcome {
@@ -526,13 +534,15 @@ enum NativeScheduleBookingPolicy {
             clearStage()
             return .snapshotFailed
         }
+        var applied = true
+        do { try applyState() } catch { applied = false }
         do {
             try publishToQueue()
         } catch {
             return .queueFailedStaged
         }
         clearStage()
-        return .committed
+        return applied ? .committed : .savedNotApplied
     }
 
     /// The drafts of a staged batch that still need queuing (P12-028).
@@ -550,14 +560,21 @@ enum NativeScheduleBookingPolicy {
         queued: [Canonical.MutationItem]
     ) -> [Canonical.MutationDraft] {
         staged.compactMap { item in
-            guard let current = currentPayload(item.table, item.recordId),
-                  current == item.payload,
-                  !queued.contains(where: {
-                      $0.table == item.table && $0.recordId == item.recordId
-                          && $0.op == .upsert && $0.payload == item.payload
-                  })
-            else { return nil }
-            return item.draft
+            let queuedForRecord = queued.filter { $0.table == item.table && $0.recordId == item.recordId }
+            // The queue already holds exactly this change.
+            if queuedForRecord.contains(where: { $0.op == .upsert && $0.payload == item.payload }) { return nil }
+            guard let current = currentPayload(item.table, item.recordId) else { return nil }
+            // The record is still what was staged: queue it, replacing any
+            // older queued copy (last writer wins).
+            if current == item.payload { return item.draft }
+            // The record changed since. A guarded draft (the request stamp, a
+            // repeat customer's fill) is still safe to send when nothing else
+            // is queued for it: a pull may have replaced the local copy with
+            // the server's unstamped one, and the guard makes the server drop
+            // the write if the row moved. Anything queued for the record is a
+            // later edit's, which must not be replaced.
+            if item.ifUnchangedSince != nil && queuedForRecord.isEmpty { return item.draft }
+            return nil
         }
     }
 
