@@ -2,7 +2,10 @@
 
 **Created:** 2026-09-21
 
-**Status:** Drafted from code review; no fix tasks implemented yet.
+**Status:** Drafted from code review; no fix tasks implemented yet. F4 and F5 were
+superseded by later work (10.11, P12-015); the rest are tracked in the Phase 12 defect
+list (charter §10, P12-023 to P12-034) as of 2026-09-28 — see the status table in
+`docs/native-migration-fix-tasklist.md`.
 
 **Source punch-list:** [native-migration-fix-tasklist.md](native-migration-fix-tasklist.md)
 (review date 2026-09-20).

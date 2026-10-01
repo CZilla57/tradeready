@@ -2,7 +2,12 @@
 # supabase/verify/booking_lifecycle_concurrency.sh
 # Task 8.04 — CHECKED-IN commands for actual PostgreSQL concurrency proof.
 #
-# STATUS: DEFERRED (M1). No local PostgreSQL exists in this repo or on the
+# STATUS: the claim, lifecycle and writer-fence races are now proven on a local
+# PostgreSQL by `supabase/verify/local/run.sh` (real concurrent sessions, with a
+# no-fence negative control). This script remains the HOSTED-project proof that
+# Phase 12 Stage A owes (Supabase's real default privileges and PostgREST JWT
+# claims are only imitated locally); it is still DEFERRED until that project
+# exists. Original note: (M1). No local PostgreSQL exists in this repo or on the
 # 8.04 host (no psql/docker); a mocked 409 is characterization, NOT race
 # evidence. Run this against an isolated staging project (Phase 12 / 8.14),
 # record the session transcripts as evidence, and NEVER against production.

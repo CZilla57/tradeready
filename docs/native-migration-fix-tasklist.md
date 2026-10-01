@@ -4,6 +4,33 @@ _Review date: 2026-09-20. Scope: the most recent additions to the SwiftUI native
 migration (Phases 6, 7, and 8). This is a working punch-list of gaps found by
 code review; it does not replace the phase plans or the roadmap._
 
+## Status at `3d26fad` (reconciled 2026-09-28)
+
+Every open item below was re-checked by reading the code at `3d26fad`. Tracking has
+moved to the Phase 12 defect list
+([`native-phase-12-cutover-charter.md`](native-phase-12-cutover-charter.md) §10, "New in
+Phase 12"), where an open S1 or S2 blocks Stage A entry. The checkboxes below are left as
+written on 2026-09-20; this table is the current state.
+
+| Item | State at `3d26fad` | Tracked as |
+|---|---|---|
+| P0 booking history replay (F1) | Status paths fixed by P12-015 and P12-017; `stampBookingRequestHandled` still queues the whole row | P12-030 (S3) |
+| P0 owner lock and job/settings writes (F2) | Fix landed 2026-09-30 (write-fence triggers, lock order), proved on a local PostgreSQL; staging proof owed | P12-025 (S2) |
+| P0 authority/replay privileges (F3) | Fix landed 2026-09-30 (working tree), host-proved; staging check owed | P12-023 (S1) |
+| (found in the re-check) | Fixed 2026-09-30: the typo, plus `digest` schema and `for update` with `count` that only a real Postgres exposed | P12-024 (S2) |
+| P1 8.11 attention reachability (F4) | Superseded: Today shows each attention row with its actions since 10.11; the unused requests view is P12-018 | P12-018, P12-026 |
+| P1 8.11 reschedule Resolve (F5) | Superseded by P12-015 (accept after the owner moves the job) | P12-015 (Fixed); P12-033 for the progress indicator |
+| P1 8.11 destructive and exception paths (F6) | Deleted-linked-job rows fixed 2026-09-30 (P12-026); progress indicator remains | P12-026 (S2, Fixed), P12-033 (S3) |
+| P1 8.12 route view (F7) | Reachable from Today; empty map preview, no full-route action or fallback, runner race remain | P12-032 (S3) |
+| P1 unknown-outcome admin replay (F8) | Fixed 2026-09-30 (host tests) | P12-027 (S2) |
+| P1 link reconciliation owner recheck (F9) | Open; no reachable leak (RootView teardown) | P12-031 (S3) |
+| P1 snapshot-then-queue recovery (F10) | Fixed 2026-09-30 (host tests) | P12-028 (S2) |
+| P2 Reconcile dead control (F11) | Open, in the unused requests view | P12-033 with P12-018 |
+| Phase 7 simultaneous-offline recurring generation | Accepted permanent limitation 2026-09-30 (charter §9 row 18); P7-25 reconciled | P12-029 (S3, Closed) |
+| Phase 6 and 7 verification pending | Device rows in `native-phase-12-evidence-index.md` (P6, P7) | Evidence index |
+| Phase 6 scoped-out sub-features | Not defects | — |
+| P3 process gates (F12) | Open | P12-034 (S3) |
+
 ## Method
 
 - Ran the relevant host test suites for each phase (all listed below **pass**).

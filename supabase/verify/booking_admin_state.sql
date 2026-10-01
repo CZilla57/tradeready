@@ -21,27 +21,45 @@ select tablename from pg_tables
    and tablename in ('booking_link_state', 'booking_operations');
 -- Expect 2 rows.
 
--- 2. Execute is locked down: service_role only.
-select p.proname, grantee, privilege_type
-  from information_schema.routine_privileges
- where routine_schema = 'public'
-   and routine_name = 'admin_booking_link';
--- Expect only {grantee: service_role, privilege: EXECUTE} rows.
+-- 2. Execute is locked down (P12-023). Supabase grants EXECUTE on new public
+-- functions straight to anon/authenticated, which `revoke ... from public`
+-- does not remove, so test the ROLES, not the ACL text. Expect ZERO rows.
+select p.oid::regprocedure as function, r.rolname as role_that_can_execute
+  from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace
+  cross join (select rolname from pg_roles where rolname in ('anon', 'authenticated')) r
+ where n.nspname = 'public'
+   and p.proname in ('admin_booking_link')
+   and has_function_privilege(r.rolname, p.oid, 'execute');
+-- And service_role must keep it. Expect one row per function, all true.
+select p.oid::regprocedure as function, has_function_privilege('service_role', p.oid, 'execute') as service_role_can_execute
+  from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public'
+   and p.proname in ('admin_booking_link');
 
--- 3. RLS is on with an owner-scoped policy on both new tables.
+-- 3. Server-authority tables (P12-023): RLS on, NO policy, NO client privileges.
 select tablename, rowsecurity from pg_tables
- where schemaname = 'public'
-   and tablename in ('booking_link_state', 'booking_operations');
--- Expect rowsecurity = true for both.
-
-select policyname, cmd from pg_policies
- where schemaname = 'public'
-   and tablename in ('booking_link_state', 'booking_operations');
--- Expect the "users own …" policies.
+ where schemaname = 'public' and tablename in ('booking_link_state', 'booking_operations');
+-- Expect rowsecurity = true for every row.
+select tablename, policyname, cmd from pg_policies
+ where schemaname = 'public' and tablename in ('booking_link_state', 'booking_operations');
+-- Expect ZERO rows (devices never read or write these tables).
+select t.tablename, r.rolname as role, p.priv as privilege
+  from (select unnest(array['booking_link_state', 'booking_operations']) as tablename) t
+  cross join (select rolname from pg_roles where rolname in ('anon', 'authenticated')) r
+  cross join (values ('select'), ('insert'), ('update'), ('delete')) p(priv)
+ where has_table_privilege(r.rolname, format('public.%I', t.tablename), p.priv);
+-- Expect ZERO rows.
+select t.tablename, p.priv as privilege_service_role_lacks
+  from (select unnest(array['booking_link_state', 'booking_operations']) as tablename) t
+  cross join (values ('select'), ('insert'), ('update')) p(priv)
+ where not has_table_privilege('service_role', format('public.%I', t.tablename), p.priv);
+-- Expect ZERO rows (the Worker reads these over REST).
 
 -- 4. pgcrypto present (sha256 token-hash comparison + backfill).
-select extname from pg_extension where extname = 'pgcrypto';
--- Expect 1 row on Supabase (standard extension). If absent, the backfill and
+select e.extname, n.nspname as schema from pg_extension e join pg_namespace n on n.oid = e.extnamespace where e.extname = 'pgcrypto';
+-- Expect 1 row, schema = extensions on Supabase (the migrations call extensions.digest). If absent, the backfill and
 -- the adopted-branch comparisons fail at execution — do NOT deploy Workers
 -- until resolved.
 
@@ -59,7 +77,7 @@ select
 -- Mismatched hashes (must be zero):
 -- select b.user_id from public.booking_link_state b join public.settings s
 --   on s.user_id = b.user_id
---  where b.token_hash <> encode(digest(s.data -> 'bookingLink' ->> 'token', 'sha256'), 'hex');
+--  where b.token_hash <> encode(extensions.digest(s.data -> 'bookingLink' ->> 'token', 'sha256'), 'hex');
 
 -- ── live blocks (transactional, ROLL BACK — paste one at a time) ──────────
 -- Each block needs a scratch owner: use an existing test user id for

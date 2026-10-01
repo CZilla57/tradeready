@@ -27,7 +27,7 @@ struct NativeBookingSettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     private enum BusyAction: Hashable {
-        case refresh, create, enable, disable, rotate
+        case refresh, create, enable, disable, rotate, retry
     }
 
     @State private var busy: Set<BusyAction> = []
@@ -37,12 +37,27 @@ struct NativeBookingSettingsView: View {
     @State private var isError = false
     @State private var confirmingRotate = false
     @State private var didLoad = false
+    /// P12-027: a link change whose outcome is unknown. Its operation ID is
+    /// kept on the device, so Retry replays the same request instead of
+    /// issuing a second link.
+    @State private var pendingOperation: NativeScheduleBookingPolicy.PendingAdminOperation?
 
     private var localDisplay: (token: String?, enabled: Bool) {
         store.bookingLinkLocalDisplay()
     }
 
     private var isBusy: Bool { !busy.isEmpty }
+
+    /// The server has a link (its revision counts every committed change) but
+    /// this device holds no display copy: a first Create whose response was
+    /// lost, or a link made on another device that has not been pulled. Create
+    /// would answer `already_exists`; only a replacement gives a shareable link.
+    private var serverHasLinkWithoutLocalCopy: Bool {
+        localDisplay.token == nil && (authority?.revision ?? 0) > 0
+    }
+
+    /// Other changes wait while one may be in flight on the server.
+    private var changesBlocked: Bool { isBusy || pendingOperation != nil }
 
     var body: some View {
         Group {
@@ -138,7 +153,8 @@ struct NativeBookingSettingsView: View {
     private var stateTitle: String {
         if shareURL != nil { return (authority?.enabled ?? false) ? "Published" : "Link ready" }
         if authority == nil { return "Unavailable" }
-        return localDisplay.token == nil ? "No link yet" : "Needs recovery"
+        if localDisplay.token == nil { return serverHasLinkWithoutLocalCopy ? "Link not on this device" : "No link yet" }
+        return "Needs recovery"
     }
 
     private var stateSubtitle: String {
@@ -151,7 +167,9 @@ struct NativeBookingSettingsView: View {
             return "Could not reach the booking service. Nothing here claims a published state."
         }
         if localDisplay.token == nil {
-            return "Create a link to let customers request work."
+            return serverHasLinkWithoutLocalCopy
+                ? "A link exists on the server but this device has no copy of it. Replace it to get a link you can share."
+                : "Create a link to let customers request work."
         }
         return "The saved copy no longer matches the server. Rotate to recover — never share the stale copy."
     }
@@ -165,11 +183,27 @@ struct NativeBookingSettingsView: View {
             .disabled(isBusy)
             .accessibilityHint("Re-reads the authoritative link state")
 
-            if localDisplay.token == nil {
+            if let pending = pendingOperation {
+                Button { Task { await retryPending(pending) } } label: {
+                    actionLabel("Retry \(pendingActionTitle(pending))", systemImage: "arrow.clockwise",
+                                busy: busy.contains(.retry))
+                }
+                .disabled(isBusy)
+                .accessibilityHint("Sends the same request again. The server recognizes it, so it never makes a second link.")
+            }
+
+            if localDisplay.token == nil && serverHasLinkWithoutLocalCopy {
+                Button { confirmingRotate = true } label: {
+                    actionLabel("Replace link", systemImage: "arrow.triangle.2.circlepath.circle", busy: busy.contains(.rotate))
+                }
+                .disabled(changesBlocked)
+                .foregroundStyle(Color.tradeDangerText)
+                .accessibilityHint("Asks for confirmation, then makes a new link. Any link already shared stops working.")
+            } else if localDisplay.token == nil {
                 Button { Task { await create() } } label: {
                     actionLabel("Create booking link", systemImage: "link.badge.plus", busy: busy.contains(.create))
                 }
-                .disabled(isBusy)
+                .disabled(changesBlocked)
                 .accessibilityHint("Creates the link on the server first, then saves the local copy")
             } else {
                 if let url = shareURL {
@@ -188,19 +222,19 @@ struct NativeBookingSettingsView: View {
                     Button { Task { await setEnabled(false) } } label: {
                         actionLabel("Disable booking link", systemImage: "link.badge.plus", busy: busy.contains(.disable))
                     }
-                    .disabled(isBusy)
+                    .disabled(changesBlocked)
                     .accessibilityHint("Customers immediately stop reaching this link after the server confirms")
                 } else {
                     Button { Task { await setEnabled(true) } } label: {
                         actionLabel("Enable booking link", systemImage: "link", busy: busy.contains(.enable))
                     }
-                    .disabled(isBusy)
+                    .disabled(changesBlocked)
                     .accessibilityHint("Re-enables the verified link on the server first")
                 }
                 Button { confirmingRotate = true } label: {
                     actionLabel("Rotate link", systemImage: "arrow.triangle.2.circlepath.circle", busy: busy.contains(.rotate))
                 }
-                .disabled(isBusy)
+                .disabled(changesBlocked)
                 .foregroundStyle(Color.tradeDangerText)
                 .accessibilityHint("Asks for confirmation, then replaces the link. The old link stops working.")
             }
@@ -223,6 +257,7 @@ struct NativeBookingSettingsView: View {
             if didLoad == false { didLoad = true }
         }
         if clearMessage { statusMessage = nil; isError = false }
+        pendingOperation = store.pendingAdminOperation(target: AppStore.bookingAdminTarget)
         let reconciled = await store.reconcileBookingLinkForSharing()
         guard scheduleStillCurrent() else { return }
         authority = reconciled.status
@@ -257,12 +292,36 @@ struct NativeBookingSettingsView: View {
         await administer(.rotate, enabled: nil, successVerb: "rotated")
     }
 
+    private func pendingActionTitle(_ pending: NativeScheduleBookingPolicy.PendingAdminOperation) -> String {
+        switch pending.action {
+        case "mint": "create"
+        case "rotate": "replace"
+        default: pending.enabled == false ? "disable" : "enable"
+        }
+    }
+
+    /// Replays the unfinished change under its own operation ID (the store
+    /// reuses it for the same action). No confirmation: the owner confirmed
+    /// the first attempt, and the retry cannot issue a second link.
+    private func retryPending(_ pending: NativeScheduleBookingPolicy.PendingAdminOperation) async {
+        busy.insert(.retry)
+        defer { busy.remove(.retry) }
+        switch pending.action {
+        case "mint": await administer(.mint, enabled: nil, successVerb: "created")
+        case "rotate": await administer(.rotate, enabled: nil, successVerb: "rotated")
+        default:
+            let enable = pending.enabled ?? true
+            await administer(.setEnabled, enabled: enable, successVerb: enable ? "enabled" : "disabled")
+        }
+    }
+
     private func administer(_ action: NativeBookingAdminAction, enabled: Bool?, successVerb: String) async {
         // A fresh operation ID per attempt: retries of the SAME attempt reuse
         // it inside the store (replay-safe); a new attempt mints a new one.
         let outcome = await store.administerBookingLink(
             action: action, enabled: enabled, operationId: UUID().uuidString)
         guard scheduleStillCurrent() else { return }
+        pendingOperation = store.pendingAdminOperation(target: AppStore.bookingAdminTarget)
         switch outcome {
         case let .applied(revision, sharesURL: shares):
             _ = revision
@@ -281,7 +340,7 @@ struct NativeBookingSettingsView: View {
         case .recoveryStaged:
             setMessage("Updated on the server, but the local copy could not be saved. It will finish automatically — refresh to verify. No second link was created.", error: true)
         case .unknownOutcome:
-            setMessage("The request may or may not have reached the server. Check the status before trying again — nothing was retried automatically.", error: true)
+            setMessage("The request may or may not have reached the server. Tap Retry to send the same request again — the server recognizes it, so it never makes a second link.", error: true)
         case let .failed(reason):
             setMessage(failureText(reason: reason), error: true)
         }
@@ -295,6 +354,8 @@ struct NativeBookingSettingsView: View {
         case "status-unavailable": "Could not reach the booking service. Nothing was changed."
         case "owner-changed": "The account changed while working. Nothing was published for the wrong account."
         case "already-running": "A link action is already running. Wait for it to finish."
+        case "operation-pending": "An earlier link change may not have finished. Retry it first."
+        case "persist": "This device could not save the request, so it was not sent. Nothing changed."
         case "invalid-request": "This request was invalid and was not sent."
         default: "The booking service is unavailable. Check your connection and try again."
         }

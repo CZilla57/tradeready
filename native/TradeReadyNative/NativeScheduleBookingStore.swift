@@ -492,6 +492,171 @@ enum NativeScheduleBookingPolicy {
         }
     }
 
+    enum StagedCommitOutcome: Equatable {
+        /// Staged, snapshot saved and applied, queue written, stage cleared.
+        case committed
+        /// The stage could not be written, so the commit did not start:
+        /// nothing was saved and nothing was queued.
+        case stageFailed
+        /// The snapshot save failed: nothing is saved or queued, and the
+        /// stage was cleared.
+        case snapshotFailed
+        /// The snapshot is saved and the queue write failed (or did not
+        /// happen): the staged batch stays, and a launch or activation pass
+        /// replays it.
+        case queueFailedStaged
+        /// The snapshot is saved (and the batch queued) but the in-memory
+        /// state could not be applied from it. The records are durable and
+        /// reach the server; the screen state catches up at the next launch
+        /// or pull. The caller reports the local commit as failed.
+        case savedNotApplied
+    }
+
+    /// The booking-intake boundary (P12-028, fix plan F10). The batch is
+    /// staged durably BEFORE the snapshot is saved, so every point after it
+    /// (a failed queue write, the app ending mid-commit) leaves a durable
+    /// record of what must still reach the server. A failed stage aborts the
+    /// commit: success is never reported for a batch with no durable trace.
+    /// The stage is cleared only when nothing durable is left to send: the
+    /// save failed (nothing was saved), or the queue holds the batch. A failed
+    /// APPLY after a successful save never clears it before the queue write.
+    /// Save and apply stay one closure because the save-first pin
+    /// (`SaveRollbackTests`) requires `apply(X)` to directly follow
+    /// `repository.save(X)`.
+    static func commitLocalStaged(
+        stageBatch: () throws -> Void,
+        saveAndApply: () throws -> Void,
+        snapshotLanded: () -> Bool,
+        publishToQueue: () throws -> Void,
+        clearStage: () -> Void
+    ) -> StagedCommitOutcome {
+        do { try stageBatch() } catch { return .stageFailed }
+        var applied = true
+        do {
+            try saveAndApply()
+        } catch {
+            // `saveAndApply` saves and then applies, so a throw may come from
+            // either. When the saved snapshot holds the batch's records the
+            // save landed and only the apply failed: keep going.
+            guard snapshotLanded() else {
+                clearStage()
+                return .snapshotFailed
+            }
+            applied = false
+        }
+        do {
+            try publishToQueue()
+        } catch {
+            return .queueFailedStaged
+        }
+        clearStage()
+        return applied ? .committed : .savedNotApplied
+    }
+
+    /// The drafts of a staged batch that still need queuing (P12-028).
+    /// A draft is replayed only when the record on the device still equals
+    /// what was staged: a later edit of that record queued its own, newer
+    /// upsert (and replaying the old one could overwrite it), and a record
+    /// that is gone has nothing to send. A draft whose record the queue
+    /// already holds is skipped, so a replay after a partial or repeated
+    /// pass queues nothing twice. "Already holds" means the queue's upsert for
+    /// that record carries the staged payload: an OLDER queued upsert of the
+    /// same record is replaced (last writer wins), never mistaken for it.
+    static func stagedDraftsToReplay(
+        _ staged: [NativeScheduleBookingStagedDraft],
+        currentPayload: (_ table: String, _ id: String) -> Canonical.JSONValue?,
+        queued: [Canonical.MutationItem]
+    ) -> [Canonical.MutationDraft] {
+        staged.compactMap { item in
+            let queuedForRecord = queued.filter { $0.table == item.table && $0.recordId == item.recordId }
+            // The queue already holds exactly this change.
+            if queuedForRecord.contains(where: { $0.op == .upsert && $0.payload == item.payload }) { return nil }
+            guard let current = currentPayload(item.table, item.recordId) else { return nil }
+            // The record is still what was staged: queue it, replacing any
+            // older queued copy (last writer wins).
+            if current == item.payload { return item.draft }
+            // The record changed since. A guarded draft (the request stamp, a
+            // repeat customer's fill) is still safe to send when nothing else
+            // is queued for it: a pull may have replaced the local copy with
+            // the server's unstamped one, and the guard makes the server drop
+            // the write if the row moved. Anything queued for the record is a
+            // later edit's, which must not be replaced.
+            if item.ifUnchangedSince != nil && queuedForRecord.isEmpty { return item.draft }
+            return nil
+        }
+    }
+
+    // MARK: - Durable admin operation IDs (P12-027)
+
+    /// The server keeps an operation's replay row for 30 days (contract
+    /// §1.3). A pending operation is retried only while that row can still
+    /// exist: after it, a retry would be a NEW mutation under an old ID.
+    static let adminOperationReplayWindow: TimeInterval = 29 * 24 * 60 * 60
+
+    struct PendingAdminOperation: Equatable {
+        var target: String
+        var action: String
+        var enabled: Bool?
+        var operationId: String
+        var stagedAt: String
+    }
+
+    enum AdminOperationPlan: Equatable {
+        /// No usable pending operation: stage and send this new ID.
+        case fresh(String)
+        /// The same action, unfinished: retry its exact ID.
+        case reuse(String)
+        /// A different action while one may be in flight on the server. It
+        /// must be retried (or expire) first, so a second capability is never
+        /// issued beside one whose outcome is unknown.
+        case blocked(pendingAction: String)
+    }
+
+    static func planAdminOperation(
+        pending: PendingAdminOperation?,
+        action: String,
+        enabled: Bool?,
+        proposedID: String,
+        now: Date
+    ) -> AdminOperationPlan {
+        guard let pending else { return .fresh(proposedID) }
+        if let staged = ISO8601DateFormatter().date(from: pending.stagedAt)
+            ?? fractionalISO.date(from: pending.stagedAt),
+           now.timeIntervalSince(staged) > adminOperationReplayWindow {
+            return .fresh(proposedID)
+        }
+        if pending.action == action && pending.enabled == enabled { return .reuse(pending.operationId) }
+        return .blocked(pendingAction: pending.action)
+    }
+
+    private static let fractionalISO: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    /// Failures that happen before a request is sent, or that the server
+    /// answered without committing. Any other failure (a transport error, an
+    /// unreadable response, a failed local save after the server committed)
+    /// leaves the operation pending.
+    private static let definiteAdminFailures: Set<String> = [
+        "not-signed-in", "session", "configuration", "status-unavailable", "owner-changed",
+        "already-running", "invalid-request", "rejectedSession", "rateLimited", "notFound",
+        "operationConflict", "invalidConfiguration", "malformedSession", "operation-pending", "persist",
+    ]
+
+    /// Whether the outcome of an administration call settles its operation.
+    /// `createdThisCall` is false for a retry of an earlier unknown outcome:
+    /// such a retry that fails before sending says nothing new about the
+    /// original request, so it stays pending (an operation conflict is the
+    /// exception: the ID can never succeed).
+    static func adminOutcomeSettlesOperation(failureReason: String?, unknown: Bool, createdThisCall: Bool) -> Bool {
+        if unknown { return false }
+        guard let reason = failureReason else { return true }
+        if reason == "operationConflict" { return true }
+        return definiteAdminFailures.contains(reason) && createdThisCall
+    }
+
     // MARK: - Private helpers
 
     static func normalizedDate(_ value: String?) -> String? {
@@ -574,6 +739,23 @@ struct NativeScheduleBookingPendingWork: Codable, Equatable, Sendable {
         case portalMirror(customerId: String, token: String?, enabled: Bool?, operationId: String)
         /// Reschedule proof awaiting exact job-mutation acknowledgment.
         case rescheduleProof(requestId: String, proof: NativeScheduleProof, writeStamp: String)
+        /// Phase 12 (P12-028, fix plan F10): the exact batch of record
+        /// upserts a local commit is about to queue, staged BEFORE the
+        /// snapshot is saved. It is the only durable trace of records that
+        /// are saved locally but not yet queued for the server (a queue-write
+        /// failure, or the app ending between the snapshot save and the
+        /// queue write). Unlike a mirror, this is business data: rollback
+        /// readiness counts it as waiting changes.
+        case stagedBatch(drafts: [NativeScheduleBookingStagedDraft], stage: String)
+        /// Phase 12 (P12-027, fix plan F8): an owner-bound link-administration
+        /// mutation (mint, rotate, enable, disable) whose outcome is not
+        /// known. Staged BEFORE the request is sent and cleared only once the
+        /// outcome is definite, so a timeout, a lost response or a relaunch
+        /// retries the SAME operation ID (the server replays its stored
+        /// response for 30 days instead of minting a second capability).
+        /// `target` is `booking` or `portal/<customerId>`; `action` is
+        /// `mint`, `set_enabled` or `rotate`. Display-only: it holds no token.
+        case adminOperation(target: String, action: String, enabled: Bool?, operationId: String, stagedAt: String)
     }
 
     var kind: Kind
@@ -584,6 +766,31 @@ struct NativeScheduleBookingPendingWork: Codable, Equatable, Sendable {
     init(kind: Kind, ownerBinding: String) {
         self.kind = kind
         self.ownerBinding = ownerBinding
+    }
+}
+
+/// A codable copy of a queued record upsert (`Canonical.MutationDraft` itself
+/// is not `Codable`). Only upserts are staged: the local commits that stage
+/// are record creations and merges.
+// `@unchecked`: `Canonical.JSONValue` is a value-type enum but not declared Sendable.
+struct NativeScheduleBookingStagedDraft: Codable, Equatable, @unchecked Sendable {
+    var table: String
+    var recordId: String
+    var payload: Canonical.JSONValue?
+    var ifUnchangedSince: String?
+
+    init(_ draft: Canonical.MutationDraft) {
+        table = draft.table
+        recordId = draft.recordId
+        payload = draft.payload
+        ifUnchangedSince = draft.ifUnchangedSince
+    }
+
+    var draft: Canonical.MutationDraft {
+        Canonical.MutationDraft(
+            table: table, op: .upsert, recordId: recordId, payload: payload,
+            ifUnchangedSince: ifUnchangedSince
+        )
     }
 }
 
@@ -666,6 +873,13 @@ struct NativeScheduleBookingPendingWorkStore: Sendable {
             return lID == rID
         case let (.rescheduleProof(lReq, _, _), .rescheduleProof(rReq, _, _)):
             return lReq == rReq
+        case let (.adminOperation(lTarget, _, _, _, _), .adminOperation(rTarget, _, _, _, _)):
+            // One pending operation per target; a retry stages the same one.
+            return lTarget == rTarget
+        case (.stagedBatch, .stagedBatch):
+            // Distinct commits stage distinct batches; an identical batch
+            // staged twice (a retry of the same commit) is one item.
+            return existing == staged
         default:
             return false
         }
