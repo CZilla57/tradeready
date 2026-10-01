@@ -11358,11 +11358,18 @@ extension AppStore {
     /// `stagedDraftsToReplay`). The item is removed only after the queue
     /// accepted what remained; a queue that still cannot be written keeps it.
     private func replayStagedBatch(_ staged: [NativeScheduleBookingStagedDraft]) -> PendingWorkStep {
+        // An unreadable queue file reads as empty, and the write below would
+        // publish over it and lose unrelated pending changes: keep the item
+        // until the queue can be read.
+        guard let queued = mutationQueue.loadIfReadable() else {
+            recordLocalSyncFailure("recovery/queue")
+            return .retained
+        }
         let payloads = currentRecordPayloads()
         let drafts = NativeScheduleBookingPolicy.stagedDraftsToReplay(
             staged,
             currentPayload: { table, id in payloads[table]?[id] },
-            queued: mutationQueue.load()
+            queued: queued
         )
         if !drafts.isEmpty {
             do { try mutationQueue.enqueueBatch(drafts) } catch {

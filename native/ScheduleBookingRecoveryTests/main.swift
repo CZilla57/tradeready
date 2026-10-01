@@ -764,6 +764,8 @@ struct ScheduleBookingRecoveryTests {
         await stagedReplayNeverQueuesTwice()
         await aStagedBatchBlocksRollbackReadiness()
         await anEndedCommitIsReplayedAtLaunch()
+        await anOlderQueuedUpsertIsReplacedByTheStagedOne()
+        await anUnreadableQueueKeepsTheStagedBatch()
         await acceptAfterIntakeIsLinkedToTheJob()
         await declineKeepsTheServersHistory()
         await aQueuedCopyNeverOverwritesTheDecline()
@@ -3772,6 +3774,49 @@ struct ScheduleBookingRecoveryTests {
         expect(block.contains("case .markDone:") && block.contains("Button(\"Done\")"), "O2: Done for a portal change")
         expect(block.contains("case .dismiss:") && block.contains("Button(\"Dismiss\")"), "O2: Dismiss for any other booking")
         expect(block.contains("Button(\"View job\")"), "O2: View job stays")
+    }
+
+    /// M7 (review): an older upsert of the same record is already queued when
+    /// the batch is replayed (the app ended after the save, before the queue
+    /// write). Matching on the record alone treated it as the staged change,
+    /// removed the batch and left the stale payload to be pushed. Now the
+    /// staged payload replaces it.
+    @MainActor
+    static func anOlderQueuedUpsertIsReplacedByTheStagedOne() async {
+        let id = "M7 older queued upsert"
+        let (d, store) = await intakeDevice("m7")
+        defer { d.cleanup() }
+        d.blockQueue(true)
+        await store.performForegroundRefresh()
+        d.blockQueue(false)
+        let stagedJob = stagedBatches(d).first?.first { $0.table == "jobs" }?.payload
+        expect(stagedJob != nil, "\(id): sanity: the job draft is staged")
+        _ = try? d.queue.enqueue(table: "jobs", op: .upsert, recordId: leadJobID,
+                                 payload: .object(["id": .string(leadJobID), "title": .string("An older queued copy")]))
+        _ = await store.recoverScheduleBookingPendingWorkIfPossible()
+        let queued = d.queue.load().first { $0.table == "jobs" && $0.recordId == leadJobID }
+        expectEqual(d.queued("jobs"), 1, "\(id): one job upsert is queued")
+        expectEqual(queued?.payload, stagedJob, "\(id) [review]: it carries the staged payload, not the older copy")
+        expectEqual(stagedBatches(d).count, 0, "\(id): the batch is cleared")
+    }
+
+    /// M8 (review): an unreadable queue file is never published over. The
+    /// staged batch is kept and the file is left as it was.
+    @MainActor
+    static func anUnreadableQueueKeepsTheStagedBatch() async {
+        let id = "M8 unreadable queue"
+        let (d, store) = await intakeDevice("m8")
+        defer { d.cleanup() }
+        d.blockQueue(true)
+        await store.performForegroundRefresh()
+        let recovery = await store.recoverScheduleBookingPendingWorkIfPossible()
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(
+            atPath: d.dir.appendingPathComponent("mutation-queue.json").path, isDirectory: &isDirectory)
+        expect(exists && isDirectory.boolValue, "\(id) [review]: the unreadable queue is left as it was")
+        expectEqual(recovery?.replayedBatches, 0, "\(id): nothing was replayed")
+        expectEqual(recovery?.retained, 1, "\(id): the item is retained")
+        expectEqual(stagedBatches(d).map(\.count), [3], "\(id) [review]: the staged batch is kept")
     }
 
     /// K9 (with P12-015): after intake, the customer asks to reschedule, and

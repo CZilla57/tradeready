@@ -541,7 +541,9 @@ enum NativeScheduleBookingPolicy {
     /// upsert (and replaying the old one could overwrite it), and a record
     /// that is gone has nothing to send. A draft whose record the queue
     /// already holds is skipped, so a replay after a partial or repeated
-    /// pass queues nothing twice.
+    /// pass queues nothing twice. "Already holds" means the queue's upsert for
+    /// that record carries the staged payload: an OLDER queued upsert of the
+    /// same record is replaced (last writer wins), never mistaken for it.
     static func stagedDraftsToReplay(
         _ staged: [NativeScheduleBookingStagedDraft],
         currentPayload: (_ table: String, _ id: String) -> Canonical.JSONValue?,
@@ -550,7 +552,10 @@ enum NativeScheduleBookingPolicy {
         staged.compactMap { item in
             guard let current = currentPayload(item.table, item.recordId),
                   current == item.payload,
-                  !queued.contains(where: { $0.table == item.table && $0.recordId == item.recordId })
+                  !queued.contains(where: {
+                      $0.table == item.table && $0.recordId == item.recordId
+                          && $0.op == .upsert && $0.payload == item.payload
+                  })
             else { return nil }
             return item.draft
         }
