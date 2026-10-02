@@ -42,9 +42,13 @@ struct JobInvoiceBillableBreakdown: Equatable {
     /// into `overheadLine`.
     var directCostLines: [JobInvoiceLineDraft]
     /// The residual "overhead & operating costs" line: quoted total minus
-    /// labor, materials, and visible direct costs — never re-derived from
-    /// overhead/margin percent, so a hand-adjusted quoted total is trusted.
+    /// labor, materials, visible direct costs and accepted add-ons — never
+    /// re-derived from overhead/margin percent, so a hand-adjusted quoted
+    /// total is trusted.
     var overheadLine: Decimal
+    /// Phase 25: one line per accepted good/better/best add-on (flat price,
+    /// already inside the quoted total). Empty for a single-total estimate.
+    var addOnLines: [JobInvoiceLineDraft] = []
     var usedTrackedTime: Bool
     /// Σ approved, non-cancelled change-order amounts (0 when none).
     var changeOrderTotal: Decimal
@@ -161,6 +165,11 @@ enum JobInvoiceDomain {
     /// quoted breakdown until tracked time applies, at which point only the
     /// labor line moves and the total shifts by the same delta — materials
     /// and the residual overhead line stay as quoted.
+    ///
+    /// Phase 25: `addOnLines` are the accepted add-ons (see
+    /// `NativeQuoteOptions.invoiceAddOnLines`). Their prices are already in
+    /// `estimateTotal` (invariant M2), so they come out of the residual
+    /// overhead line and the total is unchanged.
     static func computeBillableBreakdown(
         estimateTotal: Decimal,
         laborHours: Decimal,
@@ -170,7 +179,8 @@ enum JobInvoiceDomain {
         directCosts: [JobInvoiceDirectCost],
         status: String,
         timeSessions: [JobInvoiceTimeSession],
-        changeOrders: [NativeJobListChangeOrder]
+        changeOrders: [NativeJobListChangeOrder],
+        addOnLines: [JobInvoiceLineDraft] = []
     ) -> JobInvoiceBillableBreakdown {
         let quotedLaborCost = laborHours * laborRate
         let materialBase = materials.reduce(Decimal.zero) { $0 + $1.quantity * $1.unitCost }
@@ -184,7 +194,8 @@ enum JobInvoiceDomain {
             return JobInvoiceLineDraft(description: cost.label, amount: amount, category: cost.category)
         }
         let visibleDirectTotal = directCostLines.reduce(Decimal.zero) { $0 + $1.amount }
-        let overheadLine = estimateTotal - quotedLaborCost - materialCost - visibleDirectTotal
+        let addOnTotal = addOnLines.reduce(Decimal.zero) { $0 + $1.amount }
+        let overheadLine = estimateTotal - quotedLaborCost - materialCost - visibleDirectTotal - addOnTotal
         let changeOrderTotal = approvedChangeOrderTotal(changeOrders)
 
         let (billedHours, usedTrackedTime) = billableLaborHours(
@@ -195,7 +206,7 @@ enum JobInvoiceDomain {
             return JobInvoiceBillableBreakdown(
                 laborHours: laborHours, laborCost: quotedLaborCost, materialCost: materialCost,
                 hasMaterials: !materials.isEmpty, directCostLines: directCostLines, overheadLine: overheadLine,
-                usedTrackedTime: false, changeOrderTotal: changeOrderTotal,
+                addOnLines: addOnLines, usedTrackedTime: false, changeOrderTotal: changeOrderTotal,
                 total: FinancialDecimal.javascriptCents(estimateTotal + changeOrderTotal)
             )
         }
@@ -203,7 +214,7 @@ enum JobInvoiceDomain {
         return JobInvoiceBillableBreakdown(
             laborHours: billedHours, laborCost: trackedLaborCost, materialCost: materialCost,
             hasMaterials: !materials.isEmpty, directCostLines: directCostLines, overheadLine: overheadLine,
-            usedTrackedTime: true, changeOrderTotal: changeOrderTotal,
+            addOnLines: addOnLines, usedTrackedTime: true, changeOrderTotal: changeOrderTotal,
             total: FinancialDecimal.javascriptCents(estimateTotal + trackedLaborCost - quotedLaborCost + changeOrderTotal)
         )
     }
@@ -244,6 +255,9 @@ enum JobInvoiceDomain {
                 description: "Overhead & operating costs", amount: breakdown.overheadLine, category: "overhead"
             ))
         }
+        // Phase 25: accepted add-ons follow the quoted lines, matching the
+        // accepted estimate's line order (tier lines, then add-ons).
+        items.append(contentsOf: breakdown.addOnLines)
         for changeOrder in approvedChangeOrders {
             items.append(JobInvoiceLineDraft(
                 description: "Change order — \(changeOrder.title)", amount: changeOrder.amount, category: "other"

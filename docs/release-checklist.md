@@ -32,8 +32,12 @@ Written 2026-07-18.
 
 ## Blocked features — do not ship while any of these is unresolved
 
-None currently. See "Adding an entry here" below for the bar a new one needs
-to clear.
+- [ ] **Quote options (Phase 25, `feat/quote-options`) — apply `supabase/migrations/20261002_job_approval_preserve.sql` first.**
+      Without it, a device push queued before it pulled a customer's decision
+      erases that decision and the chosen option (`approval.selection`; change
+      orders too). Unblocked when `sh supabase/verify/job_approval_preserve.sh`
+      passes, the migration is applied in the Supabase SQL editor, and
+      `preserve_job_approvals_trg` exists on `public.jobs`; then delete this entry.
 
 ---
 

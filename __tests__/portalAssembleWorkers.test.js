@@ -104,7 +104,7 @@ describe("assemblePortalView — whitelist boundary", () => {
     for (const a of out.appointments)
       expect(Object.keys(a).sort()).toEqual(["date", "end", "icsUrl", "jobRef", "manageUrl", "start", "title"]);
     for (const e of out.estimates)
-      expect(Object.keys(e).sort()).toEqual(["approvalUrl", "decision", "title", "total"]);
+      expect(Object.keys(e).sort()).toEqual(["approvalUrl", "decision", "hasOptions", "title", "total"]);
     for (const co of out.changeOrders)
       expect(Object.keys(co).sort()).toEqual(["amount", "changeUrl", "jobTitle", "status", "title"]);
     for (const i of out.invoices)
@@ -159,9 +159,66 @@ describe("change orders", () => {
 describe("estimates (v1 behavior unchanged)", () => {
   test("only approval-carrying jobs, frozen snapshot values", () => {
     expect(assemble().estimates).toEqual([
-      { title: "Fence build", total: 2400, decision: null,
+      { title: "Fence build", total: 2400, decision: null, hasOptions: false,
         approvalUrl: `https://gettradereadyapp.com/estimate.html?j=j_est&t=${"t".repeat(48)}` },
     ]);
+  });
+});
+
+describe("estimates with good/better/best options (Phase 25)", () => {
+  // Top level mirrors the recommended tier (spec §2.2); tier totals differ so
+  // "lowest" and "recommended" are distinguishable.
+  const optionsSnapshot = {
+    jobTitle: "AC replacement", total: 1850.5,
+    lineItems: [{ label: "Labor (6 hrs @ $95/hr)", amount: 570 }],
+    options: {
+      recommendedTierId: "qt_better",
+      tiers: [
+        { id: "qt_better", name: "Standard unit", lineItems: [], total: 1850.5 },
+        { id: "qt_good", name: "Repair", lineItems: [], total: 1200 },
+        { id: "qt_best", name: "High-efficiency unit", lineItems: [], total: 2999.99 },
+      ],
+      addOns: [{ id: "qa_haul", label: "Haul away old unit", amount: 150 }],
+    },
+  };
+  const selection = {
+    tierId: "qt_better", tierName: "Standard unit", addOnIds: ["qa_haul"],
+    addOns: [{ id: "qa_haul", label: "Haul away old unit", amount: 150 }],
+    lineItems: [{ label: "Haul away old unit", amount: 150 }], total: 2000.5,
+  };
+  const estimatesFor = (approval) => assemble({
+    jobRows: [{ id: "j_opt", data: { title: "AC", customerId: "c1", approval: { token: "o".repeat(48), ...approval } } }],
+  }).estimates;
+
+  test("undecided: hasOptions and the lowest tier total (the page shows From $X)", () => {
+    expect(estimatesFor({ snapshot: optionsSnapshot })).toEqual([
+      { title: "AC replacement", total: 1200, decision: null, hasOptions: true,
+        approvalUrl: `https://gettradereadyapp.com/estimate.html?j=j_opt&t=${"o".repeat(48)}` },
+    ]);
+  });
+
+  test("accepted: the selection total the customer agreed to", () => {
+    const [e] = estimatesFor({ snapshot: optionsSnapshot, decision: "approved", selection });
+    expect(e.total).toBe(2000.5);
+    expect(e.hasOptions).toBe(true);
+    expect(e.decision).toBe("approved");
+  });
+
+  test("a selection only counts once approved; declined falls back to the lowest tier", () => {
+    expect(estimatesFor({ snapshot: optionsSnapshot, decision: "declined", selection })[0].total).toBe(1200);
+  });
+
+  test("approved without a stored selection: lowest tier; legacy approved: snapshot total", () => {
+    expect(estimatesFor({ snapshot: optionsSnapshot, decision: "approved" })[0].total).toBe(1200);
+    const [legacy] = estimatesFor({ snapshot: { jobTitle: "Fence", total: 2400 }, decision: "approved" });
+    expect(legacy).toMatchObject({ total: 2400, hasOptions: false });
+  });
+
+  test("no tier internals or selection details cross the wire", () => {
+    const flat = JSON.stringify(estimatesFor({ snapshot: optionsSnapshot, decision: "approved", selection }));
+    expect(flat).not.toContain("Standard unit");
+    expect(flat).not.toContain("qa_haul");
+    expect(flat).not.toContain("tiers");
   });
 });
 

@@ -6,6 +6,7 @@
 import { fetchJob, constantTimeEqual } from '../../../lib/estimateStore.js';
 import { createRateLimiter } from '../../../lib/guards.js';
 import { applyCors } from '../../../lib/estimate/cors.js';
+import { snapshotDigest } from '../../../lib/estimate/quoteOptions.js';
 import { clientIp } from '../../appCors.js';
 
 const allow = createRateLimiter({ limit: 30 });
@@ -34,11 +35,18 @@ export async function estimateViewHandler(c) {
     return c.json({ error: 'This link is invalid or has expired.' }, 404);
   }
 
-  return c.json({
+  const body = {
     ...a.snapshot,
     decision: a.decision || null,
     consentAt: a.consentAt || null,
     signerName: a.signerName || null,
     signatureRequired: true,
-  }, 200);
+    // Echoed back by the page on respond; option estimates require it so a
+    // decision made on a superseded snapshot is refused (Phase 25 §4).
+    snapshotDigest: snapshotDigest(a.snapshot),
+  };
+  // The customer's accepted good/better/best choice (server-written by
+  // respond, under the approved lock).
+  if (a.decision === 'approved' && a.selection) body.selection = a.selection;
+  return c.json(body, 200);
 }

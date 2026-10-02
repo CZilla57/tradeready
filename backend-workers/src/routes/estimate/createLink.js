@@ -7,6 +7,7 @@
 import { randomBytes } from 'node:crypto';
 import { fetchJobForUser, upsertJob, planApprovalWrite } from '../../../lib/estimateStore.js';
 import { createRateLimiter } from '../../../lib/guards.js';
+import { hasSnapshotOptions, validateSnapshotOptions } from '../../../lib/estimate/quoteOptions.js';
 import { jsonBody } from '../../appCors.js';
 
 const allow = createRateLimiter({ limit: 10 });
@@ -66,6 +67,12 @@ export async function estimateCreateLinkHandler(c) {
   const { jobId, snapshot, changeOrderId } = (await jsonBody(c)) || {};
   if (!jobId || typeof jobId !== 'string') return c.json({ error: 'jobId is required' }, 400);
   if (!snapshot || typeof snapshot !== 'object') return c.json({ error: 'snapshot is required' }, 400);
+  // Good/better/best options (Phase 25) are validated before any DB contact;
+  // a snapshot without `options` is the legacy single-total estimate.
+  if (hasSnapshotOptions(snapshot)) {
+    const optionsError = validateSnapshotOptions(snapshot);
+    if (optionsError) return c.json({ error: optionsError }, 400);
+  }
   if (changeOrderId !== undefined && typeof changeOrderId !== 'string') {
     return c.json({ error: 'changeOrderId must be a string' }, 400);
   }

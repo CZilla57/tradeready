@@ -462,10 +462,15 @@ public extension Canonical {
     }
 
     struct EstimateApprovalSnapshot: Codable {
-        public struct LineItem: Codable {
+        public struct LineItem: Codable, Equatable {
             public var label: String
             public var amount: Decimal
             public var preservation: Preservation
+            public init(label: String, amount: Decimal, preservation: Preservation = .init()) {
+                self.label = label
+                self.amount = amount
+                self.preservation = preservation
+            }
             public init(from decoder: Decoder) throws {
                 var o = try ObjectReader(decoder); label = try o.required("label")
                 amount = try o.required("amount"); preservation = o.finish()
@@ -475,22 +480,186 @@ public extension Canonical {
                 try o.put(amount, for: "amount"); try o.encode(to: encoder)
             }
         }
+
+        /// Phase 25 (good/better/best): one customer-facing tier, frozen with
+        /// today's line derivation run on that tier's own pricing.
+        public struct OptionTier: Codable, Equatable {
+            public var id, name: String
+            public var description: String?
+            public var lineItems: [LineItem]
+            public var total: Decimal
+            public var preservation: Preservation
+            public init(
+                id: String,
+                name: String,
+                description: String? = nil,
+                lineItems: [LineItem],
+                total: Decimal,
+                preservation: Preservation = .init()
+            ) {
+                self.id = id
+                self.name = name
+                self.description = description
+                self.lineItems = lineItems
+                self.total = total
+                self.preservation = preservation
+            }
+            public init(from decoder: Decoder) throws {
+                var o = try ObjectReader(decoder)
+                id = try o.required("id"); name = try o.required("name"); description = try o.optional("description")
+                lineItems = try o.required("lineItems"); total = try o.required("total"); preservation = o.finish()
+            }
+            public func encode(to encoder: Encoder) throws {
+                var o = ObjectWriter(preservation)
+                try o.put(id, for: "id"); try o.put(name, for: "name"); try o.putOptional(description, for: "description")
+                try o.put(lineItems, for: "lineItems"); try o.put(total, for: "total"); try o.encode(to: encoder)
+            }
+        }
+
+        /// Phase 25: one optional add-on as the customer sees it. The owner's
+        /// internal `cost` is never part of the frozen snapshot.
+        public struct OptionAddOn: Codable, Equatable {
+            public var id, label: String
+            public var description: String?
+            public var amount: Decimal
+            public var preservation: Preservation
+            public init(
+                id: String,
+                label: String,
+                description: String? = nil,
+                amount: Decimal,
+                preservation: Preservation = .init()
+            ) {
+                self.id = id
+                self.label = label
+                self.description = description
+                self.amount = amount
+                self.preservation = preservation
+            }
+            public init(from decoder: Decoder) throws {
+                var o = try ObjectReader(decoder)
+                id = try o.required("id"); label = try o.required("label"); description = try o.optional("description")
+                amount = try o.required("amount"); preservation = o.finish()
+            }
+            public func encode(to encoder: Encoder) throws {
+                var o = ObjectWriter(preservation)
+                try o.put(id, for: "id"); try o.put(label, for: "label"); try o.putOptional(description, for: "description")
+                try o.put(amount, for: "amount"); try o.encode(to: encoder)
+            }
+        }
+
+        /// Phase 25: `snapshot.options`. Absent means a single-total estimate.
+        public struct Options: Codable, Equatable {
+            public var tiers: [OptionTier]
+            public var addOns: [OptionAddOn]
+            public var recommendedTierId: String
+            public var preservation: Preservation
+            public init(
+                tiers: [OptionTier],
+                addOns: [OptionAddOn],
+                recommendedTierId: String,
+                preservation: Preservation = .init()
+            ) {
+                self.tiers = tiers
+                self.addOns = addOns
+                self.recommendedTierId = recommendedTierId
+                self.preservation = preservation
+            }
+            public init(from decoder: Decoder) throws {
+                var o = try ObjectReader(decoder)
+                tiers = try o.required("tiers"); addOns = try o.required("addOns")
+                recommendedTierId = try o.required("recommendedTierId"); preservation = o.finish()
+            }
+            public func encode(to encoder: Encoder) throws {
+                var o = ObjectWriter(preservation)
+                try o.put(tiers, for: "tiers"); try o.put(addOns, for: "addOns")
+                try o.put(recommendedTierId, for: "recommendedTierId"); try o.encode(to: encoder)
+            }
+        }
+
         public var businessName, customerName, jobTitle: String
         public var lineItems: [LineItem]
         public var total: Decimal
         public var currency: String
+        public var options: Options?
         public var preservation: Preservation
         public init(from decoder: Decoder) throws {
             var o = try ObjectReader(decoder)
             businessName = try o.required("businessName"); customerName = try o.required("customerName")
             jobTitle = try o.required("jobTitle"); lineItems = try o.required("lineItems")
-            total = try o.required("total"); currency = try o.required("currency"); preservation = o.finish()
+            total = try o.required("total"); currency = try o.required("currency")
+            options = try o.optional("options"); preservation = o.finish()
         }
         public func encode(to encoder: Encoder) throws {
             var o = ObjectWriter(preservation)
             try o.put(businessName, for: "businessName"); try o.put(customerName, for: "customerName")
             try o.put(jobTitle, for: "jobTitle"); try o.put(lineItems, for: "lineItems")
-            try o.put(total, for: "total"); try o.put(currency, for: "currency"); try o.encode(to: encoder)
+            try o.put(total, for: "total"); try o.put(currency, for: "currency")
+            try o.putOptional(options, for: "options"); try o.encode(to: encoder)
+        }
+    }
+
+    /// Phase 25: `approval.selection`, written only by the server's `respond`
+    /// route when a customer approves an options snapshot.
+    struct EstimateSelection: Codable, Equatable {
+        public struct AddOn: Codable, Equatable {
+            public var id, label: String
+            public var amount: Decimal
+            public var preservation: Preservation
+            public init(id: String, label: String, amount: Decimal, preservation: Preservation = .init()) {
+                self.id = id
+                self.label = label
+                self.amount = amount
+                self.preservation = preservation
+            }
+            public init(from decoder: Decoder) throws {
+                var o = try ObjectReader(decoder)
+                id = try o.required("id"); label = try o.required("label")
+                amount = try o.required("amount"); preservation = o.finish()
+            }
+            public func encode(to encoder: Encoder) throws {
+                var o = ObjectWriter(preservation)
+                try o.put(id, for: "id"); try o.put(label, for: "label")
+                try o.put(amount, for: "amount"); try o.encode(to: encoder)
+            }
+        }
+
+        public var tierId, tierName: String
+        /// Ordered by `snapshot.options.addOns`, de-duplicated.
+        public var addOnIds: [String]
+        public var addOns: [AddOn]
+        /// The tier's lines followed by one line per accepted add-on.
+        public var lineItems: [EstimateApprovalSnapshot.LineItem]
+        public var total: Decimal
+        public var preservation: Preservation
+        public init(
+            tierId: String,
+            tierName: String,
+            addOnIds: [String],
+            addOns: [AddOn],
+            lineItems: [EstimateApprovalSnapshot.LineItem],
+            total: Decimal,
+            preservation: Preservation = .init()
+        ) {
+            self.tierId = tierId
+            self.tierName = tierName
+            self.addOnIds = addOnIds
+            self.addOns = addOns
+            self.lineItems = lineItems
+            self.total = total
+            self.preservation = preservation
+        }
+        public init(from decoder: Decoder) throws {
+            var o = try ObjectReader(decoder)
+            tierId = try o.required("tierId"); tierName = try o.required("tierName")
+            addOnIds = try o.required("addOnIds"); addOns = try o.required("addOns")
+            lineItems = try o.required("lineItems"); total = try o.required("total"); preservation = o.finish()
+        }
+        public func encode(to encoder: Encoder) throws {
+            var o = ObjectWriter(preservation)
+            try o.put(tierId, for: "tierId"); try o.put(tierName, for: "tierName")
+            try o.put(addOnIds, for: "addOnIds"); try o.put(addOns, for: "addOns")
+            try o.put(lineItems, for: "lineItems"); try o.put(total, for: "total"); try o.encode(to: encoder)
         }
     }
 
@@ -500,20 +669,194 @@ public extension Canonical {
         public var snapshot: EstimateApprovalSnapshot
         public var decision, signerName, declineReason, ip, userAgent: String?
         public var consentAt: DateString?
+        public var selection: EstimateSelection?
         public var preservation: Preservation
         public init(from decoder: Decoder) throws {
             var o = try ObjectReader(decoder)
             token = try o.required("token"); sentAt = try o.required("sentAt"); snapshot = try o.required("snapshot")
             decision = try o.optional("decision"); consentAt = try o.optional("consentAt")
             signerName = try o.optional("signerName"); declineReason = try o.optional("declineReason")
-            ip = try o.optional("ip"); userAgent = try o.optional("userAgent"); preservation = o.finish()
+            ip = try o.optional("ip"); userAgent = try o.optional("userAgent")
+            selection = try o.optional("selection"); preservation = o.finish()
         }
         public func encode(to encoder: Encoder) throws {
             var o = ObjectWriter(preservation)
             try o.put(token, for: "token"); try o.put(sentAt, for: "sentAt"); try o.put(snapshot, for: "snapshot")
             try o.putOptional(decision, for: "decision"); try o.putOptional(consentAt, for: "consentAt")
             try o.putOptional(signerName, for: "signerName"); try o.putOptional(declineReason, for: "declineReason")
-            try o.putOptional(ip, for: "ip"); try o.putOptional(userAgent, for: "userAgent"); try o.encode(to: encoder)
+            try o.putOptional(ip, for: "ip"); try o.putOptional(userAgent, for: "userAgent")
+            try o.putOptional(selection, for: "selection"); try o.encode(to: encoder)
+        }
+    }
+
+    /// Phase 25: one good/better/best tier. The calculator-owned fields use
+    /// exactly `Canonical.Job`'s names and types; `estimateTotal` is
+    /// `PricingEngine.calculate(...).total` for this tier.
+    struct QuoteTier: Codable {
+        public var id, name: String
+        public var description: String?
+        public var laborHours: Decimal
+        public var laborBreakdown: LaborTimeBreakdown?
+        public var laborRate: Decimal
+        public var materials: [Material]
+        public var materialMarkup: Decimal
+        public var jobCosts: [JobCost]?
+        public var overhead, margin, estimateTotal: Decimal
+        public var preservation: Preservation
+        public init(
+            id: String,
+            name: String,
+            description: String? = nil,
+            laborHours: Decimal,
+            laborBreakdown: LaborTimeBreakdown? = nil,
+            laborRate: Decimal,
+            materials: [Material],
+            materialMarkup: Decimal,
+            jobCosts: [JobCost]? = nil,
+            overhead: Decimal,
+            margin: Decimal,
+            estimateTotal: Decimal,
+            preservation: Preservation = .init()
+        ) {
+            self.id = id
+            self.name = name
+            self.description = description
+            self.laborHours = laborHours
+            self.laborBreakdown = laborBreakdown
+            self.laborRate = laborRate
+            self.materials = materials
+            self.materialMarkup = materialMarkup
+            self.jobCosts = jobCosts
+            self.overhead = overhead
+            self.margin = margin
+            self.estimateTotal = estimateTotal
+            self.preservation = preservation
+        }
+        public init(from decoder: Decoder) throws {
+            var o = try ObjectReader(decoder)
+            id = try o.required("id"); name = try o.required("name"); description = try o.optional("description")
+            laborHours = try o.required("laborHours"); laborBreakdown = try o.optional("laborBreakdown")
+            laborRate = try o.required("laborRate"); materials = try o.required("materials")
+            materialMarkup = try o.required("materialMarkup"); jobCosts = try o.optional("jobCosts")
+            overhead = try o.required("overhead"); margin = try o.required("margin")
+            estimateTotal = try o.required("estimateTotal"); preservation = o.finish()
+        }
+        public func encode(to encoder: Encoder) throws {
+            var o = ObjectWriter(preservation)
+            try o.put(id, for: "id"); try o.put(name, for: "name"); try o.putOptional(description, for: "description")
+            try o.put(laborHours, for: "laborHours"); try o.putOptional(laborBreakdown, for: "laborBreakdown")
+            try o.put(laborRate, for: "laborRate"); try o.put(materials, for: "materials")
+            try o.put(materialMarkup, for: "materialMarkup"); try o.putOptional(jobCosts, for: "jobCosts")
+            try o.put(overhead, for: "overhead"); try o.put(margin, for: "margin")
+            try o.put(estimateTotal, for: "estimateTotal"); try o.encode(to: encoder)
+        }
+    }
+
+    /// Phase 25: a flat, all-in optional add-on. `cost` is the owner's
+    /// internal cost for profitability and never leaves the device.
+    struct QuoteAddOn: Codable {
+        public var id, label: String
+        public var description: String?
+        public var price: Decimal
+        public var cost: Decimal?
+        public var preservation: Preservation
+        public init(
+            id: String,
+            label: String,
+            description: String? = nil,
+            price: Decimal,
+            cost: Decimal? = nil,
+            preservation: Preservation = .init()
+        ) {
+            self.id = id
+            self.label = label
+            self.description = description
+            self.price = price
+            self.cost = cost
+            self.preservation = preservation
+        }
+        public init(from decoder: Decoder) throws {
+            var o = try ObjectReader(decoder)
+            id = try o.required("id"); label = try o.required("label"); description = try o.optional("description")
+            price = try o.required("price"); cost = try o.optional("cost"); preservation = o.finish()
+        }
+        public func encode(to encoder: Encoder) throws {
+            var o = ObjectWriter(preservation)
+            try o.put(id, for: "id"); try o.put(label, for: "label"); try o.putOptional(description, for: "description")
+            try o.put(price, for: "price"); try o.putOptional(cost, for: "cost"); try o.encode(to: encoder)
+        }
+    }
+
+    /// Phase 25: the applied customer (or owner-recorded) choice. Written once.
+    struct QuoteAcceptance: Codable {
+        public static let sourceLink = "link"
+        public static let sourceOwner = "owner"
+
+        public var tierId: String
+        public var addOnIds: [String]
+        public var total: Decimal
+        public var acceptedAt: DateString
+        /// `"link"` (customer approval link) or `"owner"` (recorded by the owner).
+        public var source: String
+        public var preservation: Preservation
+        public init(
+            tierId: String,
+            addOnIds: [String],
+            total: Decimal,
+            acceptedAt: DateString,
+            source: String,
+            preservation: Preservation = .init()
+        ) {
+            self.tierId = tierId
+            self.addOnIds = addOnIds
+            self.total = total
+            self.acceptedAt = acceptedAt
+            self.source = source
+            self.preservation = preservation
+        }
+        public init(from decoder: Decoder) throws {
+            var o = try ObjectReader(decoder)
+            tierId = try o.required("tierId"); addOnIds = try o.required("addOnIds"); total = try o.required("total")
+            acceptedAt = try o.required("acceptedAt"); source = try o.required("source"); preservation = o.finish()
+        }
+        public func encode(to encoder: Encoder) throws {
+            var o = ObjectWriter(preservation)
+            try o.put(tierId, for: "tierId"); try o.put(addOnIds, for: "addOnIds"); try o.put(total, for: "total")
+            try o.put(acceptedAt, for: "acceptedAt"); try o.put(source, for: "source"); try o.encode(to: encoder)
+        }
+    }
+
+    /// Phase 25: `Job.quoteOptions`. Absent means a single-total estimate.
+    struct QuoteOptions: Codable {
+        public var tiers: [QuoteTier]
+        public var addOns: [QuoteAddOn]
+        public var recommendedTierId: String
+        public var acceptance: QuoteAcceptance?
+        public var preservation: Preservation
+        public init(
+            tiers: [QuoteTier],
+            addOns: [QuoteAddOn],
+            recommendedTierId: String,
+            acceptance: QuoteAcceptance? = nil,
+            preservation: Preservation = .init()
+        ) {
+            self.tiers = tiers
+            self.addOns = addOns
+            self.recommendedTierId = recommendedTierId
+            self.acceptance = acceptance
+            self.preservation = preservation
+        }
+        public init(from decoder: Decoder) throws {
+            var o = try ObjectReader(decoder)
+            tiers = try o.required("tiers"); addOns = try o.required("addOns")
+            recommendedTierId = try o.required("recommendedTierId"); acceptance = try o.optional("acceptance")
+            preservation = o.finish()
+        }
+        public func encode(to encoder: Encoder) throws {
+            var o = ObjectWriter(preservation)
+            try o.put(tiers, for: "tiers"); try o.put(addOns, for: "addOns")
+            try o.put(recommendedTierId, for: "recommendedTierId"); try o.putOptional(acceptance, for: "acceptance")
+            try o.encode(to: encoder)
         }
     }
 
@@ -617,6 +960,7 @@ public extension Canonical {
         public var changeOrders: [ChangeOrder]?
         public var archivedAt: DateString?
         public var importBatchId: String?
+        public var quoteOptions: QuoteOptions?
         public var preservation: Preservation
 
         public init(from decoder: Decoder) throws {
@@ -637,7 +981,8 @@ public extension Canonical {
             estimateSentAt = try o.optional("estimateSentAt"); approval = try o.optional("approval")
             approvalHistory = try o.optional("approvalHistory")
             changeOrders = try o.optional("changeOrders"); archivedAt = try o.optional("archivedAt")
-            importBatchId = try o.optional("importBatchId"); preservation = o.finish()
+            importBatchId = try o.optional("importBatchId"); quoteOptions = try o.optional("quoteOptions")
+            preservation = o.finish()
         }
 
         public func encode(to encoder: Encoder) throws {
@@ -658,7 +1003,8 @@ public extension Canonical {
             try o.putOptional(estimateSentAt, for: "estimateSentAt"); try o.putOptional(approval, for: "approval")
             try o.putOptional(approvalHistory, for: "approvalHistory")
             try o.putOptional(changeOrders, for: "changeOrders"); try o.putOptional(archivedAt, for: "archivedAt")
-            try o.putOptional(importBatchId, for: "importBatchId"); try o.encode(to: encoder)
+            try o.putOptional(importBatchId, for: "importBatchId"); try o.putOptional(quoteOptions, for: "quoteOptions")
+            try o.encode(to: encoder)
         }
     }
 
@@ -1461,5 +1807,77 @@ public extension Canonical {
             try o.put(estimateTotal, for: "estimateTotal"); try o.put(hasMaterials, for: "hasMaterials")
             try o.encode(to: encoder)
         }
+    }
+}
+
+// MARK: - Phase 25 quote-option accessors
+//
+// Dependency-free helpers only (field copies and lookups). Money arithmetic
+// lives in `UIModelAdapters.swift` and `NativeQuoteOptions.swift`, so the many
+// runners that compile this file alone never need anything else.
+
+public extension Canonical.QuoteOptions {
+    func tier(id: String) -> Canonical.QuoteTier? {
+        tiers.first { $0.id == id }
+    }
+
+    func addOn(id: String) -> Canonical.QuoteAddOn? {
+        addOns.first { $0.id == id }
+    }
+
+    /// The tier the job's top-level pricing mirrors: the accepted tier after
+    /// acceptance (invariant M2), the recommended tier before it (M1).
+    var mirroredTierId: String {
+        acceptance?.tierId ?? recommendedTierId
+    }
+
+    /// The accepted add-ons that still exist on the job, in `addOns` order.
+    /// Empty before acceptance.
+    var acceptedAddOns: [Canonical.QuoteAddOn] {
+        guard let acceptance else { return [] }
+        let accepted = Set(acceptance.addOnIds)
+        return addOns.filter { accepted.contains($0.id) }
+    }
+
+    /// Σ the owner's internal `cost` over the accepted add-ons that carry one.
+    var acceptedAddOnCost: Decimal {
+        acceptedAddOns.reduce(Decimal.zero) { $0 + ($1.cost ?? 0) }
+    }
+}
+
+public extension Canonical.QuoteTier {
+    /// A tier carrying `job`'s calculator-owned pricing and stored total.
+    /// Nested materials, costs and labor breakdown keep their own
+    /// preservation metadata; the tier itself starts clean.
+    init(id: String, name: String, description: String? = nil, pricingOf job: Canonical.Job) {
+        self.init(
+            id: id,
+            name: name,
+            description: description,
+            laborHours: job.laborHours,
+            laborBreakdown: job.laborBreakdown,
+            laborRate: job.laborRate,
+            materials: job.materials,
+            materialMarkup: job.materialMarkup,
+            jobCosts: job.jobCosts,
+            overhead: job.overhead,
+            margin: job.margin,
+            estimateTotal: job.estimateTotal
+        )
+    }
+}
+
+public extension Canonical.Job {
+    /// Copies the tier's calculator-owned fields onto the job. The job's
+    /// `estimateTotal` is left to the caller (M1 vs M2 differ).
+    mutating func applyCalculatorPricing(of tier: Canonical.QuoteTier) {
+        laborHours = tier.laborHours
+        laborBreakdown = tier.laborBreakdown
+        laborRate = tier.laborRate
+        materials = tier.materials
+        materialMarkup = tier.materialMarkup
+        jobCosts = tier.jobCosts
+        overhead = tier.overhead
+        margin = tier.margin
     }
 }

@@ -175,6 +175,8 @@ extension Canonical.Job {
         self.changeOrders = nil
         self.archivedAt = nil
         self.importBatchId = nil
+        // Phase 25 spec §7: an occurrence copies the rule's total, never quote options.
+        self.quoteOptions = nil
         self.preservation = Canonical.Preservation()
     }
 }

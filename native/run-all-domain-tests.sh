@@ -49,6 +49,8 @@ sh "$ROOT_DIR/native/run-app-intent-queue-tests.sh"
   "$ROOT_DIR/native/run-appointment-messaging-tests.sh"
   "$ROOT_DIR/native/run-appointment-notification-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-approval-link-tests.sh"
+# Phase 25: good/better/best quote options (shared selection vectors with the Worker).
+sh "$ROOT_DIR/native/run-quote-options-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-pdf-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-delivery-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-message-draft-tests.sh"

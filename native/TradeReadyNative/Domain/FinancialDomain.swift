@@ -25,6 +25,23 @@ enum FinancialDecimal {
         return Decimal(string: String(rounded), locale: Locale(identifier: "en_US_POSIX")) ?? 0
     }
 
+    /// JavaScript `Math.round(n * 100)`: one amount as integer cents, rounded
+    /// over IEEE-754 exactly as the Worker does it.
+    static func javascriptIntegerCents(_ value: Decimal) -> Int64 {
+        let text = NSDecimalNumber(decimal: value).stringValue
+        guard let source = Double(text), source.isFinite else { return 0 }
+        return Int64(floor(source * 100 + 0.5))
+    }
+
+    /// The quote-options parity rule (spec 2026-10-02 §3): every amount is
+    /// rounded to integer cents first, the cents are summed exactly, and the
+    /// sum is divided by 100. Both the device and the Worker use this, so a
+    /// selection total never drifts (0.1 + 0.2 stays 0.3).
+    static func integerCentsSum(_ values: [Decimal]) -> Decimal {
+        let cents = values.reduce(Int64(0)) { $0 + javascriptIntegerCents($1) }
+        return Decimal(cents) / 100
+    }
+
     static func maximum(_ lhs: Decimal, _ rhs: Decimal) -> Decimal {
         lhs > rhs ? lhs : rhs
     }

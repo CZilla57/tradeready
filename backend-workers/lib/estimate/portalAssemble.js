@@ -10,6 +10,7 @@ const { balanceDue, amountPaid, PAID_EPSILON } = require('../paymentMath.js');
 const { isAllowedPaymentLink } = require('../reminderEmail.js');
 const { changeOrderStatus } = require('./changeOrderMath.js');
 const { photoSignature, PHOTO_URL_TTL_SEC } = require('../photoSign.js');
+const { hasSnapshotOptions, lowestTierTotal } = require('./quoteOptions.js');
 
 const ESTIMATE_PAGE = 'https://gettradereadyapp.com/estimate.html';
 const CHANGE_PAGE = 'https://gettradereadyapp.com/change.html';
@@ -77,18 +78,37 @@ function buildAppointments(jobRows, requestRows, { token, apiOrigin, nowMs }) {
     });
 }
 
+// Phase 25: an accepted good/better/best choice is the price the customer
+// agreed to; an undecided option estimate shows its lowest tier ("From $X");
+// a legacy estimate keeps its frozen snapshot total.
+function estimateTotal(approval, hasOptions) {
+  const accepted = approval.decision === 'approved' && approval.selection
+    ? Number(approval.selection.total) : NaN;
+  if (Number.isFinite(accepted)) return accepted;
+  if (hasOptions) {
+    const lowest = lowestTierTotal(approval.snapshot);
+    if (lowest !== null) return lowest;
+  }
+  return Number(approval.snapshot?.total || 0);
+}
+
 // Only jobs with an approval link are customer-visible estimates — the
 // frozen snapshot plus the shipped approval page. Internal jobs stay
 // invisible. (v1 behavior, moved verbatim from the route.)
 function buildEstimates(jobRows) {
   return jobRows
     .filter((r) => r.data && r.data.approval && r.data.approval.token)
-    .map((r) => ({
-      title: cap(r.data.approval.snapshot?.jobTitle || r.data.title, 200),
-      total: Number(r.data.approval.snapshot?.total || 0),
-      decision: r.data.approval.decision || null,
-      approvalUrl: `${ESTIMATE_PAGE}?j=${encodeURIComponent(r.id)}&t=${encodeURIComponent(r.data.approval.token)}`,
-    }));
+    .map((r) => {
+      const approval = r.data.approval;
+      const hasOptions = hasSnapshotOptions(approval.snapshot);
+      return {
+        title: cap(approval.snapshot?.jobTitle || r.data.title, 200),
+        total: estimateTotal(approval, hasOptions),
+        decision: approval.decision || null,
+        hasOptions,
+        approvalUrl: `${ESTIMATE_PAGE}?j=${encodeURIComponent(r.id)}&t=${encodeURIComponent(approval.token)}`,
+      };
+    });
 }
 
 // Mirrors the estimates rule: no approval token → the CO is internal and

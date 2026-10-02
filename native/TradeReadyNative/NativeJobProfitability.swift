@@ -134,6 +134,10 @@ enum NativeJobProfitability {
         let directBasis = (job.jobCosts ?? []).reduce(Decimal.zero) {
             $0 + $1.quantity * $1.unitCost
         }
+        // Phase 25: an accepted good/better/best add-on's price is already in
+        // `estimateTotal` (invariant M2); its optional internal cost belongs
+        // with the planned direct costs. Unset cost adds nothing.
+        let addOnCost = job.quoteOptions?.acceptedAddOnCost ?? 0
         return ProfitabilityInput(
             estimatedRevenue: job.estimateTotal,
             approvedChangeOrderRevenue: NativeChangeOrders.approvedTotal(
@@ -144,7 +148,7 @@ enum NativeJobProfitability {
             actualLaborHours: actualLaborHours(sessions: job.timeSessions),
             ownerLaborCostRate: laborCostRate,
             estimatedMaterialCost: materialBase,
-            estimatedDirectCost: directBasis,
+            estimatedDirectCost: directBasis + addOnCost,
             linkedExpenses: linkedExp.isEmpty ? nil : linkedExp.map {
                 ProfitabilityExpense(amount: $0.amount, category: $0.category)
             },

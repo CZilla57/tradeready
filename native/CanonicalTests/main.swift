@@ -79,6 +79,49 @@ run("rich record families") {
     try roundTrip(Canonical.RecurringInvoice.self, field: "recurringInvoice", fixture: rich)
     try roundTrip(Canonical.Settings.self, field: "settings", fixture: rich)
     try roundTrip(Canonical.CustomerNotes.self, field: "customerNotes", fixture: rich)
+    // Phase 25: quote options, snapshot.options and approval.selection.
+    try roundTrip(Canonical.Job.self, field: "quoteOptionsJob", fixture: rich)
+}
+
+run("quote options decode as typed fields") {
+    let job: Canonical.Job = try field("quoteOptionsJob", from: rich)
+    guard let options = job.quoteOptions, let approval = job.approval else {
+        throw NSError(domain: "CanonicalTests", code: 11, userInfo: [NSLocalizedDescriptionKey: "quote options job lost its typed fields"])
+    }
+    expect(options.tiers.map(\.id) == ["qt_repair", "qt_standard"] && options.recommendedTierId == "qt_repair",
+           "tiers and recommended tier decode")
+    expect(options.tiers[1].estimateTotal == decimal("2336.05") && options.tiers[1].jobCosts?.first?.markupPolicy == "passthrough",
+           "tier calculator fields decode with Job's types")
+    expect(options.tiers[1].description == nil && options.tiers[1].preservation.unknownFields["futureTierField"] != nil,
+           "tier explicit null and unknown field are preserved")
+    expect(options.addOns[0].cost == decimal("60") && options.addOns[1].cost == nil && options.addOns[1].description == "Installed and paired.",
+           "add-on cost and description decode")
+    expect(options.acceptance?.tierId == "qt_standard" && options.acceptance?.addOnIds == ["qa_haul"]
+           && options.acceptance?.total == decimal("2486.05") && options.acceptance?.source == "link",
+           "acceptance decodes")
+    expect(options.preservation.unknownFields["futureOptionsField"] == .string("kept"), "options unknown field retained")
+    expect(approval.snapshot.options?.tiers.count == 2 && approval.snapshot.options?.addOns.last?.amount == decimal("49.99")
+           && approval.snapshot.options?.tiers[1].description == nil,
+           "snapshot options decode")
+    expect(approval.selection?.tierName == "Standard unit" && approval.selection?.lineItems.count == 5
+           && approval.selection?.total == decimal("2486.05"),
+           "approval selection decodes")
+
+    var edited = job
+    edited.quoteOptions?.tiers[0].name = "Quick repair"
+    let encoded = try object(edited)
+    guard case let .object(encodedOptions)? = encoded["quoteOptions"],
+          case let .array(tiers)? = encodedOptions["tiers"],
+          case let .object(standard)? = tiers.last,
+          case let .array(addOns)? = encodedOptions["addOns"],
+          case let .object(wifi)? = addOns.last
+    else { throw NSError(domain: "CanonicalTests", code: 12) }
+    expect(standard["description"] == .null && standard["futureTierField"] != nil && wifi["cost"] == .null,
+           "mutating quote options keeps nested explicit nulls and unknown data")
+
+    let legacyJob: Canonical.Job = try field("job", from: legacy)
+    let legacyEncoded = try object(legacyJob)
+    expect(legacyJob.quoteOptions == nil && legacyEncoded["quoteOptions"] == nil, "a job without options stays without the key")
 }
 
 run("legacy compatibility") {

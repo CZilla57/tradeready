@@ -62,6 +62,24 @@ struct NativeJobPricingDraft: Identifiable {
         minimumJobFee = settings?.minimumJobFee ?? 75
     }
 
+    /// Phase 25: a calculator draft for one good/better/best tier of `job`.
+    /// Save it with `CanonicalUIAdapters.canonical(from:tierID:baseline:)`;
+    /// `jobID` stays the job's so the save can verify its target.
+    init(job: Canonical.Job, tier: Canonical.QuoteTier, settings: Canonical.Settings?) {
+        jobID = job.id
+        laborHours = tier.laborHours
+        laborBreakdown = tier.laborBreakdown
+        laborRate = tier.laborRate == 0 ? (settings?.laborRate ?? 85) : tier.laborRate
+        materials = tier.materials
+        materialMarkup = tier.materialMarkup
+        jobCosts = tier.jobCosts ?? []
+        overheadPercent = tier.overhead
+        marginPercent = tier.margin
+        travelFeePerMile = settings?.travelFeePerMile ?? 0
+        emergencyMultiplier = settings?.emergencyMultiplier ?? Decimal(string: "1.5")!
+        minimumJobFee = settings?.minimumJobFee ?? 75
+    }
+
     var input: PricingInput {
         PricingInput(
             laborHours: laborHours,
@@ -204,6 +222,11 @@ enum CanonicalUIAdapters {
     /// Builds a new canonical job using the production duplicate whitelist.
     /// Nested materials retain their own preservation metadata, while every
     /// source lifecycle and job-level preservation field starts clean.
+    ///
+    /// Phase 25: `quoteOptions` is on the whitelist without its `acceptance`
+    /// (tiers and add-ons keep their nested metadata; the options container
+    /// starts clean). The copy is unaccepted, so invariant M1 re-mirrors the
+    /// recommended tier's full pricing into the duplicate's top level.
     static func duplicateJob(
         _ source: Canonical.Job,
         id: String,
@@ -229,7 +252,19 @@ enum CanonicalUIAdapters {
             "invoiceId": .null,
             "createdAt": .string(timestamp(createdAt))
         ]
-        let canonical: Canonical.Job = try decode(fields)
+        var canonical: Canonical.Job = try decode(fields)
+        if let sourceOptions = source.quoteOptions {
+            let options = Canonical.QuoteOptions(
+                tiers: sourceOptions.tiers,
+                addOns: sourceOptions.addOns,
+                recommendedTierId: sourceOptions.recommendedTierId
+            )
+            canonical.quoteOptions = options
+            if let recommended = options.tier(id: options.recommendedTierId) {
+                canonical.applyCalculatorPricing(of: recommended)
+                canonical.estimateTotal = recommended.estimateTotal
+            }
+        }
         return NativeJobDuplicateDraft(
             job: try job(from: canonical, calendar: calendar),
             canonicalTemplate: canonical
@@ -272,17 +307,156 @@ enum CanonicalUIAdapters {
     /// service. The stored job total remains authoritative: hidden direct costs,
     /// overhead, and margin stay inside the residual operating-cost line rather
     /// than leaking internal pricing policy into the customer document.
+    ///
+    /// Phase 25 (good/better/best, spec 2026-10-02 §2.2 and §6.4):
+    /// - Options and no acceptance: `options` carries every tier (each tier's
+    ///   lines use this same derivation on that tier's pricing) and the add-ons
+    ///   (never their internal `cost`). The top-level lines and total are the
+    ///   recommended tier's, so old readers see one coherent estimate.
+    /// - Accepted: a single estimate of the job's (accepted, M2) pricing plus
+    ///   one line per accepted add-on. Add-on prices are subtracted before the
+    ///   residual operating-cost line; there is no `options` key.
     static func estimateApprovalSnapshot(
         job: Canonical.Job,
         customerName: String?,
         businessName: String
     ) throws -> Canonical.EstimateApprovalSnapshot {
-        let laborCost = job.laborHours * job.laborRate
-        let materialBase = job.materials.reduce(Decimal.zero) {
+        var lineItems: [Canonical.JSONValue]
+        var total = job.estimateTotal
+        var optionsField: [String: Canonical.JSONValue]?
+
+        if let quoteOptions = job.quoteOptions, quoteOptions.acceptance == nil {
+            // Validates the §2.1 shape, including that the recommended tier exists.
+            optionsField = try snapshotOptionsFields(quoteOptions)
+            guard let recommended = quoteOptions.tier(id: quoteOptions.recommendedTierId) else {
+                throw CanonicalUIAdapterError.invalidCanonicalRecord("quote-options")
+            }
+            lineItems = estimateLineFields(EstimatePricing(recommended), total: recommended.estimateTotal)
+                .map(Canonical.JSONValue.object)
+            total = recommended.estimateTotal
+        } else if let quoteOptions = job.quoteOptions {
+            let addOns = quoteOptions.acceptedAddOns
+            let reserved = addOns.reduce(Decimal.zero) { $0 + $1.price }
+            lineItems = estimateLineFields(
+                EstimatePricing(job),
+                total: job.estimateTotal,
+                reservedBeforeResidual: reserved
+            ).map(Canonical.JSONValue.object)
+            lineItems += addOns.map {
+                .object(["label": .string($0.label), "amount": .number($0.price)])
+            }
+        } else {
+            lineItems = estimateLineFields(EstimatePricing(job), total: job.estimateTotal)
+                .map(Canonical.JSONValue.object)
+        }
+
+        var fields: [String: Canonical.JSONValue] = [
+            "businessName": .string(businessName.isEmpty ? "Your tradesperson" : businessName),
+            "customerName": .string((customerName?.isEmpty == false ? customerName : nil) ?? job.customerName),
+            "jobTitle": .string(job.title),
+            "lineItems": .array(lineItems),
+            "total": .number(total),
+            "currency": .string("USD")
+        ]
+        if let optionsField { fields["options"] = .object(optionsField) }
+        return try decode(fields)
+    }
+
+    /// Phase 25 spec §2.2: the frozen `snapshot.options` for a job's quote
+    /// options, or `nil` for a single-total estimate. It is built whether or
+    /// not the options are accepted (the snapshot builder omits it once they
+    /// are). Throws when the options break the §2.1 shape the Worker enforces:
+    /// 2–3 tiers with unique ids, ≤10 add-ons with unique ids, and a
+    /// recommended tier that exists.
+    static func estimateApprovalSnapshotOptions(
+        job: Canonical.Job
+    ) throws -> Canonical.EstimateApprovalSnapshot.Options? {
+        guard let quoteOptions = job.quoteOptions else { return nil }
+        return try decode(snapshotOptionsFields(quoteOptions))
+    }
+
+    private static func snapshotOptionsFields(
+        _ options: Canonical.QuoteOptions
+    ) throws -> [String: Canonical.JSONValue] {
+        let tierIDs = options.tiers.map(\.id)
+        let addOnIDs = options.addOns.map(\.id)
+        guard (2...3).contains(options.tiers.count),
+              Set(tierIDs).count == tierIDs.count,
+              tierIDs.contains(options.recommendedTierId),
+              options.addOns.count <= 10,
+              Set(addOnIDs).count == addOnIDs.count
+        else { throw CanonicalUIAdapterError.invalidCanonicalRecord("quote-options") }
+
+        let tiers: [Canonical.JSONValue] = options.tiers.map { tier in
+            var fields: [String: Canonical.JSONValue] = [
+                "id": .string(tier.id),
+                "name": .string(tier.name),
+                "lineItems": .array(
+                    estimateLineFields(EstimatePricing(tier), total: tier.estimateTotal)
+                        .map(Canonical.JSONValue.object)
+                ),
+                "total": .number(tier.estimateTotal)
+            ]
+            if let description = tier.description, !description.isEmpty {
+                fields["description"] = .string(description)
+            }
+            return .object(fields)
+        }
+        // Add-on `cost` is the owner's internal figure: never frozen.
+        let addOns: [Canonical.JSONValue] = options.addOns.map { addOn in
+            var fields: [String: Canonical.JSONValue] = [
+                "id": .string(addOn.id),
+                "label": .string(addOn.label),
+                "amount": .number(addOn.price)
+            ]
+            if let description = addOn.description, !description.isEmpty {
+                fields["description"] = .string(description)
+            }
+            return .object(fields)
+        }
+        return [
+            "tiers": .array(tiers),
+            "addOns": .array(addOns),
+            "recommendedTierId": .string(options.recommendedTierId)
+        ]
+    }
+
+    /// The calculator-owned inputs the customer line derivation reads, from
+    /// either a job or a quote tier (identical field names and types).
+    private struct EstimatePricing {
+        var laborHours: Decimal
+        var laborRate: Decimal
+        var materials: [Canonical.Material]
+        var materialMarkup: Decimal
+        var jobCosts: [Canonical.JobCost]?
+
+        init(_ job: Canonical.Job) {
+            laborHours = job.laborHours; laborRate = job.laborRate; materials = job.materials
+            materialMarkup = job.materialMarkup; jobCosts = job.jobCosts
+        }
+
+        init(_ tier: Canonical.QuoteTier) {
+            laborHours = tier.laborHours; laborRate = tier.laborRate; materials = tier.materials
+            materialMarkup = tier.materialMarkup; jobCosts = tier.jobCosts
+        }
+    }
+
+    /// Today's customer line derivation: labor, the material aggregate,
+    /// customer-visible direct costs, then a positive residual "Overhead &
+    /// operating costs" line. `reservedBeforeResidual` (accepted add-on
+    /// prices) is taken out of the residual so the add-ons can be listed as
+    /// their own lines without changing the total.
+    private static func estimateLineFields(
+        _ pricing: EstimatePricing,
+        total: Decimal,
+        reservedBeforeResidual: Decimal = 0
+    ) -> [[String: Canonical.JSONValue]] {
+        let laborCost = pricing.laborHours * pricing.laborRate
+        let materialBase = pricing.materials.reduce(Decimal.zero) {
             $0 + $1.quantity * $1.unitCost
         }
-        let materialCost = materialBase * (1 + job.materialMarkup / 100)
-        let visibleDirectCosts = (job.jobCosts ?? []).compactMap { cost -> (String, Decimal)? in
+        let materialCost = materialBase * (1 + pricing.materialMarkup / 100)
+        let visibleDirectCosts = (pricing.jobCosts ?? []).compactMap { cost -> (String, Decimal)? in
             guard cost.customerVisible else { return nil }
             let base = cost.quantity * cost.unitCost
             // React Native treats only the exact known in-margin wire value as
@@ -295,13 +469,13 @@ enum CanonicalUIAdapters {
         }
 
         var lineItems: [[String: Canonical.JSONValue]] = [[
-            "label": .string("Labor (\(estimateNumber(job.laborHours)) hrs @ $\(estimateNumber(job.laborRate))/hr)"),
+            "label": .string("Labor (\(estimateNumber(pricing.laborHours)) hrs @ $\(estimateNumber(pricing.laborRate))/hr)"),
             "amount": .number(laborCost)
         ]]
-        if !job.materials.isEmpty {
-            let suffix = job.materials.count == 1 ? "item" : "items"
+        if !pricing.materials.isEmpty {
+            let suffix = pricing.materials.count == 1 ? "item" : "items"
             lineItems.append([
-                "label": .string("Materials (\(job.materials.count) \(suffix))"),
+                "label": .string("Materials (\(pricing.materials.count) \(suffix))"),
                 "amount": .number(materialCost)
             ])
         }
@@ -312,22 +486,14 @@ enum CanonicalUIAdapters {
             ])
         }
         let visibleDirectTotal = visibleDirectCosts.reduce(Decimal.zero) { $0 + $1.1 }
-        let operatingCost = job.estimateTotal - laborCost - materialCost - visibleDirectTotal
+        let operatingCost = total - laborCost - materialCost - visibleDirectTotal - reservedBeforeResidual
         if operatingCost > 0 {
             lineItems.append([
                 "label": .string("Overhead & operating costs"),
                 "amount": .number(operatingCost)
             ])
         }
-
-        return try decode([
-            "businessName": .string(businessName.isEmpty ? "Your tradesperson" : businessName),
-            "customerName": .string((customerName?.isEmpty == false ? customerName : nil) ?? job.customerName),
-            "jobTitle": .string(job.title),
-            "lineItems": .array(lineItems.map(Canonical.JSONValue.object)),
-            "total": .number(job.estimateTotal),
-            "currency": .string("USD")
-        ])
+        return lineItems
     }
 
     /// Mirrors the backend's `planApprovalWrite` semantics. An approved
@@ -373,6 +539,9 @@ enum CanonicalUIAdapters {
               lhs.total == rhs.total,
               lhs.currency == rhs.currency,
               lhs.preservation == rhs.preservation,
+              // Phase 25: tiers, their lines, add-ons and every nested
+              // preservation bag compare exactly (synthesized Equatable).
+              lhs.options == rhs.options,
               lhs.lineItems.count == rhs.lineItems.count
         else { return false }
         return zip(lhs.lineItems, rhs.lineItems).allSatisfy { left, right in
@@ -398,6 +567,7 @@ enum CanonicalUIAdapters {
             && lhs.declineReason == rhs.declineReason
             && lhs.ip == rhs.ip
             && lhs.userAgent == rhs.userAgent
+            && lhs.selection == rhs.selection
             && lhs.preservation == rhs.preservation
     }
 
@@ -410,6 +580,11 @@ enum CanonicalUIAdapters {
     /// Applies only calculator-owned fields to the latest canonical job.
     /// All lifecycle, approval, recurrence, photo, time, archive, import, and
     /// unknown fields remain attached to the current record.
+    ///
+    /// Phase 25 (invariants M1/M2): on a job with quote options the save also
+    /// writes the tier the job mirrors (the recommended tier before
+    /// acceptance, the accepted tier after it). After acceptance the job's
+    /// `estimateTotal` is the engine total plus the accepted add-on prices.
     static func canonical(
         from pricing: NativeJobPricingDraft,
         baseline: Canonical.Job
@@ -417,6 +592,7 @@ enum CanonicalUIAdapters {
         guard pricing.jobID == baseline.id else {
             throw CanonicalUIAdapterError.invalidCanonicalRecord("job-pricing-id")
         }
+        let total = PricingEngine.calculate(pricing.input).total
         var result = baseline
         result.laborHours = pricing.laborHours
         result.laborBreakdown = pricing.laborBreakdown
@@ -426,8 +602,69 @@ enum CanonicalUIAdapters {
         result.jobCosts = pricing.jobCosts.isEmpty ? nil : pricing.jobCosts
         result.overhead = pricing.overheadPercent
         result.margin = pricing.marginPercent
-        result.estimateTotal = PricingEngine.calculate(pricing.input).total
+        result.estimateTotal = total
+        if var options = baseline.quoteOptions {
+            if let index = options.tiers.firstIndex(where: { $0.id == options.mirroredTierId }) {
+                apply(pricing, total: total, to: &options.tiers[index])
+            }
+            result.quoteOptions = options
+            result.estimateTotal = quoteMirroredJobTotal(tierTotal: total, options: options)
+        }
         return result
+    }
+
+    /// Phase 25: saves a calculator draft into one quote tier. The tier gets
+    /// the draft's calculator fields and `estimateTotal = engine total`. The
+    /// job's top-level pricing changes only when this tier is the one the job
+    /// mirrors (recommended before acceptance, accepted after it), and then
+    /// exactly as `canonical(from:baseline:)` would write it.
+    static func canonical(
+        from pricing: NativeJobPricingDraft,
+        tierID: String,
+        baseline: Canonical.Job
+    ) throws -> Canonical.Job {
+        guard pricing.jobID == baseline.id else {
+            throw CanonicalUIAdapterError.invalidCanonicalRecord("job-pricing-id")
+        }
+        guard var options = baseline.quoteOptions,
+              let index = options.tiers.firstIndex(where: { $0.id == tierID })
+        else { throw CanonicalUIAdapterError.invalidCanonicalRecord("quote-tier-id") }
+        let total = PricingEngine.calculate(pricing.input).total
+        apply(pricing, total: total, to: &options.tiers[index])
+        var result = baseline
+        result.quoteOptions = options
+        if tierID == options.mirroredTierId {
+            result.applyCalculatorPricing(of: options.tiers[index])
+            result.estimateTotal = quoteMirroredJobTotal(tierTotal: total, options: options)
+        }
+        return result
+    }
+
+    /// Phase 25: the job `estimateTotal` for a mirrored tier total. Before
+    /// acceptance it is the tier total (M1); after it, the tier total plus
+    /// the accepted add-on prices in integer cents (M2, spec §3).
+    static func quoteMirroredJobTotal(
+        tierTotal: Decimal,
+        options: Canonical.QuoteOptions
+    ) -> Decimal {
+        guard options.acceptance != nil else { return tierTotal }
+        return FinancialDecimal.integerCentsSum([tierTotal] + options.acceptedAddOns.map(\.price))
+    }
+
+    private static func apply(
+        _ pricing: NativeJobPricingDraft,
+        total: Decimal,
+        to tier: inout Canonical.QuoteTier
+    ) {
+        tier.laborHours = pricing.laborHours
+        tier.laborBreakdown = pricing.laborBreakdown
+        tier.laborRate = pricing.laborRate
+        tier.materials = pricing.materials
+        tier.materialMarkup = pricing.materialMarkup
+        tier.jobCosts = pricing.jobCosts.isEmpty ? nil : pricing.jobCosts
+        tier.overhead = pricing.overheadPercent
+        tier.margin = pricing.marginPercent
+        tier.estimateTotal = total
     }
 
     private static func estimateNumber(_ value: Decimal) -> String {

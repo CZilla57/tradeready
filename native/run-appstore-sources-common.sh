@@ -32,6 +32,7 @@ $ROOT_DIR/native/TradeReadyNative/Domain/NativeInvoiceNotifications.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeAppRatingPrompt.swift
 $ROOT_DIR/native/TradeReadyNative/NativeStripeConnect.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/UIModelAdapters.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeQuoteOptions.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeRecurringJobs.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeRecurringInvoices.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeSchedule.swift
