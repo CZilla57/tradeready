@@ -247,6 +247,9 @@ final class AppStore: ObservableObject {
     /// insight's "Ask coach" action. 10.13 consumes and clears this — it is
     /// never auto-sent.
     @Published var pendingCoachPrefill: String?
+    /// The Coach is a sheet over the tab bar (opened by the floating button
+    /// or an insight's "Ask coach"), not a tab.
+    @Published var isCoachPresented = false
     /// Task 10.13 fix round 1: bumped by `bumpCoachConversationGeneration()`
     /// on every "New chat" tap and at every account boundary
     /// (`resetTodayOwnerState()`). `CoachView.send()` captures a
@@ -5984,6 +5987,7 @@ final class AppStore: ObservableObject {
         insightMutes = nil
         setupChecklistState = nil
         pendingCoachPrefill = nil
+        isCoachPresented = false
         pendingSettingsDestination = nil
         // Task 10.13 fix round 1: belt-and-suspenders alongside the
         // `ownerBinding` check already in `NativeCoachConversationTicket` —
@@ -6506,92 +6510,174 @@ final class AppStore: ObservableObject {
         try commitSnapshot(next)
     }
 
+    /// Sample data for the onboarding "Explore with sample data" choice. Every
+    /// date is relative to `anchor` (the moment the owner chose it), so the
+    /// schedule, overdue invoices and expense history look current on the
+    /// day they sign up. Spread across the whole job lifecycle so Today,
+    /// Jobs, Invoices, Customers and Money each have something to show.
+    static func sampleRecords(
+        namespace: String,
+        anchor: Date,
+        trade: NativeTypedAccountState.Trade,
+        laborRate: Double
+    ) -> (customers: [Customer], jobs: [Job], invoices: [Invoice], expenses: [Expense]) {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: anchor)
+        func day(_ offset: Int, hour: Int = 9, minute: Int = 0) -> Date {
+            let base = calendar.date(byAdding: .day, value: offset, to: today) ?? today
+            return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: base) ?? base
+        }
+        func id(_ name: String) -> String { "native-sample-v1-\(namespace)-\(name)" }
+
+        let bakery = Customer(
+            id: id("customer"), name: "Riverside Bakery", email: "owner@riversidebakery.com",
+            phone: "(555) 301-2200", address: "142 Mill St, Austin TX 78701",
+            notes: "Sample customer — replace with your own when ready. Side entrance is easiest.",
+            createdAt: day(-45)
+        )
+        let dental = Customer(
+            id: id("customer-dental"), name: "Patel Family Dental", email: "admin@pateldental.com",
+            phone: "(555) 440-1133", address: "310 Congress Ave, Austin TX 78701",
+            notes: "Call ahead — visitor badge required.", createdAt: day(-40)
+        )
+        let hernandez = Customer(
+            id: id("customer-hernandez"), name: "Maria Hernandez", email: "maria.hernandez@example.com",
+            phone: "(555) 874-9900", address: "88 Oak Lane, Austin TX 78745",
+            notes: "Dog in backyard — keep the gate closed.", createdAt: day(-28)
+        )
+        let oakPark = Customer(
+            id: id("customer-oakpark"), name: "Oak Park Apartments", email: "manager@oakparkapts.com",
+            phone: "(555) 612-4408", address: "2200 Oak Park Blvd, Austin TX 78704",
+            notes: "Property manager: Dan. Send invoices to the office email.", createdAt: day(-60)
+        )
+        let chen = Customer(
+            id: id("customer-chen"), name: "Linda Chen", email: "linda.chen@example.com",
+            phone: "(555) 220-7781", address: "17 Willow Creek Dr, Austin TX 78750",
+            notes: "Referred by Maria Hernandez.", createdAt: day(-1)
+        )
+        let summit = Customer(
+            id: id("customer-summit"), name: "Summit Fitness", email: "hello@summitfitness.example.com",
+            phone: "(555) 905-3320", address: "4800 Burnet Rd, Austin TX 78756",
+            notes: "Open 5am–10pm — best to work early or late.", createdAt: day(-5)
+        )
+        let customers = [bakery, dental, hernandez, oakPark, chen, summit]
+
+        func job(
+            _ key: String, _ customer: Customer, _ title: String, _ description: String,
+            status: JobStatus, start: Date? = nil, hours: Double = 2, total: Double,
+            created: Date, invoiceKey: String? = nil, notes: String = "Sample data"
+        ) -> Job {
+            Job(
+                id: id(key), customerId: customer.id, customerName: customer.name,
+                title: title, description: description, status: status,
+                scheduledAt: start,
+                scheduledEnd: start.flatMap { calendar.date(byAdding: .minute, value: Int(hours * 60), to: $0) },
+                address: customer.address, estimateTotal: total, laborHours: hours, laborRate: laborRate,
+                notes: notes, invoiceId: invoiceKey.map(id), createdAt: created
+            )
+        }
+        let jobs = [
+            // Today: one underway, one coming up.
+            job("job-dental", dental, "Service call — front office", "Diagnose and repair the issue reported by the office manager.",
+                status: .inProgress, start: day(0, hour: 8), hours: 3, total: 640, created: day(-6)),
+            job("job-hernandez", hernandez, "Follow-up visit", "Return visit to finish the work started last week.",
+                status: .scheduled, start: day(0, hour: 15), hours: 2, total: 420, created: day(-9)),
+            // Coming up.
+            job("job", bakery, Self.sampleJobTitle(for: trade), "Sample job for exploring TradeReady.",
+                status: .scheduled, start: day(1, hour: 9), hours: 2, total: 285, created: day(-3)),
+            job("job-oakpark", oakPark, "Quarterly maintenance — units 4 to 8", "Routine maintenance across five units.",
+                status: .approved, start: day(3, hour: 10), hours: 5, total: 1150, created: day(-7)),
+            // Pipeline.
+            job("job-chen", chen, "New customer inquiry", "Asked about a quote for work on her home.",
+                status: .lead, total: 0, created: day(-1), notes: "Called yesterday — follow up with a quote."),
+            job("job-summit", summit, "Gym facility upgrade", "Quote for the full upgrade. Waiting on the owner's decision.",
+                status: .estimateSent, hours: 16, total: 2400, created: day(-3)),
+            // Done and waiting to be invoiced.
+            job("job-hernandez-done", hernandez, "Repair visit", "Completed last week; not invoiced yet.",
+                status: .complete, start: day(-3, hour: 13), hours: 2, total: 320, created: day(-10)),
+            // Invoiced: one current, one overdue with a part-payment.
+            job("job-dental-invoiced", dental, "Annual maintenance", "Completed and invoiced; payment due soon.",
+                status: .invoiced, start: day(-9, hour: 8), hours: 4, total: 560, created: day(-14), invoiceKey: "invoice-dental"),
+            job("job-oakpark-overdue", oakPark, "Emergency call-out", "After-hours emergency repair.",
+                status: .invoiced, start: day(-30, hour: 20), hours: 6, total: 1250, created: day(-30), invoiceKey: "invoice-oakpark"),
+            // Paid.
+            job("job-bakery-paid", bakery, "Repair and replace", "Finished and paid in full.",
+                status: .paid, start: day(-12, hour: 7), hours: 3, total: 380, created: day(-16), invoiceKey: "invoice-bakery"),
+        ]
+
+        let invoices = [
+            Invoice(id: id("invoice-bakery"), customerId: bakery.id, customer: bakery.name, number: "INV-0001", amount: 380,
+                    due: day(-2), email: bakery.email, phone: bakery.phone, description: "Repair and replace",
+                    payments: [Payment(id: id("payment-bakery"), amount: 380, date: day(-4, hour: 11), method: "Card")]),
+            Invoice(id: id("invoice-dental"), customerId: dental.id, customer: dental.name, number: "INV-0002", amount: 560,
+                    due: day(5), email: dental.email, phone: dental.phone, description: "Annual maintenance"),
+            Invoice(id: id("invoice-oakpark"), customerId: oakPark.id, customer: oakPark.name, number: "INV-0003", amount: 1250,
+                    due: day(-8), email: oakPark.email, phone: oakPark.phone, description: "Emergency call-out",
+                    payments: [Payment(id: id("payment-oakpark"), amount: 500, date: day(-15, hour: 10), method: "Check")]),
+        ]
+
+        let expenses = [
+            Expense(id: id("expense"), merchant: "Sample Supply House", amount: 42.75, date: day(0, hour: 8), category: .materials, notes: "Sample expense"),
+            Expense(id: id("expense-fuel"), merchant: "Shell", amount: 58.20, date: day(-1, hour: 17), category: .fuel, notes: "Fuel for the work truck"),
+            Expense(id: id("expense-materials"), merchant: "Home Depot", amount: 186.40, date: day(-3, hour: 12), category: .materials,
+                    notes: "Parts for the repair visit", jobId: id("job-hernandez-done")),
+            Expense(id: id("expense-tools"), merchant: "Harbor Freight", amount: 94.99, date: day(-8, hour: 10), category: .tools, notes: "Replacement hand tools"),
+            Expense(id: id("expense-software"), merchant: "TradeReady", amount: 29.99, date: day(-10, hour: 9), category: .software, notes: "Monthly subscription"),
+            Expense(id: id("expense-insurance"), merchant: "Liberty Mutual", amount: 212.00, date: day(-14, hour: 9), category: .insurance, notes: "Business liability insurance"),
+            Expense(id: id("expense-marketing"), merchant: "Yard signs & flyers", amount: 120.00, date: day(-20, hour: 14), category: .marketing, notes: "Flyers for the neighborhood"),
+            Expense(id: id("expense-materials-bakery"), merchant: "Ferguson", amount: 126.42, date: day(-13, hour: 8), category: .materials,
+                    notes: "Supplies", jobId: id("job-bakery-paid")),
+        ]
+        return (customers, jobs, invoices, expenses)
+    }
+
     private func mergeSampleData(
         into next: inout Canonical.Snapshot,
         namespace: String,
         anchor: Date,
         trade: NativeTypedAccountState.Trade
     ) throws {
-        let customerID = "native-sample-v1-\(namespace)-customer"
-        let jobID = "native-sample-v1-\(namespace)-job"
-        let invoiceID = "native-sample-v1-\(namespace)-invoice"
-        let expenseID = "native-sample-v1-\(namespace)-expense"
-        let customer = Customer(
-            id: customerID,
-            name: "Riverside Bakery",
-            email: "owner@riversidebakery.com",
-            phone: "(555) 301-2200",
-            address: "142 Mill St, Austin TX 78701",
-            notes: "Sample customer — replace with your own when ready.",
-            createdAt: anchor
-        )
-        let job = Job(
-            id: jobID,
-            customerId: customerID,
-            customerName: customer.name,
-            title: Self.sampleJobTitle(for: trade),
-            description: "Sample job for exploring TradeReady.",
-            status: .scheduled,
-            scheduledAt: Calendar.current.date(byAdding: .day, value: 1, to: anchor),
-            scheduledEnd: Calendar.current.date(byAdding: .day, value: 1, to: anchor)
-                .flatMap { Calendar.current.date(byAdding: .hour, value: 2, to: $0) },
-            address: customer.address,
-            estimateTotal: 285,
-            laborHours: 2,
-            laborRate: settings.laborRate,
-            notes: "Sample data",
-            createdAt: anchor
-        )
-        let invoice = Invoice(
-            id: invoiceID,
-            customerId: customerID,
-            customer: customer.name,
-            number: "INV-SAMPLE",
-            amount: 285,
-            due: Calendar.current.date(byAdding: .day, value: 14, to: anchor) ?? anchor,
-            email: customer.email,
-            phone: customer.phone,
-            description: Self.sampleJobTitle(for: trade)
-        )
-        let expense = Expense(
-            id: expenseID,
-            merchant: "Sample Supply House",
-            amount: 42.75,
-            date: anchor,
-            category: .materials,
-            notes: "Sample expense"
-        )
+        let sample = Self.sampleRecords(namespace: namespace, anchor: anchor, trade: trade, laborRate: settings.laborRate)
+
         var customerRecords = next.payload.customers ?? []
-        let canonicalCustomer: Canonical.Customer
-        if let baseline = customerRecords.first(where: { $0.id == customer.id }) {
-            var edit = try CanonicalUIAdapters.edit(baseline); edit.value = customer
-            canonicalCustomer = try CanonicalUIAdapters.canonical(from: edit)
-        } else { canonicalCustomer = try CanonicalUIAdapters.canonical(from: customer) }
-        replaceOrAppend(canonicalCustomer, in: &customerRecords, id: \Canonical.Customer.id)
+        for customer in sample.customers {
+            let canonical: Canonical.Customer
+            if let baseline = customerRecords.first(where: { $0.id == customer.id }) {
+                var edit = try CanonicalUIAdapters.edit(baseline); edit.value = customer
+                canonical = try CanonicalUIAdapters.canonical(from: edit)
+            } else { canonical = try CanonicalUIAdapters.canonical(from: customer) }
+            replaceOrAppend(canonical, in: &customerRecords, id: \Canonical.Customer.id)
+        }
 
         var jobRecords = next.payload.jobs ?? []
-        let canonicalJob: Canonical.Job
-        if let baseline = jobRecords.first(where: { $0.id == job.id }) {
-            var edit = try CanonicalUIAdapters.edit(baseline); edit.value = job
-            canonicalJob = try CanonicalUIAdapters.canonical(from: edit)
-        } else { canonicalJob = try CanonicalUIAdapters.canonical(from: job) }
-        replaceOrAppend(canonicalJob, in: &jobRecords, id: \Canonical.Job.id)
+        for job in sample.jobs {
+            let canonical: Canonical.Job
+            if let baseline = jobRecords.first(where: { $0.id == job.id }) {
+                var edit = try CanonicalUIAdapters.edit(baseline); edit.value = job
+                canonical = try CanonicalUIAdapters.canonical(from: edit)
+            } else { canonical = try CanonicalUIAdapters.canonical(from: job) }
+            replaceOrAppend(canonical, in: &jobRecords, id: \Canonical.Job.id)
+        }
 
         var invoiceRecords = next.payload.invoices ?? []
-        let canonicalInvoice: Canonical.Invoice
-        if let baseline = invoiceRecords.first(where: { $0.id == invoice.id }) {
-            var edit = try CanonicalUIAdapters.edit(baseline); edit.value = invoice
-            canonicalInvoice = try CanonicalUIAdapters.canonical(from: edit)
-        } else { canonicalInvoice = try CanonicalUIAdapters.canonical(from: invoice) }
-        replaceOrAppend(canonicalInvoice, in: &invoiceRecords, id: \Canonical.Invoice.id)
+        for invoice in sample.invoices {
+            let canonical: Canonical.Invoice
+            if let baseline = invoiceRecords.first(where: { $0.id == invoice.id }) {
+                var edit = try CanonicalUIAdapters.edit(baseline); edit.value = invoice
+                canonical = try CanonicalUIAdapters.canonical(from: edit)
+            } else { canonical = try CanonicalUIAdapters.canonical(from: invoice) }
+            replaceOrAppend(canonical, in: &invoiceRecords, id: \Canonical.Invoice.id)
+        }
 
         var expenseRecords = next.payload.expenses ?? []
-        let canonicalExpense: Canonical.Expense
-        if let baseline = expenseRecords.first(where: { $0.id == expense.id }) {
-            var edit = try CanonicalUIAdapters.edit(baseline); edit.value = expense
-            canonicalExpense = try CanonicalUIAdapters.canonical(from: edit)
-        } else { canonicalExpense = try CanonicalUIAdapters.canonical(from: expense) }
-        replaceOrAppend(canonicalExpense, in: &expenseRecords, id: \Canonical.Expense.id)
+        for expense in sample.expenses {
+            let canonical: Canonical.Expense
+            if let baseline = expenseRecords.first(where: { $0.id == expense.id }) {
+                var edit = try CanonicalUIAdapters.edit(baseline); edit.value = expense
+                canonical = try CanonicalUIAdapters.canonical(from: edit)
+            } else { canonical = try CanonicalUIAdapters.canonical(from: expense) }
+            replaceOrAppend(canonical, in: &expenseRecords, id: \Canonical.Expense.id)
+        }
 
         next.payload.customers = customerRecords
         next.payload.jobs = jobRecords
@@ -12447,12 +12533,12 @@ extension AppStore {
         }
     }
 
-    /// Installs the one-shot coach prefill (ruling R4) and switches to the
-    /// Coach tab. 10.13 consumes and clears `pendingCoachPrefill`; it never
+    /// Installs the one-shot coach prefill (ruling R4) and opens the Coach
+    /// sheet. 10.13 consumes and clears `pendingCoachPrefill`; it never
     /// auto-sends.
     func installPendingCoachPrefill(_ prompt: String) {
         pendingCoachPrefill = prompt
-        selectedTab = .coach
+        isCoachPresented = true
     }
 
     /// Task 10.13 (ruling R4): atomically reads and clears the one-shot

@@ -460,7 +460,7 @@ struct LegacyNativeStoreSnapshot: Codable {
     var settings: BusinessSettings
 }
 
-enum AppTab: Hashable { case today, jobs, invoices, customers, money, coach }
+enum AppTab: Hashable { case today, jobs, invoices, customers, money }
 
 // Brand palette. The literals must equal `NativeAccessibilityAudit.Palette`
 // (task 11.10a; the accessibility host suite parses this block).

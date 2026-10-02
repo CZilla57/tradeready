@@ -486,19 +486,21 @@ struct NativeTodayScheduleStop: View {
 
     private var timelineRow: some View {
         HStack(alignment: .top, spacing: 10) {
-            VStack(spacing: 4) {
+            VStack(spacing: 6) {
                 Text(NativeTodayBriefing.formatTimeRange(job.scheduledStartTime, nil))
                     .font(.caption.monospaced())
+                    .lineLimit(1).minimumScaleFactor(0.8)
                 if let end = job.scheduledEndTime, !end.isEmpty {
                     Text(NativeTodayBriefing.formatTimeRange(end, nil))
                         .font(.caption2.monospaced()).foregroundStyle(.secondary)
+                        .lineLimit(1).minimumScaleFactor(0.8)
                 }
                 Circle().fill(Color.tradeReady).frame(width: 7, height: 7)
                 if !isLast {
                     Rectangle().fill(Color(.quaternaryLabel)).frame(width: 1.5).frame(maxHeight: .infinity)
                 }
             }
-            .frame(width: 52)
+            .frame(width: 72)
             NativeTodayJobCard(job: job, onTap: onTap, onOnMyWay: onOnMyWay)
         }
     }

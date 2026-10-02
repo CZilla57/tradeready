@@ -22,7 +22,9 @@ import SwiftUI
 struct CoachView: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var messages: [NativeCoachTranscriptMessage] = []
+    /// Owned by `RootView.mainTabs` so closing the sheet keeps the chat, while
+    /// signing out (which tears `mainTabs` down) still drops it.
+    @Binding var messages: [NativeCoachTranscriptMessage]
     @State private var input = ""
     @State private var sending = false
     /// RN's `prefillPending` ref: marks the NEXT send as insight-originated
@@ -62,7 +64,11 @@ struct CoachView: View {
             .navigationTitle("Coach")
             .nativeKeyboardDoneBar()
             .toolbar {
-                if NativeCoachTranscriptDisplay.shouldShowNewChat(messageCount: messages.count) {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { store.isCoachPresented = false }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    if NativeCoachTranscriptDisplay.shouldShowNewChat(messageCount: messages.count) {
                     // Task 10.13 fix round 1: cancel any in-flight send AND
                     // bump the conversation generation before clearing the
                     // transcript — a reply that resolves after this point
@@ -76,6 +82,7 @@ struct CoachView: View {
                         sending = false
                     }
                     .keyboardShortcut(newShortcut)
+                    }
                 }
             }
             .onAppear { consumePrefillIfNeeded() }
