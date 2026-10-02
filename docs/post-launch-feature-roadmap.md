@@ -1,7 +1,7 @@
 # Post-Launch Feature Roadmap — Solo-Operator Features
 
 **Created:** 2026-07-17 · **Statuses updated:** 2026-10-02
-**Status:** Items **1–7, 9, and 11–15 are SHIPPED** (merged to master; see each row/STATUS block for OTA state). Item 8 (GPS mileage) remains backlog and approval-gated; item 10 (two-way SMS inbox) stays deferred (evaluate-first — deferral reaffirmed 2026-08-06). **Phases 16–22** (added 2026-08-09) are a fresh competitive-gap review against Jobber/Housecall Pro/QuickBooks Self-Employed, scoped for post-1.2 — none built yet, all need owner go-ahead at kickoff. **Phases 24–34** (added 2026-10-02) are a second Jobber/Housecall Pro gap review covering payments, quoting, calendar sync and marketing — none built yet, all need owner go-ahead at kickoff. For priorities, see **"2026-08-06 update — external audit & next queue"** below. Nothing may be claimed in the store listing until merged, shipped, and device-smoke-tested.
+**Status:** Items **1–7, 9, and 11–15 are SHIPPED** (merged to master; see each row/STATUS block for OTA state). Item 8 (GPS mileage) remains backlog and approval-gated; item 10 (two-way SMS inbox) stays deferred (evaluate-first — deferral reaffirmed 2026-08-06). **Phases 16–22** (added 2026-08-09) are a fresh competitive-gap review against Jobber/Housecall Pro/QuickBooks Self-Employed, scoped for post-1.2 — none built yet, all need owner go-ahead at kickoff. **Phases 24–34** (added 2026-10-02) are a second Jobber/Housecall Pro gap review covering payments, quoting, calendar sync and marketing — none built yet, all need owner go-ahead at kickoff. **What to build next, and what's out of scope, is set in "Build order (owner-set 2026-10-02)" below.** For priorities, see **"2026-08-06 update — external audit & next queue"** below. Nothing may be claimed in the store listing until merged, shipped, and device-smoke-tested.
 
 ## What this is
 
@@ -18,9 +18,33 @@ Each phase has a **Kickoff prompt** — paste it when it's time to build that fe
 
 ---
 
+## Build order (owner-set 2026-10-02)
+
+This is the current order for everything not yet built. It **supersedes** earlier ordering notes, including the "Next queue" in the 2026-08-06 update and the suggested order in the Notes section. Build top to bottom; each phase still needs owner go-ahead at kickoff.
+
+| Order | Phase | Feature | New services needed? |
+|---|---|---|---|
+| 1 | 25 | Good/better/best quote options | None |
+| 2 | 27 | Lead source tracking & revenue by source | None |
+| 3 | 32 | Quote expiration dates | None |
+| 4 | 20 | Custom job/inspection forms & checklists | None |
+| 5 | 21 | Multi-property / equipment history | None |
+| 6 | 34 | Referral program | None (needs #27 first) |
+| 7 | 24 | Card on file & autopay for recurring invoices | None (existing Stripe) |
+| 8 | 28 | Tips on online payments | None (existing Stripe) |
+| 9 | 33 | Past-customer campaigns (+ customer tags) | None if sent from the phone; existing Resend if bulk email |
+| 10 | 26 | Google/iCloud calendar sync | None on the on-device path; Google OAuth would be new |
+| 11 | 23 | Read-only open API | None (existing Worker + Supabase) |
+| 12 | 19 | Legally-binding e-signature (upgrade) | None |
+| 13 | 18 | In-person card payment (Tap to Pay) | Existing Stripe, plus an Apple entitlement and the Stripe Terminal SDK |
+
+**Out of scope for now:** 8 (GPS mileage), 10 (two-way SMS inbox), 16 (missed-call text-back), 17 (QuickBooks Online / Xero sync), 22 (customer financing), 29 (instant payouts), 30 (ACH / bank payments) and 31 (card-fee surcharge). Their sections and kickoff prompts stay in this doc for reference. Don't start them without a new owner decision.
+
+---
+
 ## Rule of the road: ship order
 
-| # | Feature | Impact | Effort | Reuses | Status (2026-08-12) |
+| # | Feature | Impact | Effort | Reuses | Status (2026-10-02) |
 |---|---------|--------|--------|--------|---------------------|
 | 1 | <span style="color:green">Estimate approval loop (+ e-sign)</span> | 🔥🔥🔥 | Med | SendEstimateScreen, status pipeline, hosted legal site | **SHIPPED** — merged, OTA'd 2026-07-30 |
 | 2 | <span style="color:green">Appointment & "on my way" reminders</span> | 🔥🔥🔥 | Low–Med | Notifications + composers (as built — cron/Resend rejected in design) | **SHIPPED** — merged, OTA'd 2026-07-30 |
@@ -29,33 +53,33 @@ Each phase has a **Kickoff prompt** — paste it when it's time to build that fe
 | 5 | <span style="color:green">Receipt OCR</span> | 🔥🔥 | Med | Photo pipeline, backend AI proxy | **SHIPPED** — merged `8144eca`, OTA'd |
 | 6 | <span style="color:green">Recurring invoices (maintenance plans)</span> | 🔥 | Med | RecurringJobs engine, invoice model | **SHIPPED** — merged 2026-08-01 |
 | 7 | <span style="color:green">Accounting / CSV export</span> | 🔥 | Low | Existing money/expense data | **SHIPPED** — merged 2026-08-01 |
-| 8 | Automatic (GPS) mileage | 🔥🔥 | High (native) | MileageLog / Trip model | backlog — approval-gated (dep + privacy label) |
+| 8 | Automatic (GPS) mileage | 🔥🔥 | High (native) | MileageLog / Trip model | **Out of scope (2026-10-02)** · backlog — approval-gated (dep + privacy label) |
 | 9 | <span style="color:green">Online booking / request-a-quote link</span> | 🔥🔥🔥 (new-work ceiling) | High (web) | Sync write path, Jobs list | **SHIPPED** — merged `cec034f` 2026-08-04 |
-| 10 | Two-way SMS inbox | 🔥 | High | Outreach infra — evaluate before committing | deferred (reaffirmed 2026-08-06) |
+| 10 | Two-way SMS inbox | 🔥 | High | Outreach infra — evaluate before committing | **Out of scope (2026-10-02)** · deferred (reaffirmed 2026-08-06) |
 | 11 | <span style="color:green">Calendar, availability & real online booking</span> | 🔥🔥🔥 | High | Booking link (#9), smart pickers, reminders | **SHIPPED** — `feat/calendar-availability`, all 4 phases (2026-08-07) |
 | 12 | <span style="color:green">Customer portal completion</span> | 🔥🔥 | Med–High | Held portal branch, approval/change-order endpoints | **SHIPPED** — owner smoke PASSED, feature closed (2026-08-07) |
 | 13 | <span style="color:green">Estimated-vs-actual job profitability</span> | 🔥🔥🔥 (differentiator) | Med | timeSessions, payments ledger, change orders | **SHIPPED** — merged `683ec15` 2026-08-07 |
 | 14 | <span style="color:green">Accountant package / bookkeeping handoff</span> | 🔥 | Med | csvExport.ts, ExportDataScreen, payment ledger | **SHIPPED** — merged `d89a968` 2026-08-07 |
 | 15 | <span style="color:green">Contextual AI & proactive operations</span> | 🔥🔥 | Med–High | todayInsights, follow-ups, dunning, AI layer | **SHIPPED** — merged `60da60b` 2026-08-07 |
-| 16 | Missed-call text-back | 🔥🔥🔥 | Med (evaluate-first) | Outreach/notification infra, Phase 10 provider decision | staged 2026-08-09 — prompt ready |
-| 17 | Live QuickBooks Online / Xero sync | 🔥🔥 | High (partner API) | csvExport.ts / Phase 14 mappings, backend AI-proxy pattern | staged 2026-08-09 — prompt ready |
-| 18 | In-person card payment (Tap to Pay) | 🔥🔥 | High (native + Apple entitlement) | Stripe Connect, payment ledger (Phase 3) | staged 2026-08-09 — prompt ready |
-| 19 | Legally-binding e-signature (upgrade) | 🔥 | Low–Med | Phase 1 consent snapshot + estimate-approval flow | staged 2026-08-09 — prompt ready |
-| 20 | Custom job/inspection forms & checklists | 🔥🔥 | Med–High | Photo pipeline, Job model, sync | staged 2026-08-09 — prompt ready |
-| 21 | Multi-property / equipment history | 🔥 | Med | Customer model, JobDetailScreen | staged 2026-08-09 — prompt ready |
-| 22 | Customer financing at checkout | 🔥 | High (lender partnership) | Invoice/estimate send flow | staged 2026-08-09 — prompt ready (business decision, not just eng) |
-| 23 | Read-only open API for other services | 🔥 | Med | Workers backend, owner-scoped RLS, portal-token pattern | staged 2026-08-12 — prompt ready |
-| 24 | Card on file & autopay for recurring invoices | 🔥🔥🔥 | Med–High | Stripe Connect, recurring invoices (#6), payment ledger (#3) | staged 2026-10-02 — prompt ready |
-| 25 | Good/better/best quote options | 🔥🔥🔥 | Med–High | Pricing engine, estimate approval loop (#1), portal (#12) | staged 2026-10-02 — prompt ready |
-| 26 | Google/iCloud calendar sync | 🔥🔥 | Med | Availability engine (#11), portal ICS endpoint | staged 2026-10-02 — prompt ready |
-| 27 | Lead source tracking & revenue by source | 🔥🔥 | Low–Med | Customer model, booking intake, CSV import, Money reports | staged 2026-10-02 — prompt ready |
-| 28 | Tips on online payments | 🔥 | Low–Med | Stripe payment links, payment ledger (#3) | staged 2026-10-02 — prompt ready (bundle with #24) |
-| 29 | Instant payouts | 🔥🔥 | Low–Med | Stripe Connect Express accounts | staged 2026-10-02 — prompt ready (bundle with #24) |
-| 30 | ACH / bank payments | 🔥 | Med | Stripe payment links + webhook, payment ledger (#3) | staged 2026-10-02 — prompt ready (webhook gap, see Why) |
-| 31 | Card-fee surcharge / convenience fee | 🔥 | Med (compliance-gated) | Payment links, invoice PDF | staged 2026-10-02 — evaluate-first |
-| 32 | Quote expiration dates | 🔥 | Low | Estimate approval loop (#1), estimate follow-up | staged 2026-10-02 — prompt ready |
-| 33 | Past-customer campaigns (+ customer tags) | 🔥🔥 | Med–High | Outreach, AI layer, lead source (#27) | staged 2026-10-02 — prompt ready (send channel evaluate-first) |
-| 34 | Referral program | 🔥 | Med | Booking link (#9/#11), lead source (#27), review requests | staged 2026-10-02 — prompt ready (after #27) |
+| 16 | Missed-call text-back | 🔥🔥🔥 | Med (evaluate-first) | Outreach/notification infra, Phase 10 provider decision | **Out of scope (2026-10-02)** · staged 2026-08-09 — prompt ready |
+| 17 | Live QuickBooks Online / Xero sync | 🔥🔥 | High (partner API) | csvExport.ts / Phase 14 mappings, backend AI-proxy pattern | **Out of scope (2026-10-02)** · staged 2026-08-09 — prompt ready |
+| 18 | In-person card payment (Tap to Pay) | 🔥🔥 | High (native + Apple entitlement) | Stripe Connect, payment ledger (Phase 3) | **Build #13** · staged 2026-08-09 — prompt ready |
+| 19 | Legally-binding e-signature (upgrade) | 🔥 | Low–Med | Phase 1 consent snapshot + estimate-approval flow | **Build #12** · staged 2026-08-09 — prompt ready |
+| 20 | Custom job/inspection forms & checklists | 🔥🔥 | Med–High | Photo pipeline, Job model, sync | **Build #4** · staged 2026-08-09 — prompt ready |
+| 21 | Multi-property / equipment history | 🔥 | Med | Customer model, JobDetailScreen | **Build #5** · staged 2026-08-09 — prompt ready |
+| 22 | Customer financing at checkout | 🔥 | High (lender partnership) | Invoice/estimate send flow | **Out of scope (2026-10-02)** · staged 2026-08-09 — prompt ready (business decision, not just eng) |
+| 23 | Read-only open API for other services | 🔥 | Med | Workers backend, owner-scoped RLS, portal-token pattern | **Build #11** · staged 2026-08-12 — prompt ready |
+| 24 | Card on file & autopay for recurring invoices | 🔥🔥🔥 | Med–High | Stripe Connect, recurring invoices (#6), payment ledger (#3) | **Build #7** · staged 2026-10-02 — prompt ready |
+| 25 | Good/better/best quote options | 🔥🔥🔥 | Med–High | Pricing engine, estimate approval loop (#1), portal (#12) | **Build #1** · staged 2026-10-02 — prompt ready |
+| 26 | Google/iCloud calendar sync | 🔥🔥 | Med | Availability engine (#11), portal ICS endpoint | **Build #10** · staged 2026-10-02 — prompt ready |
+| 27 | Lead source tracking & revenue by source | 🔥🔥 | Low–Med | Customer model, booking intake, CSV import, Money reports | **Build #2** · staged 2026-10-02 — prompt ready |
+| 28 | Tips on online payments | 🔥 | Low–Med | Stripe payment links, payment ledger (#3) | **Build #8** · staged 2026-10-02 — prompt ready (bundle with #24) |
+| 29 | Instant payouts | 🔥🔥 | Low–Med | Stripe Connect Express accounts | **Out of scope (2026-10-02)** · staged 2026-10-02 — prompt ready (bundle with #24) |
+| 30 | ACH / bank payments | 🔥 | Med | Stripe payment links + webhook, payment ledger (#3) | **Out of scope (2026-10-02)** · staged 2026-10-02 — prompt ready (webhook gap, see Why) |
+| 31 | Card-fee surcharge / convenience fee | 🔥 | Med (compliance-gated) | Payment links, invoice PDF | **Out of scope (2026-10-02)** · staged 2026-10-02 — evaluate-first |
+| 32 | Quote expiration dates | 🔥 | Low | Estimate approval loop (#1), estimate follow-up | **Build #3** · staged 2026-10-02 — prompt ready |
+| 33 | Past-customer campaigns (+ customer tags) | 🔥🔥 | Med–High | Outreach, AI layer, lead source (#27) | **Build #9** · staged 2026-10-02 — prompt ready (send channel evaluate-first) |
+| 34 | Referral program | 🔥 | Med | Booking link (#9/#11), lead source (#27), review requests | **Build #6** · staged 2026-10-02 — prompt ready (after #27) |
 
 ---
 
@@ -939,12 +963,12 @@ depth-not-breadth, solo-operator thesis holds.
 ## Notes
 
 - **Phases 24–34 (added 2026-10-02):** a second Jobber/Housecall Pro gap
-  review, solo-operator scope. Suggested order: 24 (with 28 and 29 bundled
-  onto the same Stripe work), 25, 26, 27, then the rest. Gates to respect:
-  30 must fix the async-payment webhook gap before ACH is enabled anywhere;
-  31 is evaluate-first and compliance-gated; 33's sending channel is
-  evaluate-first; 34 depends on 27. Not prioritized against Phase 12
-  cutover or anything already in flight.
+  review, solo-operator scope. Build order and scope are set in "Build
+  order (owner-set 2026-10-02)" near the top, which replaced the original
+  suggested order. Gates that still apply: 33's sending channel is
+  evaluate-first, and 34 depends on 27. If out-of-scope 30 is ever revived,
+  it must fix the async-payment webhook gap before ACH is enabled anywhere.
+  Not prioritized against Phase 12 cutover or anything already in flight.
 - **Phases 16–22 (added 2026-08-09):** a fresh competitive-gap review against
   Jobber/Housecall Pro/QuickBooks Self-Employed, done after Phases 11–15
   shipped. Deliberately scoped post-1.2 — none are prioritized ahead of
