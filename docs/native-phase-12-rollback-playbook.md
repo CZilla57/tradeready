@@ -219,10 +219,18 @@ and nothing else from `master`'s unreleased Expo work:
    suites, 2,845 tests, `TZ=America/Phoenix`) and lint is clean with zero warnings.
 
 Still open before R is built: the owner confirms the commit that built L; the pending
-notice and the E-2 warning wording are placeholders awaiting owner approval; the marker
+notice and the E-2 warning wording was approved as final by the owner on 2026-10-01 (charter row 29); the marker
 read through `expo-file-system` is unverified on a device (§5.3 E-1 is not done without
-it); `app.json` still reads 1.2.1, so the R version (§3.2) is not set; and nothing has
-been built or uploaded.
+it); `app.json` is set to 2.1.1 (branch commit `560e0e9`) and the build number is expected to
+be 14: the EAS remote counter read 13 on 2026-10-01 and the owner chose to leave it alone
+(§3.2: above every earlier upload; the Expo build history shares that counter).
+
+**Status 2026-10-01 (built, uploaded, processed, not submitted).** R 2.1.1 (build
+14; EAS build `828e6779-350f-41fa-a024-4e66717b632b`) has processed in App Store Connect
+(charter row 30). It is not submitted for review and not on an App Store version. Still
+open: the internal testing group; the owner's confirmation of the L commit; the on-device
+marker read (§5.3 E-1); a native build N2 above 2.1.1 (§3.2, for example 2.2.0, with a
+build number above R's); and the rehearsal (§8), which closes P12-RB-1 to P12-RB-7.
 
 Charter §1 rule 4 freezes non-critical Expo feature work from Stage C entry.
 
