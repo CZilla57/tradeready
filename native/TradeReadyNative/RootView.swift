@@ -133,7 +133,7 @@ struct RootView: View {
         case .signedOut:
             NativeAuthView()
         case .signedIn:
-            mainTabs
+            NativeMainTabs()
                 .safeAreaInset(edge: .top, spacing: 0) { NativeSyncBanner() }
                 .safeAreaInset(edge: .bottom, spacing: 0) { NativeUndoBanner() }
                 // Task 11.06 (contract §6.2 step 6): a widget/Siri link whose
@@ -198,8 +198,16 @@ struct RootView: View {
             )
         }
     }
+}
 
-    private var mainTabs: some View {
+/// Signed-in tab container. Its `@State` (the Coach transcript) is dropped when
+/// `RootView` leaves `.signedIn`, so no chat text crosses an account boundary.
+struct NativeMainTabs: View {
+    @EnvironmentObject private var store: AppStore
+    @State private var coachMessages: [NativeCoachTranscriptMessage] = []
+
+    var body: some View {
+
         TabView(selection: $store.selectedTab) {
             TodayView()
                 .tabItem { Label("Today", systemImage: "calendar") }
@@ -216,11 +224,23 @@ struct RootView: View {
             MoneyView()
                 .tabItem { Label("Money", systemImage: "dollarsign.circle") }
                 .tag(AppTab.money)
-            CoachView()
-                .tabItem { Label("Coach", systemImage: "bubble.left.and.text.bubble.right") }
-                .tag(AppTab.coach)
         }
         .toolbarBackground(.visible, for: .tabBar)
         .toolbarBackground(.ultraThinMaterial, for: .tabBar)
+        .overlay(alignment: .bottomTrailing) {
+            Button { store.isCoachPresented = true } label: {
+                Image(systemName: "sparkles").font(.title2).padding(6)
+            }
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.circle)
+            .shadow(radius: 4, y: 2)
+            .accessibilityLabel("Ask Coach")
+            .padding(.trailing, 16)
+            // Clears the tab bar (49pt) plus a gap.
+            .padding(.bottom, 49 + 16)
+        }
+        .sheet(isPresented: $store.isCoachPresented) {
+            CoachView(messages: $coachMessages)
+        }
     }
 }

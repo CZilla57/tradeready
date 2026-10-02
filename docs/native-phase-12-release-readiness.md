@@ -245,17 +245,19 @@ source:
   §8.2 does not list. This is exactly OI-1 (below): this task decides the proposal: the
   owner and a `PrivacyInfo.xcprivacy` edit apply it.
 
-### 4.3 `ITSAppUsesNonExemptEncryption`
+### 4.3 `ITSAppUsesNonExemptEncryption` (applied 2026-10-01)
 
-**Gap found.** RN's `app.json` sets `ios.infoPlist.ITSAppUsesNonExemptEncryption = false`
-(`app.json:27`). `native/Info.plist` has **no `ITSAppUsesNonExemptEncryption` key at
-all**. The app uses only standard HTTPS/TLS (URLSession, Supabase, RevenueCat, Sentry,
-PostHog SDKs) and no proprietary/non-exempt cryptography, so `false` is the accurate
-value — same as RN. Without the key, every App Store Connect upload will prompt for the
-export-compliance answer manually instead of it being declared in the binary.
+**Update 2026-10-01:** the owner approved the edit (decision-log row 23) and
+`<key>ITSAppUsesNonExemptEncryption</key><false/>` is now in `native/Info.plist`, matching RN's
+`app.json:27`. An unsigned Release build carries `false` in the built app's `Info.plist`. The key
+applies to builds made after the edit; the first Stage A archive predates it, so its export
+compliance was answered in App Store Connect ("None of the algorithms mentioned above").
 
-**Proposed value, not applied (R8):** add `<key>ITSAppUsesNonExemptEncryption</key><false/>`
-to `native/Info.plist`, matching RN. **Owner approval needed** for the `Info.plist` edit.
+*Historical record (state before 2026-10-01):* `native/Info.plist` had no
+`ITSAppUsesNonExemptEncryption` key. The app uses only standard HTTPS/TLS (URLSession, Supabase,
+RevenueCat, Sentry, PostHog SDKs) and Apple's CryptoKit (SHA-256, HMAC), and no proprietary or
+non-exempt cryptography, so `false` is the accurate value. Without the key, every App Store
+Connect upload prompts for the export-compliance answer manually.
 
 ### 4.4 Permission strings
 
@@ -564,9 +566,7 @@ unless noted; evidence under
   12.01's own edits (version numbers, privacy labels) can be applied.
 - **P12-012 (S1, Open)** blocks Stage A entry per charter §2 rule 2 until the owner rules
   on it (R43) — this task only surfaces it, per the charter's own table.
-- **`ITSAppUsesNonExemptEncryption` is missing** from `native/Info.plist` (§4.3) — low
-  risk (manual App Store Connect prompt instead of a declared answer) but should be
-  fixed alongside the other `Info.plist`/entitlements edits this phase already needs.
+- **`ITSAppUsesNonExemptEncryption`**: added to `native/Info.plist` 2026-10-01 (§4.3, decision-log row 23). Builds made before the edit still prompt for the export-compliance answer.
 - **RESEND_API_KEY's production presence is unverifiable from the repository** (§10) —
   owner must confirm with `wrangler secret list`; if unset, the G1 waiver's only
   user-visible alert path (email) silently does nothing.

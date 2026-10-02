@@ -148,21 +148,29 @@ struct TodayView: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center) {
                 Text(store.todayHeader.greeting.uppercased())
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
-                Text(store.todayHeader.dateLabel).font(.largeTitle.bold())
+                Spacer()
+                Button { handle(.calendar) } label: { headerIcon("calendar") }
+                    .accessibilityLabel("Open calendar")
+                Button { handle(.search) } label: { headerIcon("magnifyingglass") }
+                    .accessibilityLabel("Search everything")
+                Button { handle(.settings) } label: { headerIcon("gearshape") }
+                    .accessibilityLabel("Open settings")
             }
-            Spacer()
-            Button { handle(.calendar) } label: { Image(systemName: "calendar") }
-                .accessibilityLabel("Open calendar")
-            Button { handle(.search) } label: { Image(systemName: "magnifyingglass") }
-                .accessibilityLabel("Search everything")
-            Button { handle(.settings) } label: { Image(systemName: "gearshape") }
-                .accessibilityLabel("Open settings")
+            Text(store.todayHeader.dateLabel).font(.largeTitle.bold())
         }
+    }
+
+    /// 44pt tap target (HIG minimum) around a larger glyph.
+    private func headerIcon(_ systemName: String) -> some View {
+        Image(systemName: systemName)
+            .font(.title2)
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
     }
 
     // MARK: - Overdue invoices

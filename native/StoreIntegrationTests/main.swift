@@ -4000,7 +4000,7 @@ struct StoreIntegrationTests {
             store.installPendingCoachPrefill("Why is this job low margin?")
             expect(store.pendingCoachPrefill == "Why is this job low margin?",
                    "10.12 installPendingCoachPrefill sets the one-shot prefill value")
-            expect(store.selectedTab == .coach, "10.12 installPendingCoachPrefill switches to the Coach tab")
+            expect(store.isCoachPresented && store.selectedTab == .today, "10.12 installPendingCoachPrefill opens the Coach sheet without changing tabs")
 
             // Settings routing (checklist task tap).
             expect(store.pendingSettingsDestination == nil, "10.12 sanity: no pending settings destination yet")

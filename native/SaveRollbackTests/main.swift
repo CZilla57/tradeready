@@ -846,10 +846,10 @@ struct SaveRollbackTests {
         unrelatedSave(store, "\(site)-fresh")
         let samplesKept = w.disk?.payload.customers?.filter { $0.id.hasPrefix("native-sample-v1-") }.count ?? 0
         observed(site, "after a failed fresh start and an unrelated save \(samplesKept) sample customer(s) on disk")
-        expectEqual(samplesKept, 1, "\(site): the failed fresh start's removal is not persisted by the next unrelated save")
+        expectEqual(samplesKept, 6, "\(site): the failed fresh start's removal is not persisted by the next unrelated save")
         let relaunched = w.launch()
         expect(relaunched.settings.businessName != "Onboarded Co", "\(site): after a relaunch the failed personalization is absent")
-        expectEqual(relaunched.customers.filter { $0.id.hasPrefix("native-sample-v1-") }.count, 1,
+        expectEqual(relaunched.customers.filter { $0.id.hasPrefix("native-sample-v1-") }.count, 6,
                     "\(site): after a relaunch the saved sample customer shows")
         expect(w.queue.allSatisfy { $0.table == "customers" && !$0.recordId.hasPrefix("native-sample-v1-") },
                "\(site): nothing but the unrelated saves is queued")

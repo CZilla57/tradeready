@@ -13,6 +13,10 @@
 # one of ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH is set in the environment
 # (names only; their values are never read, echoed or logged by this script
 # before the credential gate passes) AND --i-am-the-owner is also passed.
+# Optional: TRADEREADY_SENTRY_DSN, when set in the environment, is passed to the
+# archive as the build setting of the same name (Info.plist key
+# TradeReadySentryDSN). Without it the build ships with crash reporting off.
+# The value is never printed or logged here; the dry run names the variable only.
 # This script is never to be invoked with --execute or with those variables
 # set by an agent (global constraints; task 14 brief). It exists so the
 # owner can run one command later, and so its dry-run and refusal paths have
@@ -169,11 +173,17 @@ if [ "$EXECUTE" -eq 1 ]; then
 </plist>
 PLIST
 
-  if ! xcodebuild -project "$PROJECT_PATH" -scheme TradeReadyNative \
+  set -- -project "$PROJECT_PATH" -scheme TradeReadyNative \
     -configuration Release -destination 'generic/platform=iOS' \
     -archivePath "$ARCHIVE_PATH" \
     MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD" \
-    DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" -allowProvisioningUpdates archive; then
+    DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM"
+  if [ -n "${TRADEREADY_SENTRY_DSN:-}" ]; then
+    set -- "$@" TRADEREADY_SENTRY_DSN="$TRADEREADY_SENTRY_DSN"
+  else
+    echo "Warning: TRADEREADY_SENTRY_DSN is not set; this build will have crash reporting off." >&2
+  fi
+  if ! xcodebuild "$@" -allowProvisioningUpdates archive; then
     echo "Archive failed. Nothing was exported or uploaded. Archive dir (if partially written): $ARCHIVE_DIR" >&2
     exit 1
   fi
@@ -215,6 +225,12 @@ cat >"$EXPORT_OPTIONS_PLIST" <<'PLIST'
 </plist>
 PLIST
 
+if [ -n "${TRADEREADY_SENTRY_DSN:-}" ]; then
+  SENTRY_NOTE='With --execute the archive also gets TRADEREADY_SENTRY_DSN="$TRADEREADY_SENTRY_DSN" (variable is set; value not shown).'
+else
+  SENTRY_NOTE='TRADEREADY_SENTRY_DSN is NOT set: with --execute the build would have crash reporting off. Export it first to add TRADEREADY_SENTRY_DSN="$TRADEREADY_SENTRY_DSN" to the archive.'
+fi
+
 cat <<EOF
 DRY RUN — no command below has been executed. Nothing was archived, exported or
 uploaded. Re-run with --execute only as the owner, with ASC_KEY_ID, ASC_ISSUER_ID
@@ -232,6 +248,8 @@ $(sed 's/^/  /' "$EXPORT_OPTIONS_PLIST")
     MARKETING_VERSION=$VERSION CURRENT_PROJECT_VERSION=$BUILD \\
     DEVELOPMENT_TEAM="\$(xcodebuild -project native/TradeReadyNative.xcodeproj -scheme TradeReadyNative -configuration Release -showBuildSettings | sed -n 's/^[[:space:]]*DEVELOPMENT_TEAM = //p' | tail -n 1)" \\
     -allowProvisioningUpdates archive
+
+   $SENTRY_NOTE
 
 2. Check the numbers the archive carries (app and widget extension):
 

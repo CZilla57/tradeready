@@ -1001,7 +1001,7 @@
    "testSources": [
     {
      "path": "native/MigrationCoordinatorTests",
-     "sha256": "6ef3e4bcf691a8b431bda938eefa9a15d654f8c0ce79ebc17659fb42dd4d6260"
+     "sha256": "84212112998112199e8841b3a8383720cdbc1fca3d180e0ab415a19b93de0117"
     },
     {
      "path": "native/CanonicalTests",
@@ -1176,7 +1176,7 @@
   },
   "phase-12-testflight-upload": {
    "script": "native/run-phase-12-testflight-upload-tests.sh",
-   "scriptSha256": "43577e13ccb2d23abfb58c3715501fe964f8dff5aec659974d96d566b92c9783",
+   "scriptSha256": "dda57431568c886eb319baf7cfde64e084bf73ca884a93d93baf5bfaf35b8c52",
    "testSources": [],
    "fixtures": []
   },
@@ -1420,7 +1420,7 @@
    "testSources": [
     {
      "path": "native/SaveRollbackTests",
-     "sha256": "b43f796155d15bb5f904da0c03ceac1a8f43565e5e07cdc369e2232e5d808312"
+     "sha256": "81776aef80fb0eb6f6e2f379a75b1ec8ca0d6301b64185286383684ebe50259b"
     }
    ],
    "fixtures": []
@@ -1546,7 +1546,7 @@
    "testSources": [
     {
      "path": "native/StoreIntegrationTests",
-     "sha256": "cb50d667c5476aeea2f6019a5c42d3704212ebee567caebd2eb8e33674a93a3e"
+     "sha256": "55413c83c04018bf7f9dd6536e55732e2bb7bfcda915115616c030a17c03a7b6"
     },
     {
      "path": "native/CanonicalTests",
