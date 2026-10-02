@@ -1,7 +1,7 @@
 # Post-Launch Feature Roadmap — Solo-Operator Features
 
-**Created:** 2026-07-17 · **Statuses updated:** 2026-08-12
-**Status:** Items **1–7, 9, and 11–15 are SHIPPED** (merged to master; see each row/STATUS block for OTA state). Item 8 (GPS mileage) remains backlog and approval-gated; item 10 (two-way SMS inbox) stays deferred (evaluate-first — deferral reaffirmed 2026-08-06). **Phases 16–22** (added 2026-08-09) are a fresh competitive-gap review against Jobber/Housecall Pro/QuickBooks Self-Employed, scoped for post-1.2 — none built yet, all need owner go-ahead at kickoff. For priorities, see **"2026-08-06 update — external audit & next queue"** below. Nothing may be claimed in the store listing until merged, shipped, and device-smoke-tested.
+**Created:** 2026-07-17 · **Statuses updated:** 2026-10-02
+**Status:** Items **1–7, 9, and 11–15 are SHIPPED** (merged to master; see each row/STATUS block for OTA state). Item 8 (GPS mileage) remains backlog and approval-gated; item 10 (two-way SMS inbox) stays deferred (evaluate-first — deferral reaffirmed 2026-08-06). **Phases 16–22** (added 2026-08-09) are a fresh competitive-gap review against Jobber/Housecall Pro/QuickBooks Self-Employed, scoped for post-1.2 — none built yet, all need owner go-ahead at kickoff. **Phases 24–34** (added 2026-10-02) are a second Jobber/Housecall Pro gap review covering payments, quoting, calendar sync and marketing — none built yet, all need owner go-ahead at kickoff. For priorities, see **"2026-08-06 update — external audit & next queue"** below. Nothing may be claimed in the store listing until merged, shipped, and device-smoke-tested.
 
 ## What this is
 
@@ -45,6 +45,17 @@ Each phase has a **Kickoff prompt** — paste it when it's time to build that fe
 | 21 | Multi-property / equipment history | 🔥 | Med | Customer model, JobDetailScreen | staged 2026-08-09 — prompt ready |
 | 22 | Customer financing at checkout | 🔥 | High (lender partnership) | Invoice/estimate send flow | staged 2026-08-09 — prompt ready (business decision, not just eng) |
 | 23 | Read-only open API for other services | 🔥 | Med | Workers backend, owner-scoped RLS, portal-token pattern | staged 2026-08-12 — prompt ready |
+| 24 | Card on file & autopay for recurring invoices | 🔥🔥🔥 | Med–High | Stripe Connect, recurring invoices (#6), payment ledger (#3) | staged 2026-10-02 — prompt ready |
+| 25 | Good/better/best quote options | 🔥🔥🔥 | Med–High | Pricing engine, estimate approval loop (#1), portal (#12) | staged 2026-10-02 — prompt ready |
+| 26 | Google/iCloud calendar sync | 🔥🔥 | Med | Availability engine (#11), portal ICS endpoint | staged 2026-10-02 — prompt ready |
+| 27 | Lead source tracking & revenue by source | 🔥🔥 | Low–Med | Customer model, booking intake, CSV import, Money reports | staged 2026-10-02 — prompt ready |
+| 28 | Tips on online payments | 🔥 | Low–Med | Stripe payment links, payment ledger (#3) | staged 2026-10-02 — prompt ready (bundle with #24) |
+| 29 | Instant payouts | 🔥🔥 | Low–Med | Stripe Connect Express accounts | staged 2026-10-02 — prompt ready (bundle with #24) |
+| 30 | ACH / bank payments | 🔥 | Med | Stripe payment links + webhook, payment ledger (#3) | staged 2026-10-02 — prompt ready (webhook gap, see Why) |
+| 31 | Card-fee surcharge / convenience fee | 🔥 | Med (compliance-gated) | Payment links, invoice PDF | staged 2026-10-02 — evaluate-first |
+| 32 | Quote expiration dates | 🔥 | Low | Estimate approval loop (#1), estimate follow-up | staged 2026-10-02 — prompt ready |
+| 33 | Past-customer campaigns (+ customer tags) | 🔥🔥 | Med–High | Outreach, AI layer, lead source (#27) | staged 2026-10-02 — prompt ready (send channel evaluate-first) |
+| 34 | Referral program | 🔥 | Med | Booking link (#9/#11), lead source (#27), review requests | staged 2026-10-02 — prompt ready (after #27) |
 
 ---
 
@@ -705,6 +716,163 @@ later phase with its own approval.
 
 ---
 
+## Phases 24–34 — second competitive-gap review (added 2026-10-02)
+
+> **Scope:** features Jobber and/or Housecall Pro offer that TradeReady lacks
+> and that matter to a **one-person** business. Team, dispatch and crew
+> features are excluded, and so is everything already in Phases 1–23. Each
+> "missing" claim was checked against the codebase on 2026-10-02. The
+> competitor descriptions come from general product knowledge, not a fresh
+> check of their sites, so re-verify them at kickoff.
+>
+> **Deliberately left out:** a website builder (the booking link and portal
+> cover most of it), an AI phone receptionist (expensive; Phase 16 is the
+> cheaper version), Reserve with Google / Local Services Ads (partner-gated),
+> supplier price catalogs (low solo value), and **batch invoicing**. Batch
+> invoicing is already covered by auto-invoice on job completion,
+> recurring-invoice auto-send (`utils/recurringAutoSend.ts`), and bulk
+> remind/settle (`native/TradeReadyNative/Domain/NativeInvoiceBulk.swift`).
+>
+> **Build target:** these are expected to land after the Phase 12 native
+> cutover, so the prompts target the SwiftUI app (`native/TradeReadyNative/`)
+> and the Worker (`backend-workers/`). If the React Native app is still the
+> shipping client at kickoff, say so first. Any change to synced data must
+> stay readable by whichever client is still in the field.
+
+## Phase 24 — Card on file & autopay for recurring invoices
+
+**Why:** Recurring invoices (Phase 6) generate on schedule and can auto-email, but the customer still has to open a link and pay every cycle. Jobber and Housecall Pro let the customer save a card or bank account once and charge it automatically on each cycle. For a solo operator with maintenance plans, this removes the most repetitive collection chore and most late payments. Today every payment link is a one-shot Stripe Payment Link minted per invoice (`backend-workers/src/routes/createPaymentLink.js`) with no Stripe Customer object. The webhook (`backend-workers/src/routes/stripe/webhook.js`) only handles `checkout.session.completed`. Card on file therefore needs Stripe Customers on each connected account, a saved payment method collected with explicit customer consent, off-session charges, and real failure handling. Tips (#28) and instant payouts (#29) touch the same Stripe surface, so consider bundling them.
+
+**Kickoff prompt:**
+> Brainstorm first, then give me a phase-gated plan and stop for my go-ahead before coding. Read `CLAUDE.md`, the recurring-invoices design (`docs/superpowers/specs/2026-07-31-recurring-invoices-design.md`), the deposits/payment-ledger design (`docs/superpowers/specs/2026-07-18-deposits-partial-payments-design.md`), `backend-workers/src/routes/createPaymentLink.js`, `backend-workers/src/routes/stripe/webhook.js`, and `native/TradeReadyNative/Domain/NativeRecurringInvoices.swift`. I want customers on a recurring plan to be able to save a card (and optionally a bank account) and have each generated invoice charged automatically. Cover:
+> - **Consent:** how the customer opts in (the portal or the first payment page), the authorization/mandate wording, and how they cancel autopay.
+> - **Stripe shape:** Customers and saved payment methods on the *connected* Express account, off-session PaymentIntents, and the pinned API version (`2023-10-16`). Say whether that version needs a bump; any bump needs my approval.
+> - **Charging:** who triggers the charge (Worker cron vs device), idempotency so an invoice is never charged twice, and how a charge lands in the payment ledger through the same path as a link payment.
+> - **Failure:** declines, expired cards, and authentication-required (SCA) charges. Fall back to a normal payment link plus an owner notification, and never retry silently in a loop.
+> - **Owner control:** per-plan autopay toggle, visibility of the saved method (brand/last-4 only), and the owner's ability to remove it.
+> - **Store and legal:** privacy-label, terms and privacy-policy implications.
+> Flag every migration and every new webhook event type. Stop for go-ahead.
+
+## Phase 25 — Good/better/best quote options
+
+**Why:** An estimate today is a single total. Both competitors let you send tiered options (e.g. "repair / replace with standard unit / replace with high-efficiency unit") and optional add-on line items the customer ticks on the approval page. It's one of the most heavily marketed features in both apps because it raises the average job size without any upselling conversation, which suits a solo tradesperson who hates selling. It builds on the estimate approval loop (Phase 1) and the portal (Phase 12). The hard parts are the data model and keeping the golden-tested pricing engine honest per option.
+
+**Kickoff prompt:**
+> Brainstorm first, then give me a phase-gated plan and stop for my go-ahead before coding. Read `CLAUDE.md`, the estimate-approval design (`docs/superpowers/specs/2026-07-17-estimate-approval-loop-design.md`), the portal design (`docs/superpowers/specs/2026-08-07-portal-completion-design.md`), `backend-workers/src/routes/estimate/view.js` and `backend-workers/src/routes/estimate/respond.js`, and the native pricing calculator and send-estimate flow. I want estimates with (a) 2–3 named tiers the customer chooses between, and (b) optional add-on items the customer can tick. Cover:
+> - **Data model:** how options live on the job/estimate without breaking existing single-total estimates or the other client's unknown-field preservation, and whether this is a migration.
+> - **Pricing:** each tier runs through the existing pricing engine with its own golden tests; the stored total stays the source of truth.
+> - **Approval write-back:** the server records exactly which tier and add-ons were accepted in the immutable consent snapshot, and the job, invoice, deposit and profitability figures are rebuilt from that selection.
+> - **Interactions:** change orders after approval, declined/revised estimates, follow-up reminders, and the PDF (show all options before approval, only the chosen one after).
+> - **Owner UX:** keep creating tiers fast on a phone. Consider "duplicate this estimate as a tier" before building a full tier editor.
+> Stop for go-ahead.
+
+## Phase 26 — Google/iCloud calendar sync
+
+**Why:** A solo operator's personal calendar holds the dentist, school pickup and family plans. The booking link's availability engine (Phase 11) only knows about TradeReady jobs and time off, so a customer can book a slot that collides with a personal appointment. Jobber and Housecall Pro both sync with Google Calendar. Today TradeReady only emits ICS files for customers (`backend-workers/src/routes/estimate/portalIcs.js`, `backend-workers/src/routes/booking/manage.js`). There are two directions, and the cheap one may be enough to start:
+- **Outbound:** jobs appear in the owner's calendar, via a subscribable feed or an on-device "TradeReady" calendar.
+- **Inbound:** busy times from personal calendars block booking-link availability. This is the more valuable direction for solo operators.
+
+**Kickoff prompt:**
+> Brainstorm first, then give me a phase-gated plan and stop for my go-ahead before coding. Read `CLAUDE.md`, the calendar/availability design (`docs/superpowers/specs/2026-08-07-calendar-availability-booking-design.md`), `native/TradeReadyNative/Domain/NativeAvailability.swift`, its Worker twin behind `backend-workers/src/routes/booking/slots.js`, and `backend-workers/src/routes/estimate/portalIcs.js`. I want two-way calendar awareness. Compare options before recommending one:
+> - **Outbound:** a token-authenticated subscribable ICS feed (rotatable like portal tokens; job titles and addresses are PII), or EventKit writes into a dedicated on-device calendar.
+> - **Inbound:** on-device EventKit reading of the calendars the owner selects. This also covers Google calendars already on the phone. The device would push **free/busy blocks only** (no titles, attendees or notes) so the Worker's slot engine can honor them. Compare that with server-side Google Calendar OAuth.
+> - **Parity:** the native and Worker availability engines must stay in parity (extend the existing parity suite), and busy blocks must be fresh enough that a stale device doesn't create bookable slots.
+> - **Platform:** calendar permission strings, privacy manifest and App Store privacy-label changes. These need my approval.
+> Stop for go-ahead.
+
+## Phase 27 — Lead source tracking & revenue by source
+
+**Why:** A solo operator rarely knows which marketing works: the truck wrap, Google, Nextdoor, or word of mouth. Jobber and Housecall Pro record a lead source on each client and report revenue by source. TradeReady has no lead-source field (verified 2026-10-02). This is a small build with an outsized payoff. It tells the owner where to spend money, gives the AI coach a new grounded fact, and is the foundation for campaigns (#33) and referrals (#34).
+
+**Kickoff prompt:**
+> Brainstorm first, then give me a phase-gated plan and stop for my go-ahead before coding. Read `CLAUDE.md`, `types/models.ts` (Customer/Job), the CSV import design (`docs/superpowers/specs/2026-08-06-data-import-design.md`), the native booking intake (`native/TradeReadyNative/Domain/NativeBookingIntake.swift`), and the Money reports (`native/TradeReadyNative/Domain/NativeMoneyReports.swift`). I want a lead source on each customer (and possibly each job, since repeat customers can come back through a different channel; recommend one). Cover:
+> - **Options:** a short preset list plus custom entries.
+> - **Auto-tagging:** booking-link and portal requests are tagged automatically.
+> - **Import:** map Jobber/Housecall Pro lead-source columns in CSV import.
+> - **Reporting:** a Money report of customers, jobs won, estimate close rate and collected revenue by source for a period. Every number is computed deterministically and tested.
+> - **Coach:** the coach may cite these figures but never invent them.
+> - **Compatibility:** stay compatible with existing customers that have no source ("Unknown" is a real bucket, not an error).
+> Stop for go-ahead.
+
+## Phase 28 — Tips on online payments
+
+**Why:** Both competitors let a customer add an optional tip when paying online, and residential customers do tip small trades. Payment links today charge exactly the invoice balance. The money side needs care: a tip is income but not an invoice payment, so it must not create an "overpaid" invoice, and it must show up correctly in Money, tax set-aside, CSV export and the accountant package. Small build; consider bundling with #24.
+
+**Kickoff prompt:**
+> Brainstorm first, then give me a phase-gated plan and stop for my go-ahead before coding. Read `CLAUDE.md`, `backend-workers/src/routes/createPaymentLink.js`, `backend-workers/src/routes/stripe/webhook.js`, and the payment-ledger design (`docs/superpowers/specs/2026-07-18-deposits-partial-payments-design.md`). I want an owner-controlled setting (default off) that lets customers add a tip when paying online. Check what the pinned Stripe API version actually supports for this (optional items, a customer-chosen extra amount, or moving to Checkout Sessions) rather than assuming. Then design:
+> - how the tip is recorded separately from the invoice payment, so the balance and overpayment logic is untouched;
+> - how tips appear in Money, tax set-aside, CSV export and the accountant package;
+> - what the customer sees on the receipt.
+> Stop for go-ahead.
+
+## Phase 29 — Instant payouts
+
+**Why:** Standard Stripe payouts take a couple of business days, which hurts a solo operator buying materials for tomorrow's job out of today's payment. Jobber (Instant Payouts) and Housecall Pro (Instapay) sell same-day access for a fee. TradeReady's connected accounts are Stripe **Express** (`backend-workers/src/routes/stripe/createConnectAccount.js`). Stripe can offer instant payouts to eligible Express accounts, so the first version may be mostly platform configuration plus a "Get paid now" link into the Express dashboard rather than a new in-app payout flow. Whether TradeReady adds its own fee on top is a business decision.
+
+**Kickoff prompt:**
+> Brainstorm first, then give me a recommendation and a phase-gated plan, and stop for my go-ahead. Read `CLAUDE.md` and the Stripe Connect routes under `backend-workers/src/routes/stripe/`. I want owners to be able to get paid out instantly. Compare (a) enabling Stripe instant payouts for Express accounts and linking out to the Express dashboard, against (b) an in-app "Pay out now" action through the API with up-front fee disclosure. Cover eligibility (debit card on file, account age and limits), how the fee is shown, whether the platform adds any fee (my business call, so lay out the options), and what changes in Stripe platform settings, which I'll do myself. Stop for go-ahead.
+
+## Phase 30 — ACH / bank payments
+
+**Why:** Card fees on a $6k job are real money. Both competitors push bank (ACH) payments for large invoices at a lower fee. Today "ACH" exists only as a manually recorded payment method. **There is also a latent risk to fix before anyone enables bank payments.** Payment links don't pin `payment_method_types`, so the available methods follow the platform's Stripe settings for connected accounts. If ACH were turned on there, a bank payment fires `checkout.session.completed` with `payment_status: 'unpaid'`, which the webhook skips by design. The webhook does not handle the later `checkout.session.async_payment_succeeded` / `async_payment_failed` events (`backend-workers/src/routes/stripe/webhook.js`), so the invoice would never be auto-marked paid.
+
+**Kickoff prompt:**
+> Brainstorm first, then give me a phase-gated plan and stop for my go-ahead before coding. Read `CLAUDE.md`, `backend-workers/src/routes/createPaymentLink.js`, `backend-workers/src/routes/stripe/webhook.js`, and the payment-ledger design (`docs/superpowers/specs/2026-07-18-deposits-partial-payments-design.md`). I want customers to be able to pay large invoices by bank transfer (ACH). First confirm whether ACH is currently reachable on any connected account through dynamic payment methods. Then design:
+> - handling of the async success and failure events;
+> - a "payment pending" state in the ledger and UI, so a bank payment isn't shown as collected days before it clears;
+> - reversal of a failed or returned payment through the ledger's existing void semantics;
+> - an owner setting for when to offer bank payment (e.g. invoices over $X);
+> - customer-facing copy about settlement time.
+> Any Stripe dashboard setting change is mine to make. Stop for go-ahead.
+
+## Phase 31 — Card-fee surcharge / convenience fee (evaluate first)
+
+**Why:** Both competitors let the business pass card processing fees to the customer. A solo operator on thin margins feels the ~3% on every job. Compliance is the catch: card-network rules (caps, required disclosure, credit only and never debit), some U.S. states restrict or ban surcharges, and the fee must be shown before payment. A "cash/bank discount" framing is sometimes the compliant alternative. This is evaluate-first, not a straight build.
+
+**Kickoff prompt:**
+> Before any design work, give me an honest memo, not a build. Can TradeReady offer card-fee pass-through compliantly on Stripe for U.S. solo contractors? Cover card-network surcharge rules, the state restrictions and how we'd handle them (e.g. the owner attests to their state, or the feature is disabled where barred), the debit-card problem, required disclosure on the invoice PDF and payment page, and the "discount for bank/cash payment" alternative. We are not giving legal advice, so recommend the disclaimer wording. Only if it's a go: read `CLAUDE.md` and `backend-workers/src/routes/createPaymentLink.js`, then produce a phase-gated plan that keeps the fee as its own line, separate from the invoice balance, in the ledger and exports. Stop for go-ahead either way.
+
+## Phase 32 — Quote expiration dates
+
+**Why:** Estimates currently stay approvable forever. That exposes a solo operator to "I'd like to accept that quote from March" after material prices have moved, and it gives the customer no reason to decide. Jobber and Housecall Pro both support quote expiry. Small build on the approval loop.
+
+**Kickoff prompt:**
+> Brainstorm first, then give me a phase-gated plan and stop for my go-ahead before coding. Read `CLAUDE.md`, the estimate-approval design (`docs/superpowers/specs/2026-07-17-estimate-approval-loop-design.md`), `backend-workers/src/routes/estimate/respond.js`, `backend-workers/src/routes/estimate/reviseDeclined.js`, and the native estimate follow-up policy. I want a "valid until" date on estimates:
+> - **Default:** a configurable number of days in pricing settings, editable per estimate.
+> - **Display:** shown on the PDF and the approval page.
+> - **Enforcement:** server-side, so an expired estimate can't be approved and the customer is offered "request an updated quote" instead.
+> - **Owner:** can extend or re-issue.
+> - **Reminders and insights:** the follow-up reminder and a Today insight mention the upcoming expiry.
+> Mind local-date handling (the FA-039 west-of-UTC class of bugs). Expiry is a calendar date in the owner's timezone, so test it under `TZ=America/Phoenix`. Stop for go-ahead.
+
+## Phase 33 — Past-customer campaigns (+ customer tags)
+
+**Why:** The cheapest work for a solo operator is a past customer: "Time for your spring AC tune-up," "Gutter season," "Annual water-heater flush." Jobber Campaigns and Housecall Pro's email/postcard marketing exist for this. The solo-sized version is narrower: pick a segment (last service date, job type, tag, lead source from #27), have the AI draft the message, review it, and send. The sending channel is the big decision. On-device one-at-a-time composers (like today's outreach) need no provider but get tedious past ~20 customers. Server-side bulk email needs a provider, unsubscribe handling, a CAN-SPAM physical address and deliverability work. Customer tags are a prerequisite and useful on their own.
+
+**Kickoff prompt:**
+> Brainstorm first, then give me a phase-gated plan and stop for my go-ahead before coding. Read `CLAUDE.md`, `native/TradeReadyNative/Domain/NativeInvoiceOutreach.swift` (the reviewed-outreach pattern), the AI-layer rules in Phase 15 above (AI drafts, never sends; deterministic code picks the recipients), and the lead-source work from Phase 27 if it has shipped. I want past-customer campaigns:
+> - **Tags:** free-form customer tags, with filtering.
+> - **Segments:** built from last service date, job type, tags and lead source, with a live recipient count and preview.
+> - **Drafting:** an AI-drafted message the owner edits.
+> - **Sending:** give me an evaluate-first comparison of on-device sequential sending against a server-side email provider (cost, deliverability, unsubscribe and CAN-SPAM obligations, new dependency and privacy-label impact). Any provider needs my approval.
+> - **Results:** track replies and bookings back to the campaign where possible.
+> Never auto-send, and never message a customer who opted out. Stop for go-ahead.
+
+## Phase 34 — Referral program
+
+**Why:** Word of mouth is the main lead source for most solo trades. Jobber's marketing tools include referral links and rewards. The solo-sized version gives each customer a personal link (the booking link plus a referral code). Bookings through that link are attributed to the referrer via lead source (#27), and the owner gets a prompt to thank and reward them. The reward itself stays manual: a thank-you, a gift card, or a credit on their next invoice. Pairs naturally with the post-job review request. Build after #27.
+
+**Kickoff prompt:**
+> Brainstorm first, then give me a phase-gated plan and stop for my go-ahead before coding. Read `CLAUDE.md`, the calendar/availability booking design (`docs/superpowers/specs/2026-08-07-calendar-availability-booking-design.md`), the booking routes under `backend-workers/src/routes/booking/`, the review-request flow, and the Phase 27 lead-source work. I want a referral program:
+> - **Links:** per-customer referral links layered on the existing booking link. Codes must be unguessable and must not expose the referrer's identity or contact details to the new customer.
+> - **Attribution:** bookings attributed to the referrer.
+> - **Owner view:** "who referred whom" and referral revenue, using the same deterministic numbers as the lead-source report.
+> - **Sharing:** an owner-reviewed "share your link" message the owner can attach to the review request.
+> - **Rewards:** owner-recorded only (e.g. a credit applied to the referrer's next invoice through the ledger). No automated payouts, no money movement.
+> Stop for go-ahead.
+
+---
+
 ## 2026-08-06 update — external audit & next queue
 
 A second external audit (Codex; the first was ChatGPT's, reviewed 2026-08-03) was
@@ -770,6 +938,13 @@ depth-not-breadth, solo-operator thesis holds.
 
 ## Notes
 
+- **Phases 24–34 (added 2026-10-02):** a second Jobber/Housecall Pro gap
+  review, solo-operator scope. Suggested order: 24 (with 28 and 29 bundled
+  onto the same Stripe work), 25, 26, 27, then the rest. Gates to respect:
+  30 must fix the async-payment webhook gap before ACH is enabled anywhere;
+  31 is evaluate-first and compliance-gated; 33's sending channel is
+  evaluate-first; 34 depends on 27. Not prioritized against Phase 12
+  cutover or anything already in flight.
 - **Phases 16–22 (added 2026-08-09):** a fresh competitive-gap review against
   Jobber/Housecall Pro/QuickBooks Self-Employed, done after Phases 11–15
   shipped. Deliberately scoped post-1.2 — none are prioritized ahead of
