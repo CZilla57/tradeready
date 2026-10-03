@@ -112,6 +112,71 @@ run("job edits preserve rich and unknown fields") {
     expect(futureResult.preservation.unknownFields["futureJobField"] != nil, "unknown job field retained")
 }
 
+run("Phase 25 review: undecided quote options own the job price, not the job editor") {
+    var source: Canonical.Job = try field("job", rich)
+    source.quoteOptions = Canonical.QuoteOptions(
+        tiers: [
+            Canonical.QuoteTier(id: "qt_good", name: "Good", pricingOf: source),
+            Canonical.QuoteTier(id: "qt_better", name: "Better", pricingOf: source)
+        ],
+        addOns: [],
+        recommendedTierId: "qt_good"
+    )
+    expect(CanonicalUIAdapters.hasUndecidedQuoteOptions(source), "options without an acceptance are undecided")
+    var edit = try CanonicalUIAdapters.edit(source)
+    edit.value.estimateTotal = 400
+    edit.value.laborHours = 9
+    edit.value.laborRate = 50
+    edit.value.notes = "Bring the ladder"
+    let result = try CanonicalUIAdapters.canonical(from: edit)
+    expect(result.estimateTotal == source.estimateTotal && result.laborHours == source.laborHours
+           && result.laborRate == source.laborRate,
+           "a job-editor save keeps the recommended option's total, hours and rate")
+    expect(result.estimateTotal == result.quoteOptions?.tier(id: "qt_good")?.estimateTotal,
+           "the job total still mirrors the recommended tier (M1)")
+    expect(result.notes == "Bring the ladder", "the editor's other fields still save")
+
+    var accepted = source
+    accepted.quoteOptions?.acceptance = Canonical.QuoteAcceptance(
+        tierId: "qt_better", addOnIds: [], total: source.estimateTotal,
+        acceptedAt: "2026-10-03T09:00:00.000Z", source: Canonical.QuoteAcceptance.sourceOwner
+    )
+    expect(!CanonicalUIAdapters.hasUndecidedQuoteOptions(accepted), "accepted options are decided")
+    var acceptedEdit = try CanonicalUIAdapters.edit(accepted)
+    acceptedEdit.value.estimateTotal = 400
+    let acceptedResult = try CanonicalUIAdapters.canonical(from: acceptedEdit)
+    expect(acceptedResult.estimateTotal == 400, "after the choice the owner's price edit applies as before")
+    var plainEdit = try CanonicalUIAdapters.edit(try field("job", rich, as: Canonical.Job.self))
+    plainEdit.value.estimateTotal = 400
+    let plainResult = try CanonicalUIAdapters.canonical(from: plainEdit)
+    expect(plainResult.estimateTotal == 400, "a single-total job's price edit is unchanged")
+}
+
+run("Phase 25 review: estimate line labels fit the Worker's 300-character cap") {
+    var source: Canonical.Job = try field("job", rich)
+    source.approval = nil
+    source.jobCosts?[0].label = String(repeating: "p", count: 450)
+    source.quoteOptions = Canonical.QuoteOptions(
+        tiers: [
+            Canonical.QuoteTier(id: "qt_good", name: "Good", pricingOf: source),
+            Canonical.QuoteTier(id: "qt_better", name: "Better", pricingOf: source)
+        ],
+        addOns: [],
+        recommendedTierId: "qt_good"
+    )
+    let snapshot = try CanonicalUIAdapters.estimateApprovalSnapshot(job: source, customerName: nil, businessName: "Ada Electric")
+    let labels = snapshot.lineItems.map(\.label) + (snapshot.options?.tiers.flatMap { $0.lineItems.map(\.label) } ?? [])
+    expect(!labels.isEmpty && labels.allSatisfy { $0.utf16.count <= CanonicalUIAdapters.estimateLineLabelMaxLength },
+           "every top-level and option line label is at most 300 UTF-16 code units")
+    let capped = String(repeating: "p", count: 299) + "\u{2026}"
+    expect(labels.contains(capped), "the long direct-cost label is cut to 299 characters plus an ellipsis")
+    expect(CanonicalUIAdapters.estimateDirectCostLabel(source.jobCosts![0]) == capped,
+           "invoice and estimate direct-cost labels stay identical")
+    expect(CanonicalUIAdapters.cappedEstimateLineLabel("City permit") == "City permit"
+           && CanonicalUIAdapters.cappedEstimateLineLabel(String(repeating: "a", count: 300)).utf16.count == 300,
+           "labels within the cap are unchanged")
+}
+
 run("job duplication carries only the production whitelist") {
     let source: Canonical.Job = try field("job", rich)
     let sourceBefore = try json(source)

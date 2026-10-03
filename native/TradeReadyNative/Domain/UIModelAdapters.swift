@@ -316,6 +316,10 @@ enum CanonicalUIAdapters {
     /// - Accepted: a single estimate of the job's (accepted, M2) pricing plus
     ///   one line per accepted add-on. Add-on prices are subtracted before the
     ///   residual operating-cost line; there is no `options` key.
+    /// - Accepted through the link, while the job's total is still the
+    ///   consented total: the frozen lines the customer approved
+    ///   (`linkApprovedEstimateLines(job:)`), so a tier edited after sending
+    ///   never changes the accepted estimate the owner shares.
     static func estimateApprovalSnapshot(
         job: Canonical.Job,
         customerName: String?,
@@ -331,23 +335,13 @@ enum CanonicalUIAdapters {
             guard let recommended = quoteOptions.tier(id: quoteOptions.recommendedTierId) else {
                 throw CanonicalUIAdapterError.invalidCanonicalRecord("quote-options")
             }
-            lineItems = estimateLineFields(EstimatePricing(recommended), total: recommended.estimateTotal)
-                .map(Canonical.JSONValue.object)
+            lineItems = estimateLines(EstimatePricing(recommended), total: recommended.estimateTotal)
+                .map(lineJSON)
             total = recommended.estimateTotal
-        } else if let quoteOptions = job.quoteOptions {
-            let addOns = quoteOptions.acceptedAddOns
-            let reserved = addOns.reduce(Decimal.zero) { $0 + $1.price }
-            lineItems = estimateLineFields(
-                EstimatePricing(job),
-                total: job.estimateTotal,
-                reservedBeforeResidual: reserved
-            ).map(Canonical.JSONValue.object)
-            lineItems += addOns.map {
-                .object(["label": .string($0.label), "amount": .number($0.price)])
-            }
+        } else if job.quoteOptions != nil, let approved = linkApprovedEstimateLines(job: job) {
+            lineItems = approved.map { lineJSON(($0.label, $0.amount)) }
         } else {
-            lineItems = estimateLineFields(EstimatePricing(job), total: job.estimateTotal)
-                .map(Canonical.JSONValue.object)
+            lineItems = currentPricingLines(job).map(lineJSON)
         }
 
         var fields: [String: Canonical.JSONValue] = [
@@ -392,8 +386,7 @@ enum CanonicalUIAdapters {
                 "id": .string(tier.id),
                 "name": .string(tier.name),
                 "lineItems": .array(
-                    estimateLineFields(EstimatePricing(tier), total: tier.estimateTotal)
-                        .map(Canonical.JSONValue.object)
+                    estimateLines(EstimatePricing(tier), total: tier.estimateTotal).map(lineJSON)
                 ),
                 "total": .number(tier.estimateTotal)
             ]
@@ -445,12 +438,13 @@ enum CanonicalUIAdapters {
     /// customer-visible direct costs, then a positive residual "Overhead &
     /// operating costs" line. `reservedBeforeResidual` (accepted add-on
     /// prices) is taken out of the residual so the add-ons can be listed as
-    /// their own lines without changing the total.
-    private static func estimateLineFields(
+    /// their own lines without changing the total. Every label is capped at
+    /// the Worker's `MAX_LINE_LABEL_CHARS` (`estimateLineLabelMaxLength`).
+    private static func estimateLines(
         _ pricing: EstimatePricing,
         total: Decimal,
         reservedBeforeResidual: Decimal = 0
-    ) -> [[String: Canonical.JSONValue]] {
+    ) -> [(label: String, amount: Decimal)] {
         let laborCost = pricing.laborHours * pricing.laborRate
         let materialBase = pricing.materials.reduce(Decimal.zero) {
             $0 + $1.quantity * $1.unitCost
@@ -468,32 +462,113 @@ enum CanonicalUIAdapters {
             return (estimateDirectCostLabel(cost), FinancialDecimal.cents(amount))
         }
 
-        var lineItems: [[String: Canonical.JSONValue]] = [[
-            "label": .string("Labor (\(estimateNumber(pricing.laborHours)) hrs @ $\(estimateNumber(pricing.laborRate))/hr)"),
-            "amount": .number(laborCost)
-        ]]
+        var lines: [(label: String, amount: Decimal)] = [(
+            "Labor (\(estimateNumber(pricing.laborHours)) hrs @ $\(estimateNumber(pricing.laborRate))/hr)",
+            laborCost
+        )]
         if !pricing.materials.isEmpty {
             let suffix = pricing.materials.count == 1 ? "item" : "items"
-            lineItems.append([
-                "label": .string("Materials (\(pricing.materials.count) \(suffix))"),
-                "amount": .number(materialCost)
-            ])
+            lines.append(("Materials (\(pricing.materials.count) \(suffix))", materialCost))
         }
-        for directCost in visibleDirectCosts {
-            lineItems.append([
-                "label": .string(directCost.0),
-                "amount": .number(directCost.1)
-            ])
-        }
+        lines.append(contentsOf: visibleDirectCosts.map { (label: $0.0, amount: $0.1) })
         let visibleDirectTotal = visibleDirectCosts.reduce(Decimal.zero) { $0 + $1.1 }
         let operatingCost = total - laborCost - materialCost - visibleDirectTotal - reservedBeforeResidual
         if operatingCost > 0 {
-            lineItems.append([
-                "label": .string("Overhead & operating costs"),
-                "amount": .number(operatingCost)
-            ])
+            lines.append((estimateOverheadLineLabel, operatingCost))
         }
-        return lineItems
+        return lines.map { (label: cappedEstimateLineLabel($0.label), amount: $0.amount) }
+    }
+
+    private static func lineJSON(_ line: (label: String, amount: Decimal)) -> Canonical.JSONValue {
+        .object(["label": .string(line.label), "amount": .number(line.amount)])
+    }
+
+    /// The customer lines the job's *current* pricing derives, exactly as the
+    /// snapshot builder would freeze them when no link acceptance is in force:
+    /// the accepted tier plus accepted add-on lines once options are accepted
+    /// (M2), otherwise the job's own single-estimate lines. Undecided options
+    /// derive the job's lines too (they mirror the recommended tier, M1).
+    private static func currentPricingLines(_ job: Canonical.Job) -> [(label: String, amount: Decimal)] {
+        guard let quoteOptions = job.quoteOptions, quoteOptions.acceptance != nil else {
+            return estimateLines(EstimatePricing(job), total: job.estimateTotal)
+        }
+        let addOns = quoteOptions.acceptedAddOns
+        let reserved = addOns.reduce(Decimal.zero) { $0 + $1.price }
+        return estimateLines(EstimatePricing(job), total: job.estimateTotal, reservedBeforeResidual: reserved)
+            + addOns.map { (label: $0.label, amount: $0.price) }
+    }
+
+    /// The customer lines the job's current pricing derives (see
+    /// `currentPricingLines`), as snapshot line items. Phase 25 review fix:
+    /// compared with `linkApprovedEstimateLines(job:)` to decide whether the
+    /// approved lines still match what the pricing would bill.
+    static func currentEstimateLines(job: Canonical.Job) -> [Canonical.EstimateApprovalSnapshot.LineItem] {
+        currentPricingLines(job).map { .init(label: $0.label, amount: $0.amount) }
+    }
+
+    /// The customer lines a quote tier's pricing derives (its frozen
+    /// `snapshot.options` lines). Phase 25 review fix: finds the draft tier
+    /// that still prices a single-price estimate exactly as it was sent.
+    static func estimateLineItems(for tier: Canonical.QuoteTier) -> [Canonical.EstimateApprovalSnapshot.LineItem] {
+        estimateLines(EstimatePricing(tier), total: tier.estimateTotal).map { .init(label: $0.label, amount: $0.amount) }
+    }
+
+    /// Phase 25 review fix (spec §12 "Review fixes (2026-10-03)"): the
+    /// estimate lines the customer approved through the link, while that
+    /// approval is still the job's price — or `nil`.
+    ///
+    /// - Options: a link acceptance with the server's `selection` for the
+    ///   accepted tier, and the job's total still the consented
+    ///   `selection.total`. The lines are the accepted tier's frozen
+    ///   `snapshot.options` lines (the selection's tier lines when the
+    ///   snapshot lacks the tier) followed by one line per selected add-on at
+    ///   its frozen amount. An owner-recorded acceptance has no customer
+    ///   snapshot and returns `nil` (current pricing applies).
+    /// - Single price: an approved snapshot without options on a job without
+    ///   options, whose total is still the snapshot total. The lines are the
+    ///   snapshot's.
+    ///
+    /// Once the owner re-prices the job (its total moves off the approved
+    /// total) the owner's pricing applies again and this returns `nil`.
+    static func linkApprovedEstimateLines(job: Canonical.Job) -> [Canonical.EstimateApprovalSnapshot.LineItem]? {
+        guard let approval = job.approval, approval.decision == "approved" else { return nil }
+        if let quoteOptions = job.quoteOptions {
+            guard let acceptance = quoteOptions.acceptance,
+                  acceptance.source == Canonical.QuoteAcceptance.sourceLink,
+                  let selection = approval.selection,
+                  selection.tierId == acceptance.tierId,
+                  job.estimateTotal == selection.total
+            else { return nil }
+            let tierLines = approval.snapshot.options?.tiers.first(where: { $0.id == selection.tierId })?.lineItems
+                ?? Array(selection.lineItems.dropLast(min(selection.addOns.count, selection.lineItems.count)))
+            return tierLines.map { .init(label: $0.label, amount: $0.amount) }
+                + selection.addOns.map { .init(label: $0.label, amount: $0.amount) }
+        }
+        guard approval.snapshot.options == nil, job.estimateTotal == approval.snapshot.total else { return nil }
+        return approval.snapshot.lineItems.map { .init(label: $0.label, amount: $0.amount) }
+    }
+
+    /// The Worker's `MAX_LINE_LABEL_CHARS` for frozen option line labels
+    /// (`backend-workers/lib/estimate/quoteOptions.js`), in UTF-16 code units
+    /// like JavaScript's `String.length`.
+    static let estimateLineLabelMaxLength = 300
+    static let estimateOverheadLineLabel = "Overhead & operating costs"
+
+    /// Phase 25 review fix: owner-named direct costs are the only uncapped
+    /// line labels; a longer one would make the Worker refuse the whole
+    /// options estimate (400 at send). Trims to 299 code units on a
+    /// character boundary and appends an ellipsis.
+    static func cappedEstimateLineLabel(_ label: String) -> String {
+        guard label.utf16.count > estimateLineLabelMaxLength else { return label }
+        var capped = ""
+        var length = 0
+        for character in label {
+            let width = String(character).utf16.count
+            guard length + width <= estimateLineLabelMaxLength - 1 else { break }
+            capped.append(character)
+            length += width
+        }
+        return capped + "\u{2026}"
     }
 
     /// Mirrors the backend's `planApprovalWrite` semantics. An approved
@@ -651,6 +726,13 @@ enum CanonicalUIAdapters {
         return FinancialDecimal.integerCentsSum([tierTotal] + options.acceptedAddOns.map(\.price))
     }
 
+    /// Phase 25 review fix: the job carries good/better/best options with no
+    /// acceptance yet, so its top-level price mirrors the recommended tier
+    /// (M1) and is owned by the options sheet, not the job editor.
+    static func hasUndecidedQuoteOptions(_ job: Canonical.Job) -> Bool {
+        job.quoteOptions != nil && job.quoteOptions?.acceptance == nil
+    }
+
     private static func apply(
         _ pricing: NativeJobPricingDraft,
         total: Decimal,
@@ -673,9 +755,11 @@ enum CanonicalUIAdapters {
 
     /// Not `private`: also used by `JobInvoiceDomain`'s line-item builder, so
     /// an invoice's direct-cost labels match the estimate review's exactly.
+    /// Phase 25 review fix: an owner label longer than the Worker's line-label
+    /// cap is shortened here, so the estimate and the invoice still agree.
     static func estimateDirectCostLabel(_ cost: Canonical.JobCost) -> String {
         let ownLabel = cost.label.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !ownLabel.isEmpty { return ownLabel }
+        if !ownLabel.isEmpty { return cappedEstimateLineLabel(ownLabel) }
         switch cost.category {
         case PricingCostCategory.permit.rawValue: return "Permit"
         case PricingCostCategory.disposal.rawValue: return "Disposal"
@@ -826,9 +910,17 @@ enum CanonicalUIAdapters {
         update(&fields, "description", edit.value.description, original.description)
         if edit.value.status != original.status { fields["status"] = .string(edit.value.status.rawValue) }
         update(&fields, "address", edit.value.address, original.address)
-        updateNumber(&fields, "estimateTotal", edit.value.estimateTotal, original.estimateTotal)
-        updateNumber(&fields, "laborHours", edit.value.laborHours, original.laborHours)
-        updateNumber(&fields, "laborRate", edit.value.laborRate, original.laborRate)
+        // Phase 25 review fix (invariant M1): while good/better/best options
+        // are undecided the job's price is the recommended tier's, edited
+        // only through the options sheet or the calculator (which writes the
+        // tier too). A job-editor or other UI-model save keeps the baseline's
+        // pricing, so a stale or hand-typed total can never drift from the
+        // tier the customer is sent.
+        if !hasUndecidedQuoteOptions(edit.baseline) {
+            updateNumber(&fields, "estimateTotal", edit.value.estimateTotal, original.estimateTotal)
+            updateNumber(&fields, "laborHours", edit.value.laborHours, original.laborHours)
+            updateNumber(&fields, "laborRate", edit.value.laborRate, original.laborRate)
+        }
         update(&fields, "notes", edit.value.notes, original.notes)
         updateOptional(&fields, "invoiceId", edit.value.invoiceId, original.invoiceId)
         updateOptional(&fields, "archivedAt", edit.value.archivedAt, original.archivedAt)
