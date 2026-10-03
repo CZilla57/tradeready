@@ -480,6 +480,8 @@ enum NativeAnalyticsScreen: String, CaseIterable, Sendable {
     // No RN route (native-only or an RN modal component)
     case expenseEditor, paymentEditor, invoiceDetail, onMyWayReview, appointmentConfirmationReview
     case changeOrderReview, bookingRequests, customerPortal, jobPhotos, syncSettings, passwordRecovery
+    // Phase 25: good/better/best quote options (native-only sheets).
+    case quoteOptions, quoteAddOnEditor, quoteOwnerChoice
 
     var routeName: String? {
         switch self {
@@ -531,7 +533,8 @@ enum NativeAnalyticsScreen: String, CaseIterable, Sendable {
         case .pricebookEntry: "PricebookEntry"
         case .exportData: "ExportData"
         case .expenseEditor, .paymentEditor, .invoiceDetail, .onMyWayReview, .appointmentConfirmationReview,
-             .changeOrderReview, .bookingRequests, .customerPortal, .jobPhotos, .syncSettings, .passwordRecovery:
+             .changeOrderReview, .bookingRequests, .customerPortal, .jobPhotos, .syncSettings, .passwordRecovery,
+             .quoteOptions, .quoteAddOnEditor, .quoteOwnerChoice:
             nil
         }
     }

@@ -34,7 +34,8 @@ private func makeJob(
     estimateSentAt: String? = nil,
     approvalSentAt: String? = nil,
     title: String = "Water heater swap",
-    total: String = "850"
+    total: String = "850",
+    quoteOptions: String? = nil
 ) throws -> Canonical.Job {
     let approval = approvalSentAt.map {
         """
@@ -42,8 +43,9 @@ private func makeJob(
         """
     } ?? ""
     let sent = estimateSentAt.map { ",\"estimateSentAt\":\"\($0)\"" } ?? ""
+    let options = quoteOptions.map { ",\"quoteOptions\":\($0)" } ?? ""
     let json = """
-    {"id":"\(id)","customerId":"c1","customerName":"Dave Smith","title":"\(title)","description":"","status":"\(status)","scheduledDate":null,"scheduledStartTime":null,"scheduledEndTime":null,"address":"","estimateTotal":\(total),"laborHours":3,"laborRate":85,"materials":[],"materialMarkup":20,"overhead":15,"margin":20,"notes":"","invoiceId":null,"createdAt":"2026-07-01"\(sent)\(approval)}
+    {"id":"\(id)","customerId":"c1","customerName":"Dave Smith","title":"\(title)","description":"","status":"\(status)","scheduledDate":null,"scheduledStartTime":null,"scheduledEndTime":null,"address":"","estimateTotal":\(total),"laborHours":3,"laborRate":85,"materials":[],"materialMarkup":20,"overhead":15,"margin":20,"notes":"","invoiceId":null,"createdAt":"2026-07-01"\(sent)\(approval)\(options)}
     """
     return try JSONDecoder().decode(Canonical.Job.self, from: Data(json.utf8))
 }
@@ -225,6 +227,46 @@ enum EstimateFollowUpTests {
             calendar: calendar
         )
         expect(decidedDraft == nil, "an answered estimate cannot open a stale follow-up draft")
+
+        // Phase 25: undecided good/better/best options quote "from" the
+        // lowest tier, whatever the tier order or the recommended tier.
+        func tier(_ id: String, _ total: String) -> String {
+            #"{"id":"\#(id)","name":"\#(id)","laborHours":3,"laborRate":85,"materials":[],"materialMarkup":20,"overhead":15,"margin":20,"estimateTotal":\#(total)}"#
+        }
+        let tiers = "[\(tier("standard", "1800")),\(tier("repair", "450.5")),\(tier("premium", "2600"))]"
+        let undecidedOptions = try makeJob(
+            title: "Water heater",
+            total: "1800",
+            quoteOptions: #"{"tiers":\#(tiers),"addOns":[],"recommendedTierId":"standard"}"#
+        )
+        let optionsMessage = NativeEstimateFollowUp.message(job: undecidedOptions, customerFirstName: "Dave")
+        expect(
+            optionsMessage == "Hi Dave, just checking in on your quote options for Water heater (from $450.50). Happy to answer any questions — want me to get you on the schedule?",
+            "Phase 25: undecided options copy quotes the lowest tier total"
+        )
+        let optionsDraft = NativeEstimateFollowUp.draft(
+            job: undecidedOptions,
+            customerName: "Dave Smith",
+            customerPhone: "555-0100",
+            customerEmail: "",
+            businessName: "Rector Plumbing",
+            calendar: calendar
+        )
+        expect(
+            optionsDraft?.body == optionsMessage && optionsDraft?.estimateTotal == 1800
+                && optionsDraft?.emailSubject == "Checking in on your estimate — Rector Plumbing",
+            "Phase 25: the options draft uses the options copy and keeps the job's displayed total"
+        )
+        let acceptedOptions = try makeJob(
+            title: "Water heater",
+            total: "1950",
+            quoteOptions: #"{"tiers":\#(tiers),"addOns":[],"recommendedTierId":"standard","acceptance":{"tierId":"standard","addOnIds":[],"total":1950,"acceptedAt":"2026-08-02T10:00:00.000Z","source":"owner"}}"#
+        )
+        expect(
+            NativeEstimateFollowUp.message(job: acceptedOptions, customerFirstName: "Dave")
+                == "Hi Dave, just checking in on the estimate I sent over for Water heater ($1,950). Happy to answer any questions — want me to get you on the schedule?",
+            "Phase 25: accepted options use the normal single-estimate copy"
+        )
         expect(
             NativeEstimateFollowUp.canOpenNotification(
                 exactOwnerWorkspace: true,

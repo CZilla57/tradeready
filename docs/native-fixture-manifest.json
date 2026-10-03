@@ -7,7 +7,7 @@
    "testSources": [
     {
      "path": "native/AccessibilityAuditTests",
-     "sha256": "c088acc7e0782d8091d16b3b4fd1696a66d4872279e7b530a301969cb59955ae"
+     "sha256": "b035a213e1b73284e4c90bd420bf5c7fbaa1e2b273f35be8446a4488e7ab5b2f"
     }
    ],
    "fixtures": []
@@ -643,7 +643,7 @@
    "testSources": [
     {
      "path": "native/EstimateFollowUpTests",
-     "sha256": "25e40c6af90484d72e73fa544a68cbad093fc29ca3e7947dbcfc4b758a1dd043"
+     "sha256": "8df65a6270b698c65799fb515d1e51ce74497e9d2adc0ebee0f8c0cac8e70bce"
     }
    ],
    "fixtures": []
@@ -654,7 +654,7 @@
    "testSources": [
     {
      "path": "native/EstimateMessageDraftTests",
-     "sha256": "64e2e83224b5f02a7c05babc79dd9ab1ccc4346c8a6f7a072f96268cc5ba0cc2"
+     "sha256": "9f0ea78361c71d4b31e9deb9d2115f72fa3d13fcfc1a37eab64d1ca04af7047b"
     }
    ],
    "fixtures": []
@@ -665,7 +665,7 @@
    "testSources": [
     {
      "path": "native/EstimatePDFTests",
-     "sha256": "ebd34b015b664463ebb4e5cf3f4c7b4425da9a3622d9f30ceb01ee9d06d9eaf0"
+     "sha256": "608a5d6694ec9aeaf968fb9016fc58ee8f675611e850736fa7dc6d4cb76a3434"
     }
    ],
    "fixtures": []
@@ -921,7 +921,7 @@
    "testSources": [
     {
      "path": "native/LayoutMetricsTests",
-     "sha256": "3fc7045245fc31ed73f3cc30129c81e6ae510134077b1d0db1aec398dd71ef25"
+     "sha256": "c65ab5130679ca2dadf81a49738fda815b6a7d81f169d61f57e2e698e747c765"
     }
    ],
    "fixtures": []
@@ -1286,6 +1286,17 @@
     {
      "path": "native/PricebookUITests",
      "sha256": "88ac17913b139465a5e4a11c92678841524b0bf87edcc9855fe2a8fc286ddd3c"
+    }
+   ],
+   "fixtures": []
+  },
+  "quote-options-store": {
+   "script": "native/run-quote-options-store-tests.sh",
+   "scriptSha256": "7e0fca043af245877f773b02a322ac5f83a450fe2ba684d360129b83d10d8506",
+   "testSources": [
+    {
+     "path": "native/QuoteOptionsStoreTests",
+     "sha256": "0a3e05a71805464d714e30ba8df7447b828d5a9378be0c12adeee35e8ad86593"
     }
    ],
    "fixtures": []
@@ -2061,6 +2072,10 @@
   "bookingValidate": {
    "path": "__tests__/bookingValidate.test.js",
    "sha256": "8152cecdc398117cd76988c9bcb64859b1fae5d55fb8a6cf2a05ab5f67acad50"
+  },
+  "bookingValidateLeadSource": {
+   "path": "__tests__/bookingValidateLeadSource.test.js",
+   "sha256": "9c39948c00721fc4903ad069d3730bba685a038574473962c87606be1c27b352"
   },
   "bulkInvoiceActions": {
    "path": "__tests__/bulkInvoiceActions.test.ts",

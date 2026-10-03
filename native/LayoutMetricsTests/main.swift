@@ -269,6 +269,8 @@ let confirmationShortcutPolicy: [String: String] = [
     "Save": Shortcut.save,
     "isEditing ? \"Save Changes\" : \"Add Trip\"": Shortcut.save,
     "saveLabel, action: save": Shortcut.save,
+    // Phase 25: the owner-recorded option choice commits like a save.
+    "Approve": Shortcut.save,
 ]
 
 /// The shortcut policy (contract §12.1 A11): what a toolbar button must
@@ -430,6 +432,10 @@ let scrollRootInventory: [String: Int] = [
     "NativePricebookEntryView.swift|NativePricebookEntryView|Form": 1,
     "NativePricebookView.swift|NativePricebookView|List": 1,
     "NativePricingCalculator.swift|NativePricingCalculatorView|Form": 1,
+    // Phase 25: the quote-options sheet, its add-on editor and owner choice.
+    "NativeQuoteOptionsView.swift|NativeQuoteOptionsView|Form": 1,
+    "NativeQuoteOptionsView.swift|NativeQuoteAddOnEditorView|Form": 1,
+    "NativeQuoteOptionsView.swift|NativeQuoteOwnerChoiceView|Form": 1,
     "NativeRecurringInvoicesView.swift|NativeRecurringInvoicesView|List": 1,
     "NativeRecurringInvoicesView.swift|NativeRecurringInvoiceEditor|Form": 1,
     "NativeRecurringJobsView.swift|NativeRecurringJobsView|List": 1,

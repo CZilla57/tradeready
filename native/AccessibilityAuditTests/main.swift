@@ -840,6 +840,13 @@ let viewFileInventory: Set<String> = [
     // for Remove, a preview that scales with Dynamic Type and is labeled for VoiceOver
     // ("Business logo" / "No logo yet"), and a text alert for a failed pick.
     "N/NativeBusinessLogoSection.swift",
+    // Phase 25 (good/better/best quote options), reviewed: Form sheets whose
+    // option and add-on fields carry text labels and the Done bar, a
+    // Recommended toggle with a hint, text-titled Edit pricing / Duplicate /
+    // Delete rows (Delete and Remove options confirm through titled dialogs),
+    // an owner-choice picker whose radio rows combine into one element with
+    // the selected trait, and text alerts for every refusal.
+    "N/NativeQuoteOptionsView.swift",
     "N/NativeAuthView.swift", "N/NativeBookingRequestsView.swift",
     "N/NativeBookingSettingsView.swift", "N/NativeCalendarView.swift", "N/NativeChangeOrdersView.swift",
     "N/NativeCoachComponents.swift", "N/NativeConfirmation.swift", "N/NativeCreateInvoiceFromJobView.swift",
@@ -968,6 +975,8 @@ let keyboardDoneBarCoverage: [String: String] = [
     "NativeMileageLogView": "NativeMileageLogView",
     "NativePricebookEntryView": "NativePricebookEntryView",
     "NativePricingCalculatorView": "NativePricingCalculatorView",
+    "NativeQuoteTierTextFields": "NativeQuoteOptionsView",
+    "NativeQuoteAddOnEditorView": "NativeQuoteAddOnEditorView",
     "NativeRecurringInvoiceEditor": "NativeRecurringInvoiceEditor",
     "NativeRecurringJobEditor": "NativeRecurringJobEditor",
     "NativeReviewRequestView": "NativeReviewRequestView",
@@ -1609,7 +1618,8 @@ func testSemanticColors(root: URL, sources: [SourceFile]) {
     }
     // 13: Phase 12 (12.00b.1, D3) adds the Discard button of each entry in
     // `NativeRejectedChangesView`. 14: the Remove logo button on Business Profile.
-    expectEqual(inRowDestructive, 14, "in-row destructive buttons audited")
+    // 16: Phase 25's Delete option and Remove options rows.
+    expectEqual(inRowDestructive, 16, "in-row destructive buttons audited")
     if let views = file(sources, "NativeAccessibilityViews.swift") {
         let raw = String(views.raw)
         expect(raw.contains("func nativeDestructiveText() -> some View {\n        modifier(NativeDestructiveText())"),

@@ -233,6 +233,8 @@ struct JobDetailView: View {
     @State private var isBeginningRevision = false
     @State private var revisionErrorMessage: String?
     @State private var showingRecurringJobs = false
+    @State private var showingQuoteOptions = false
+    @State private var showingQuoteOwnerChoice = false
 
     private var job: Job? { store.jobs.first { $0.id == jobID } }
     private var reviewSent: Bool { store.reviewRequestRecords.first(where: { $0.jobId == jobID })?.sentAt != nil }
@@ -269,6 +271,8 @@ struct JobDetailView: View {
                 .sheet(isPresented: $showingRecurringJobs) { NativeRecurringJobsView() }
                 .sheet(item: $duplicateDraft) { JobEditor(duplicateDraft: $0) }
                 .sheet(item: $pricingDraft) { NativePricingCalculatorView(draft: $0) }
+                .sheet(isPresented: $showingQuoteOptions) { NativeQuoteOptionsView(jobID: job.id) }
+                .sheet(isPresented: $showingQuoteOwnerChoice) { NativeQuoteOwnerChoiceView(jobID: job.id) }
                 .sheet(item: $estimateReviewDraft) { NativeEstimateReviewView(draft: $0) }
                  .sheet(item: $invoiceFromJobDraft) { NativeCreateInvoiceFromJobView(draft: $0) }
                  .sheet(isPresented: reviewRequestIsPresented(jobID: job.id)) {
@@ -364,14 +368,32 @@ struct JobDetailView: View {
                 }
             }
         }
+        let quoteOptions = store.quoteOptionsState(jobID: job.id)
+        let optionsUndecided = quoteOptions.map { $0.hasOptions && $0.acceptance == nil } ?? false
         Section("Estimate") {
-            LabeledContent("Total", value: (listItem?.billableTotal ?? job.estimateTotal).currency)
+            LabeledContent(
+                optionsUndecided ? "Total (recommended option)" : "Total",
+                value: (listItem?.billableTotal ?? job.estimateTotal).currency
+            )
             LabeledContent("Labor", value: "\(job.laborHours.formatted()) hr × \(job.laborRate.currency)")
             Button(
-                job.estimateTotal > 0 ? "Edit pricing" : "Build estimate",
+                optionsUndecided ? "Edit recommended option" : (job.estimateTotal > 0 ? "Edit pricing" : "Build estimate"),
                 systemImage: "function"
             ) {
                 pricingDraft = store.jobPricingDraft(jobID: job.id)
+            }
+            // Phase 25 (spec §6.5): editable on a lead or sent estimate still
+            // open; read-only once options exist and the customer has chosen.
+            if let quoteOptions, quoteOptions.isEditable || quoteOptions.hasOptions {
+                Button {
+                    showingQuoteOptions = true
+                } label: {
+                    LabeledContent {
+                        Text(quoteOptionsSummary(quoteOptions))
+                    } label: {
+                        Label("Good / better / best options", systemImage: "square.stack.3d.up")
+                    }
+                }
             }
         }
         // `JobDetailScreen` renders the change-order and timer blocks
@@ -419,7 +441,13 @@ struct JobDetailView: View {
                     store.requestEstimateFollowUpReview(jobID: job.id, source: .jobDetail)
                 }
                 Button("Mark as approved by customer", systemImage: "checkmark.seal") {
-                    store.advanceJobLifecycle(id: job.id, from: .estimateSent)
+                    // Phase 25 (spec §6.4): with open options the owner picks
+                    // what the customer chose before the job is approved.
+                    if store.quoteOptionsState(jobID: job.id)?.needsOwnerChoice == true {
+                        showingQuoteOwnerChoice = true
+                    } else {
+                        store.advanceJobLifecycle(id: job.id, from: .estimateSent)
+                    }
                 }
             case .approved:
                 Button("Schedule this job", systemImage: "calendar.badge.plus") {
@@ -490,6 +518,13 @@ struct JobDetailView: View {
                 .disabled(isBeginningRevision)
             }
         }
+    }
+
+    private func quoteOptionsSummary(_ state: NativeQuoteOptionsState) -> String {
+        if let acceptance = state.acceptance { return "Chose \(acceptance.tierName)" }
+        guard state.hasOptions else { return "Off" }
+        let lowest = state.tiers.map(\.total).min() ?? 0
+        return "\(state.tiers.count) options, from \(NSDecimalNumber(decimal: lowest).doubleValue.currency)"
     }
 
     private func beginDeclinedRevision() {

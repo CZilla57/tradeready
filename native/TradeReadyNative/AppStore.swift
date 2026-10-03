@@ -2870,6 +2870,193 @@ final class AppStore: ObservableObject {
         }
     }
 
+    // MARK: Phase 25: good/better/best quote options
+
+    /// The quote-options sheet's read model, or nil when the job is gone.
+    /// Value copy, like `changeOrders(for:)`: every edit below re-resolves the
+    /// current canonical job, so an approval that lands while the sheet is
+    /// open makes the next edit fail closed (invariant M3).
+    func quoteOptionsState(jobID: String) -> NativeQuoteOptionsState? {
+        guard let job = snapshot.payload.jobs?.first(where: { $0.id == jobID }) else { return nil }
+        return NativeQuoteOptionsState(job: job)
+    }
+
+    /// A calculator draft for one tier, saved with `saveQuoteTierPricing`.
+    func quoteTierPricingDraft(jobID: String, tierID: String) -> NativeJobPricingDraft? {
+        guard let job = snapshot.payload.jobs?.first(where: { $0.id == jobID }),
+              let tier = job.quoteOptions?.tier(id: tierID)
+        else { return nil }
+        return NativeJobPricingDraft(job: job, tier: tier, settings: snapshot.payload.settings)
+    }
+
+    /// Saves a tier's calculator draft against the current canonical job. The
+    /// job's own pricing moves only when this is the tier it mirrors (M1/M2).
+    @discardableResult
+    func saveQuoteTierPricing(_ pricing: NativeJobPricingDraft, tierID: String) -> Bool {
+        mutateQuoteOptions(jobID: pricing.jobID) { job in
+            try NativeQuoteOptions.tierPricingSaved(job: job, tierID: tierID, draft: pricing)
+        }
+    }
+
+    /// "Duplicate this estimate as an option": the current pricing becomes
+    /// "Good" (recommended) and a copy becomes "Better".
+    @discardableResult
+    func startQuoteOptions(jobID: String) -> Bool {
+        mutateQuoteOptions(jobID: jobID) { try NativeQuoteOptions.startOptions(job: $0) }
+    }
+
+    @discardableResult
+    func duplicateQuoteTier(jobID: String, tierID: String) -> Bool {
+        mutateQuoteOptions(jobID: jobID) { try NativeQuoteOptions.duplicateTier(job: $0, tierID: tierID) }
+    }
+
+    @discardableResult
+    func deleteQuoteTier(jobID: String, tierID: String) -> Bool {
+        mutateQuoteOptions(jobID: jobID) { try NativeQuoteOptions.deleteTier(job: $0, tierID: tierID) }
+    }
+
+    /// Back to a single-total estimate priced as the kept tier.
+    @discardableResult
+    func removeQuoteOptions(jobID: String, keepingTierID: String) -> Bool {
+        mutateQuoteOptions(jobID: jobID) {
+            try NativeQuoteOptions.removeOptions(job: $0, keepingTierID: keepingTierID)
+        }
+    }
+
+    @discardableResult
+    func renameQuoteTier(jobID: String, tierID: String, name: String) -> Bool {
+        mutateQuoteOptions(jobID: jobID) {
+            try NativeQuoteOptions.renameTier(job: $0, tierID: tierID, name: name)
+        }
+    }
+
+    @discardableResult
+    func describeQuoteTier(jobID: String, tierID: String, description: String) -> Bool {
+        mutateQuoteOptions(jobID: jobID) {
+            try NativeQuoteOptions.describeTier(job: $0, tierID: tierID, description: description)
+        }
+    }
+
+    @discardableResult
+    func setRecommendedQuoteTier(jobID: String, tierID: String) -> Bool {
+        mutateQuoteOptions(jobID: jobID) {
+            try NativeQuoteOptions.setRecommendedTier(job: $0, tierID: tierID)
+        }
+    }
+
+    @discardableResult
+    func addQuoteAddOn(jobID: String, draft: NativeQuoteAddOnDraft) -> Bool {
+        mutateQuoteOptions(jobID: jobID) { try NativeQuoteOptions.addAddOn(job: $0, draft: draft) }
+    }
+
+    @discardableResult
+    func editQuoteAddOn(jobID: String, addOnID: String, draft: NativeQuoteAddOnDraft) -> Bool {
+        mutateQuoteOptions(jobID: jobID) {
+            try NativeQuoteOptions.editAddOn(job: $0, addOnID: addOnID, draft: draft)
+        }
+    }
+
+    @discardableResult
+    func deleteQuoteAddOn(jobID: String, addOnID: String) -> Bool {
+        mutateQuoteOptions(jobID: jobID) { try NativeQuoteOptions.deleteAddOn(job: $0, addOnID: addOnID) }
+    }
+
+    /// Spec §6.4 manual approval: "Mark as approved by customer" on a sent
+    /// estimate with options records the owner's choice (`source: owner`) and
+    /// advances the job to approved in one commit. Refused once the customer
+    /// has approved through the link (their selection wins).
+    @discardableResult
+    func recordOwnerQuoteAcceptance(
+        jobID: String,
+        tierID: String,
+        addOnIDs: [String],
+        on date: Date = .now
+    ) -> Bool {
+        let acceptedAt = Self.quoteAcceptanceTimestamp(date)
+        let saved = mutateQuoteOptions(jobID: jobID) { job in
+            guard job.status == JobStatus.estimateSent.rawValue else {
+                throw NativeQuoteOptionsError.notAnEstimate
+            }
+            var accepted = try NativeQuoteOptions.applyAcceptance(
+                job: job,
+                tierId: tierID,
+                addOnIds: addOnIDs,
+                acceptedAt: acceptedAt,
+                source: Canonical.QuoteAcceptance.sourceOwner
+            )
+            accepted.status = JobStatus.approved.rawValue
+            return accepted
+        }
+        // Task 11.08 parity with `advanceJobLifecycle`'s manual approval.
+        if saved { emitAnalytics(.jobStatusChanged(from: .estimateSent, to: .approved)) }
+        return saved
+    }
+
+    /// Every option edit: refused unless the options are still editable
+    /// (`NativeQuoteOptions.isEditable`), then one whole-job commit and upsert.
+    private func mutateQuoteOptions(
+        jobID: String,
+        transform: (Canonical.Job) throws -> Canonical.Job
+    ) -> Bool {
+        mutateJob(jobID: jobID) { job in
+            guard NativeQuoteOptions.isEditable(job) else {
+                throw NativeQuoteOptions.isReadOnly(job)
+                    ? NativeQuoteOptionsError.readOnly
+                    : NativeQuoteOptionsError.notAnEstimate
+            }
+            return try transform(job)
+        }
+    }
+
+    private static func quoteAcceptanceTimestamp(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
+    }
+
+    /// Phase 25 spec §6.3, the decision reconciler. Applies every
+    /// server-written customer decision the snapshot holds: status forward
+    /// from lead/sent estimate, and an approved option selection applied once
+    /// (`NativeQuoteOptions.reconcileEstimateDecision`). Runs after every
+    /// committed pull and at sign-in; idempotent, so a run that finds nothing
+    /// writes nothing. Gated like recurring generation (exact signed-in
+    /// workspace, after the initial sync) so it never queues a write another
+    /// owner's session could upload, and it leaves a refused change's record
+    /// alone until the owner resolves it. Returns the number of jobs changed.
+    @discardableResult
+    func reconcileEstimateDecisions() -> Int {
+        guard mayGenerateRecurringRecords, !persistenceWritesBlocked,
+              let refused = try? rejectedChangeKeys()
+        else { return 0 }
+        var updated = snapshot
+        var records = updated.payload.jobs ?? []
+        var changed: [Canonical.Job] = []
+        for index in records.indices where !refused.contains("jobs/\(records[index].id)") {
+            guard let next = NativeQuoteOptions.reconcileEstimateDecision(job: records[index]) else { continue }
+            records[index] = next
+            changed.append(next)
+        }
+        guard !changed.isEmpty else { return 0 }
+        updated.payload.jobs = records
+        do {
+            try commitSnapshot(updated)
+        } catch {
+            print("TradeReadyEstimateDecisions stage=commit")
+            return 0
+        }
+        do {
+            let drafts = try changed.map {
+                Canonical.MutationDraft(table: "jobs", op: .upsert, recordId: $0.id, payload: try Self.mutationPayload($0))
+            }
+            try mutationQueue.enqueueBatch(drafts)
+            scheduleSyncAfterLocalChange()
+        } catch {
+            print("TradeReadyMutationQueue stage=enqueue-estimate-decisions")
+            recordLocalSyncFailure("queue/enqueue-estimate-decisions")
+        }
+        return changed.count
+    }
+
     /// Canonical read model for the change-order section. Callers receive a
     /// value copy, so an open sheet cannot mutate or later overwrite the
     /// snapshot without going back through the ID-based commit methods below.
@@ -3222,6 +3409,8 @@ final class AppStore: ObservableObject {
         case let typed as NativeChangeOrderError:
             typed.localizedDescription
         case let typed as NativeTimeTrackingError:
+            typed.localizedDescription
+        case let typed as NativeQuoteOptionsError:
             typed.localizedDescription
         case let write as NativeJobMutationWriteFailure:
             write.message
@@ -6115,6 +6304,9 @@ final class AppStore: ObservableObject {
                 )
                 refreshRecurringJobs()
                 refreshRecurringInvoices()
+                // Phase 25 spec §6.3: decisions an earlier build pulled but
+                // never applied; gated like generation, after the gate.
+                reconcileEstimateDecisions()
                 // Fix round 2 (G5): RN runs its Square token heal on every
                 // sign-in (`App.tsx`); gated like generation, after the gate.
                 scrubLegacySquareToken()
@@ -6209,6 +6401,8 @@ final class AppStore: ObservableObject {
                 // gated on the post-initial-sync state). Synchronous, so no
                 // suspension is added before the publish below.
                 self.runRecurringGenerationAfterInitialSync()
+                // Phase 25 spec §6.3: decisions the first pull brought.
+                self.reconcileEstimateDecisions()
                 // Fix round 2 (G5): the first sign-in's synced settings may
                 // carry a Square token; heal it before anything publishes.
                 self.scrubLegacySquareToken()
@@ -7966,10 +8160,22 @@ final class AppStore: ObservableObject {
         for table in rebase.heldCursorTables {
             committedCursor.tables[table] = cursor.tables[table]
         }
-        do { try commitSnapshot(rebase.snapshot) }
+        // Phase 25 spec §6.3 rebase graft: a job kept local for a change still
+        // queued takes the customer decision this pull brought (same approval
+        // token, server-only fields), so pushing the queued edit cannot erase
+        // it. A refused change keeps its record untouched.
+        var rebased = rebase.snapshot
+        let graft = NativeQuoteOptions.graftingServerDecisions(
+            live: rebased.payload.jobs ?? [],
+            pulled: outcome.snapshot.payload.jobs ?? [],
+            pendingJobIDs: Self.jobIDs(inKeys: pendingNow.subtracting(rejectedNow))
+        )
+        if !graft.grafted.isEmpty { rebased.payload.jobs = graft.jobs }
+        do { try commitSnapshot(rebased) }
         catch { return .failed("pull/local-commit") }
         do { try syncCursorStore.save(committedCursor) }
         catch { return .failed("pull/cursor-commit") }
+        requeueGraftedJobs(graft.grafted)
         // Phase 12 (12.00b.2-I fix round 1, review I1): pending booking and
         // portal mirrors may merge once a pull has brought the settings and
         // customer rows. A partial pull that missed either does not count.
@@ -7986,6 +8192,9 @@ final class AppStore: ObservableObject {
         // occurrences materialize before any recurrence-manager refresh reads
         // them. A no-op when nothing is due; never fails the pull.
         refreshRecurringJobs()
+        // Phase 25 spec §6.3: customer decisions this pull brought move the
+        // job's status and apply an approved option selection.
+        reconcileEstimateDecisions()
         // Fix round 2 (G5): a pull can resurrect a Square token from another
         // device's (or an old RN build's) settings blob; heal it locally and
         // queue the cleaned blob. A no-op when nothing needs scrubbing.
@@ -8856,6 +9065,8 @@ final class AppStore: ObservableObject {
             return Self.rejectedChangeClearMessage
         }
         refreshRejectedChanges()
+        // Phase 25 spec §6.3: the server's job may carry a customer decision.
+        if table == "jobs" { reconcileEstimateDecisions() }
         return nil
     }
 
@@ -8893,6 +9104,34 @@ final class AppStore: ObservableObject {
     /// change still waiting to reach the server.
     private func pendingMutationKeys() -> Set<String> {
         Set(mutationQueue.load().map { "\($0.table)/\($0.recordId)" })
+    }
+
+    /// The job ids among queue keys (`jobs/<id>`).
+    private static func jobIDs(inKeys keys: Set<String>) -> Set<String> {
+        Set(keys.compactMap { $0.hasPrefix("jobs/") ? String($0.dropFirst("jobs/".count)) : nil })
+    }
+
+    /// Phase 25 rebase graft: replaces each grafted job's queued upsert with
+    /// the grafted record, keeping the queued change's guard. A job whose
+    /// change left the queue meanwhile (pushed) or is a delete is skipped.
+    private func requeueGraftedJobs(_ jobs: [Canonical.Job]) {
+        guard !jobs.isEmpty else { return }
+        let queued = mutationQueue.load()
+        do {
+            let drafts = try jobs.compactMap { job -> Canonical.MutationDraft? in
+                guard let item = queued.first(where: { $0.table == "jobs" && $0.recordId == job.id }),
+                      item.op == .upsert
+                else { return nil }
+                return Canonical.MutationDraft(
+                    table: "jobs", op: .upsert, recordId: job.id,
+                    payload: try Self.mutationPayload(job), ifUnchangedSince: item.ifUnchangedSince
+                )
+            }
+            try mutationQueue.enqueueBatch(drafts)
+        } catch {
+            print("TradeReadyMutationQueue stage=enqueue-decision-graft")
+            recordLocalSyncFailure("queue/enqueue-decision-graft")
+        }
     }
 
     struct PulledDeltaRebase {
@@ -9358,7 +9597,9 @@ final class AppStore: ObservableObject {
         return JobInvoiceDomain.computeBillableBreakdown(
             estimateTotal: job.estimateTotal, laborHours: job.laborHours, laborRate: job.laborRate,
             materials: materials, materialMarkup: job.materialMarkup, directCosts: directCosts,
-            status: job.status, timeSessions: sessions, changeOrders: changeOrderMirrors(job)
+            status: job.status, timeSessions: sessions, changeOrders: changeOrderMirrors(job),
+            // Phase 25: accepted add-ons bill as their own lines.
+            addOnLines: NativeQuoteOptions.invoiceAddOnLines(job: job)
         )
     }
 

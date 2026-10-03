@@ -85,11 +85,15 @@ struct NativeEstimateReviewView: View {
                 Section("Estimate") {
                     Text(draft.snapshot.jobTitle).font(.headline)
                     LabeledContent("Customer", value: draft.snapshot.customerName)
-                    ForEach(Array(draft.snapshot.lineItems.enumerated()), id: \.offset) { _, line in
-                        LabeledContent(line.label, value: money(line.amount))
+                    if let options = draft.snapshot.options {
+                        optionRows(options)
+                    } else {
+                        ForEach(Array(draft.snapshot.lineItems.enumerated()), id: \.offset) { _, line in
+                            LabeledContent(line.label, value: money(line.amount))
+                        }
+                        LabeledContent("Total", value: money(draft.snapshot.total))
+                            .font(.headline)
                     }
-                    LabeledContent("Total", value: money(draft.snapshot.total))
-                        .font(.headline)
                     Button {
                         exportPDF()
                     } label: {
@@ -259,6 +263,69 @@ struct NativeEstimateReviewView: View {
         .nativeAnalyticsScreen(.estimateReview)
     }
 
+    /// Phase 25 (good/better/best): every tier of an undecided options
+    /// snapshot in order (name, a text "Recommended" marker, description, its
+    /// lines and its total), then the optional add-ons. An accepted estimate's
+    /// snapshot has no `options`, so it keeps the single-estimate rows above.
+    @ViewBuilder
+    private func optionRows(_ options: Canonical.EstimateApprovalSnapshot.Options) -> some View {
+        ForEach(Array(options.tiers.enumerated()), id: \.offset) { index, tier in
+            let isRecommended = tier.id == options.recommendedTierId
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Option \(index + 1): \(tier.name)")
+                    .font(.headline)
+                if isRecommended {
+                    Label("Recommended", systemImage: "star.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.tradeInfoText)
+                }
+                if let description = tier.description, !description.isEmpty {
+                    Text(description)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.top, index == 0 ? 0 : 8)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+            ForEach(Array(tier.lineItems.enumerated()), id: \.offset) { _, line in
+                LabeledContent(line.label, value: money(line.amount))
+            }
+            LabeledContent("Option \(index + 1) total", value: money(tier.total))
+                .font(.headline)
+        }
+        if !options.addOns.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Optional add-ons")
+                    .font(.headline)
+                Text("The customer can add any of these to the option they choose.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.top, 8)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+            ForEach(Array(options.addOns.enumerated()), id: \.offset) { _, addOn in
+                LabeledContent {
+                    Text("+\(money(addOn.amount))")
+                } label: {
+                    Text(addOn.label)
+                    if let description = addOn.description, !description.isEmpty {
+                        Text(description)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(addOnAccessibilityLabel(addOn))
+            }
+        }
+    }
+
+    private func addOnAccessibilityLabel(_ addOn: Canonical.EstimateApprovalSnapshot.OptionAddOn) -> String {
+        var parts = ["Optional add-on: \(addOn.label)", "adds \(money(addOn.amount))"]
+        if let description = addOn.description, !description.isEmpty { parts.append(description) }
+        return parts.joined(separator: ", ")
+    }
+
     private func copyMessage() {
         let visible = NativeEstimatePreparedMessage(
             subject: visibleSubject,
@@ -382,11 +449,17 @@ struct NativeEstimateReviewView: View {
             switch outcome {
             case .success(let link):
                 approvalLink = link.url
+                // Phase 25: an options snapshot invites a choice, not a yes.
+                let hasOptions = draft.snapshot.options != nil
                 if !emailBody.contains(link.url.absoluteString) {
-                    emailBody += "\n\nView and approve your estimate here:\n\(link.url.absoluteString)"
+                    emailBody += hasOptions
+                        ? "\n\nView your options and approve here:\n\(link.url.absoluteString)"
+                        : "\n\nView and approve your estimate here:\n\(link.url.absoluteString)"
                 }
                 if !textBody.contains(link.url.absoluteString) {
-                    textBody += " View & approve: \(link.url.absoluteString)"
+                    textBody += hasOptions
+                        ? " View options & approve: \(link.url.absoluteString)"
+                        : " View & approve: \(link.url.absoluteString)"
                 }
             case .failure(let error):
                 dismissAfterLinkError = error == .estimateChanged

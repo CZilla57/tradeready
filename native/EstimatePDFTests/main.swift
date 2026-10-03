@@ -27,6 +27,87 @@ private func approvalSnapshot() throws -> Canonical.EstimateApprovalSnapshot {
     return try JSONDecoder().decode(Canonical.EstimateApprovalSnapshot.self, from: Data(json.utf8))
 }
 
+/// Phase 25: a job with three good/better/best tiers (the middle one
+/// recommended) and two add-ons, one carrying an internal `cost` that must
+/// never reach the customer document. `acceptance` (raw JSON) marks it decided.
+private func optionsJob(estimateTotal: String = "1800", acceptance: String? = nil) throws -> Canonical.Job {
+    let accepted = acceptance.map { ",\"acceptance\":\($0)" } ?? ""
+    let json = """
+    {"id":"job-options","customerId":"c1","customerName":"Pat O'Brien","title":"Water heater","description":"","status":"lead","scheduledDate":null,"scheduledStartTime":null,"scheduledEndTime":null,"address":"","estimateTotal":\(estimateTotal),"laborHours":4,"laborRate":100,"materials":[],"materialMarkup":0,"overhead":10,"margin":20,"notes":"","invoiceId":null,"createdAt":"2026-07-01",
+     "quoteOptions":{"tiers":[
+       {"id":"qt_good","name":"Repair","description":"Replace the thermostat and anode rod.","laborHours":2,"laborRate":100,"materials":[],"materialMarkup":0,"overhead":10,"margin":20,"estimateTotal":450},
+       {"id":"qt_better","name":"Standard unit","laborHours":4,"laborRate":100,"materials":[],"materialMarkup":0,"overhead":10,"margin":20,"estimateTotal":1800},
+       {"id":"qt_best","name":"High-efficiency unit","description":"Hybrid heat pump water heater.","laborHours":5,"laborRate":100,"materials":[],"materialMarkup":0,"overhead":10,"margin":20,"estimateTotal":2600}
+     ],"addOns":[
+       {"id":"qa_haul","label":"Haul-away","description":"Remove and recycle the old tank.","price":150,"cost":37.25},
+       {"id":"qa_pan","label":"Drain pan","price":45.5}
+     ],"recommendedTierId":"qt_better"\(accepted)}}
+    """
+    return try JSONDecoder().decode(Canonical.Job.self, from: Data(json.utf8))
+}
+
+private func review(snapshot: Canonical.EstimateApprovalSnapshot) -> NativeEstimateReviewDraft {
+    NativeEstimateReviewDraft(
+        jobID: "job-options",
+        expectedStatus: .lead,
+        snapshot: snapshot,
+        customerEmail: "pat@example.test",
+        customerPhone: "555-0199",
+        customerAddress: "10 Main St",
+        businessContactName: "Chad Rector",
+        businessPhone: "555-0100",
+        businessEmail: "hello@example.test",
+        businessAddress: "20 Trade Ave",
+        businessLogoReference: nil,
+        jobDescription: ""
+    )
+}
+
+private func optionsDocumentTests() throws {
+    let snapshot = try CanonicalUIAdapters.estimateApprovalSnapshot(
+        job: try optionsJob(),
+        customerName: nil,
+        businessName: "Rector Plumbing"
+    )
+    let document = NativeEstimatePDFDocument(review: review(snapshot: snapshot))
+    expect(document.options.map(\.name) == ["Repair", "Standard unit", "High-efficiency unit"],
+           "Phase 25: every tier is carried in snapshot order")
+    expect(document.options.map(\.isRecommended) == [false, true, false],
+           "Phase 25: only the recommended tier is flagged")
+    expect(document.options.map(\.total) == [450, 1800, 2600],
+           "Phase 25: each option keeps its own frozen total")
+    expect(document.options[0].description == "Replace the thermostat and anode rod."
+               && document.options[1].description.isEmpty,
+           "Phase 25: descriptions carry through and an absent one is empty")
+    expect(document.options.allSatisfy { !$0.lineItems.isEmpty }
+               && document.options[0].lineItems.first?.label == "Labor (2 hrs @ $100/hr)"
+               && document.options[0].lineItems.reduce(Decimal.zero) { $0 + $1.amount } == 450,
+           "Phase 25: each option's lines are its own derivation and sum to its total")
+    expect(document.addOns == [
+        NativeEstimatePDFAddOn(label: "Haul-away", description: "Remove and recycle the old tank.", amount: 150),
+        NativeEstimatePDFAddOn(label: "Drain pan", description: "", amount: 45.5)
+    ], "Phase 25: add-ons carry label, description and customer price in order")
+    expect(Mirror(reflecting: document.addOns[0]).children.compactMap(\.label) == ["label", "description", "amount"]
+               && !String(describing: document).contains("37.25"),
+           "Phase 25: the add-on's internal cost never reaches the document")
+    expect(document.lineItems.map(\.amount) == snapshot.lineItems.map(\.amount) && document.total == 1800,
+           "Phase 25: top-level lines and total stay the recommended tier's, as before")
+
+    let acceptedSnapshot = try CanonicalUIAdapters.estimateApprovalSnapshot(
+        job: try optionsJob(
+            estimateTotal: "1950",
+            acceptance: #"{"tierId":"qt_better","addOnIds":["qa_haul"],"total":1950,"acceptedAt":"2026-10-01T12:00:00.000Z","source":"owner"}"#
+        ),
+        customerName: nil,
+        businessName: "Rector Plumbing"
+    )
+    let accepted = NativeEstimatePDFDocument(review: review(snapshot: acceptedSnapshot))
+    expect(accepted.options.isEmpty && accepted.addOns.isEmpty,
+           "Phase 25: an accepted estimate prints only the chosen option")
+    expect(accepted.total == 1950 && accepted.lineItems.last == NativeEstimatePDFLineItem(label: "Haul-away", amount: 150),
+           "Phase 25: the accepted document is one estimate with the accepted add-on as its own line")
+}
+
 @main
 enum EstimatePDFTests {
     static func main() throws {
@@ -69,6 +150,10 @@ enum EstimatePDFTests {
                "filename cannot escape the export directory")
         expect(NativeEstimatePDFDocument.filenameComponent("  !!!  ").isEmpty,
                "punctuation-only names have a safe empty component")
+        expect(document.options.isEmpty && document.addOns.isEmpty,
+               "Phase 25: a single-total estimate has no option or add-on blocks")
+
+        try optionsDocumentTests()
 
         if failures == 0 {
             print("PASS: native estimate PDF document tests")

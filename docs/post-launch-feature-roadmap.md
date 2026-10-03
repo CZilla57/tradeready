@@ -70,7 +70,7 @@ This is the current order for everything not yet built. It **supersedes** earlie
 | 22 | Customer financing at checkout | 🔥 | High (lender partnership) | Invoice/estimate send flow | **Out of scope (2026-10-02)** · staged 2026-08-09 — prompt ready (business decision, not just eng) |
 | 23 | Read-only open API for other services | 🔥 | Med | Workers backend, owner-scoped RLS, portal-token pattern | **Build #11** · staged 2026-08-12 — prompt ready |
 | 24 | Card on file & autopay for recurring invoices | 🔥🔥🔥 | Med–High | Stripe Connect, recurring invoices (#6), payment ledger (#3) | **Build #7** · staged 2026-10-02 — prompt ready |
-| 25 | Good/better/best quote options | 🔥🔥🔥 | Med–High | Pricing engine, estimate approval loop (#1), portal (#12) | **Build #1** · staged 2026-10-02 — prompt ready |
+| 25 | Good/better/best quote options | 🔥🔥🔥 | Med–High | Pricing engine, estimate approval loop (#1), portal (#12) | **Build #1** · BUILT 2026-10-02 on local `feat/quote-options` (native + Worker; pages on `tradeready-legal` `feat/quote-options`). Not deployed; ship steps in the spec §12 |
 | 26 | Google/iCloud calendar sync | 🔥🔥 | Med | Availability engine (#11), portal ICS endpoint | **Build #10** · staged 2026-10-02 — prompt ready |
 | 27 | Lead source tracking & revenue by source | 🔥🔥 | Low–Med | Customer model, booking intake, CSV import, Money reports | **Build #2** · staged 2026-10-02 — prompt ready |
 | 28 | Tips on online payments | 🔥 | Low–Med | Stripe payment links, payment ledger (#3) | **Build #8** · staged 2026-10-02 — prompt ready (bundle with #24) |

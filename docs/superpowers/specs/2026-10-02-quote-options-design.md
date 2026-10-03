@@ -1,7 +1,7 @@
 # Good/Better/Best Quote Options (Roadmap Phase 25) — Design Spec
 
 **Date:** 2026-10-02
-**Status:** BUILDING on `feat/quote-options` (owner go-ahead 2026-10-02: "scope out each feature first then begin the implementation")
+**Status:** BUILT on local branch `feat/quote-options` (native + Worker) and `tradeready-legal` branch `feat/quote-options` (pages), 2026-10-02. Nothing pushed, deployed or applied; see §12 for the ship steps. (Owner go-ahead 2026-10-02: "scope out each feature first then begin the implementation".)
 **Origin:** `docs/post-launch-feature-roadmap.md` Phase 25, build order #1
 **Builds on:** estimate approval loop (`2026-07-17-estimate-approval-loop-design.md`), portal completion (`2026-08-07-portal-completion-design.md`), change orders (`2026-08-05-change-orders-design.md`)
 **Build target (owner, 2026-10-02):** native SwiftUI app (`native/TradeReadyNative/`), the Worker (`backend-workers/`), and the public pages in the `CZilla57/tradeready-legal` repo. **No React Native changes.** The dormant Vercel twin (`backend/`) and the owner web app (`web/`) are not changed (see §10).
@@ -248,3 +248,44 @@ Deploys are the owner's. Nothing here is deployed or pushed.
 | D5 | Stale-page protection | Snapshot digest required for option estimates |
 | D6 | Native decision reconciler | Built here (closes the RN parity gap) |
 | D7 | Server-side approval preservation | New `jobs` trigger migration (file only; owner applies) |
+
+## 12. Build record (2026-10-02)
+
+**Built (native, `feat/quote-options`):**
+- Canonical types, the pure domain (`Domain/NativeQuoteOptions.swift`) and the consumers in §6.4: snapshot builder, invoice add-on lines, profitability add-on cost, duplicate whitelist, recurring copy.
+- `AppStore` wiring:
+  - Option edits all go through `mutateQuoteOptions`, which refuses unless `NativeQuoteOptions.isEditable` holds (lead or sent estimate, not read-only).
+  - `saveQuoteTierPricing` saves a tier's calculator draft.
+  - `recordOwnerQuoteAcceptance` records `source: owner` and approves the job in one commit.
+  - `reconcileEstimateDecisions` runs after every committed delta pull, after the initial sync, at a returning-user launch and after a refused job change is discarded. It is gated like recurring generation and skips refused records.
+  - The rebase graft runs inside the pull commit for jobs whose change is still queued. It also rewrites that queued upsert (keeping its guard), so the push carries the decision even when the reconciler has nothing to change.
+- SwiftUI:
+  - `NativeQuoteOptionsView.swift`: the options sheet, the add-on editor and the owner-choice picker.
+  - The calculator gains a tier mode (`NativePricingCalculatorView(draft:tierID:tierName:)`).
+  - Job detail gains the options row, and "Mark as approved by customer" opens the picker when options are open.
+- Customer documents: the review sheet, PDF, message drafts and follow-up copy, per §6.4.
+- Tests:
+  - `native/run-quote-options-tests.sh` covers the pure domain.
+  - `native/run-quote-options-store-tests.sh` covers the store over the in-memory Supabase server: edits and refusals, the owner choice, the reconciler through a real pull, and both halves of the graft (each verified to fail when its half is disabled).
+  - The estimate PDF, message-draft and follow-up suites gained option cases.
+
+**Built (Worker):** §4, with `backend-workers/tests/quoteOptions.test.cjs` and the root Jest portal test.
+
+**Built (`tradeready-legal`, branch `feat/quote-options`):** `estimate.html` and `portal.html` per §5. They were checked headlessly (jsdom, stubbed API):
+- tier and add-on totals use the server's cent math
+- the respond body is `{…, snapshotDigest, selection: {tierId, addOnIds}}`
+- 409 shows the reload banner
+- decline sends the digest and no selection
+- the approved view names the option
+- markup in names is escaped
+
+**Ship steps (owner; order matters):**
+1. Run `sh supabase/verify/job_approval_preserve.sh`, then apply `supabase/migrations/20261002_job_approval_preserve.sql`. This is the release-checklist blocker.
+2. Deploy the Worker.
+3. Publish the `tradeready-legal` pages. **Before any native build that can send options:** the old `estimate.html` posts no `selection`, so the Worker refuses an approval of an options estimate with 400 "Please choose an option."
+4. Ship the native build.
+
+**Residuals found while building:**
+- If the owner records a choice on the phone while the customer approves a *different* option through the link before the phone has pulled, the first acceptance stays (M3). The owner's pick is kept and the customer's `approval.selection` is still preserved and shown in history. That is the narrow race the manual-approval path has always had. The picker refuses once the customer's approval is on the device.
+- A job approved through the link while it sat in `declined` (the page lets a customer approve after declining) keeps its `declined` status. The reconciler only moves `lead`/`estimate_sent` forward (`JobLifecycleRules.statusAfterEstimateDecision`), so the owner sees the decision in the estimate history and revises from there. This is unchanged from the pre-existing rule.
+

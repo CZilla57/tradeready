@@ -30,6 +30,32 @@ enum NativeQuoteOptionsError: Error, Equatable {
     case invalidAddOnPrice
     /// Add-on internal cost negative, above 1,000,000, or finer than cents.
     case invalidAddOnCost
+    /// The job is past the estimate stage (not `lead` or `estimate_sent`),
+    /// so options can no longer be started or edited.
+    case notAnEstimate
+}
+
+extension NativeQuoteOptionsError: LocalizedError {
+    /// Owner-facing copy; `AppStore` publishes it unprefixed.
+    var errorDescription: String? {
+        switch self {
+        case .noOptions: "This estimate has no options."
+        case .alreadyHasOptions: "This estimate already has options."
+        case .readOnly: "The customer has chosen, so the options can no longer be changed."
+        case .tierNotFound: "That option no longer exists. Nothing was changed."
+        case .addOnNotFound: "That add-on no longer exists. Nothing was changed."
+        case .tierLimitReached: "An estimate can have at most 3 options."
+        case .tierMinimumReached: "Options need at least 2 choices. Use Remove options to go back to a single price."
+        case .addOnLimitReached: "An estimate can have at most 10 add-ons."
+        case .invalidTierName: "Give the option a name of up to 60 characters."
+        case .tierDescriptionTooLong: "Keep the option description to 300 characters or fewer."
+        case .invalidAddOnLabel: "Give the add-on a name of up to 80 characters."
+        case .addOnDescriptionTooLong: "Keep the add-on description to 200 characters or fewer."
+        case .invalidAddOnPrice: "Enter an add-on price above $0 and up to $1,000,000."
+        case .invalidAddOnCost: "Enter an internal cost from $0 up to $1,000,000, or leave it blank."
+        case .notAnEstimate: "Options can only be changed while the job is a lead or an estimate awaiting a reply."
+        }
+    }
 }
 
 /// The §3 selection errors. Raw values are the shared fixture's error codes
@@ -59,6 +85,99 @@ struct NativeQuoteAddOnDraft: Equatable {
         self.description = description
         self.price = price
         self.cost = cost
+    }
+}
+
+/// The quote-options sheet's read model (spec §6.5), projected from one
+/// canonical job by `AppStore.quoteOptionsState(jobID:)`.
+struct NativeQuoteOptionsState: Equatable {
+    struct Tier: Equatable, Identifiable {
+        let id: String
+        let name: String
+        let description: String
+        let total: Decimal
+        let isRecommended: Bool
+        let isAccepted: Bool
+    }
+
+    struct AddOn: Equatable, Identifiable {
+        let id: String
+        let label: String
+        let description: String
+        let price: Decimal
+        let cost: Decimal?
+        let isAccepted: Bool
+    }
+
+    struct Acceptance: Equatable {
+        let tierName: String
+        let addOnLabels: [String]
+        let total: Decimal
+        let acceptedAt: String
+        /// The customer chose through the approval link (vs. owner-recorded).
+        let viaLink: Bool
+    }
+
+    /// Empty for a single-total estimate.
+    let tiers: [Tier]
+    let addOns: [AddOn]
+    let acceptance: Acceptance?
+    /// Spec §6.5: start/edit only on a lead or sent estimate still open.
+    let isEditable: Bool
+    /// M3: accepted, or the customer's approval has landed.
+    let isReadOnly: Bool
+    /// The calculator's job total (the recommended tier before acceptance).
+    let jobTotal: Decimal
+
+    var hasOptions: Bool { !tiers.isEmpty }
+    var canDuplicateTier: Bool { isEditable && tiers.count < NativeQuoteOptions.maxTiers }
+    var canDeleteTier: Bool { isEditable && tiers.count > NativeQuoteOptions.minTiers }
+    var canAddAddOn: Bool { isEditable && addOns.count < NativeQuoteOptions.maxAddOns }
+    /// Manual approval needs the owner to pick: a sent estimate with options
+    /// and no customer decision yet.
+    var needsOwnerChoice: Bool { hasOptions && isEditable }
+
+    init(job: Canonical.Job) {
+        let options = job.quoteOptions
+        let acceptance = options?.acceptance
+        let acceptedAddOns = Set(acceptance?.addOnIds ?? [])
+        tiers = (options?.tiers ?? []).map {
+            Tier(
+                id: $0.id,
+                name: $0.name,
+                description: $0.description ?? "",
+                total: $0.estimateTotal,
+                isRecommended: $0.id == options?.recommendedTierId,
+                isAccepted: $0.id == acceptance?.tierId
+            )
+        }
+        addOns = (options?.addOns ?? []).map {
+            AddOn(
+                id: $0.id,
+                label: $0.label,
+                description: $0.description ?? "",
+                price: $0.price,
+                cost: $0.cost,
+                isAccepted: acceptedAddOns.contains($0.id)
+            )
+        }
+        self.acceptance = acceptance.map { accepted in
+            Acceptance(
+                // A tier deleted before a link acceptance landed (spec §6.3):
+                // the consented price still applies, under the customer's
+                // name for it when the approval carries one.
+                tierName: options?.tier(id: accepted.tierId)?.name
+                    ?? job.approval?.selection?.tierName
+                    ?? "Option no longer listed",
+                addOnLabels: (options?.acceptedAddOns ?? []).map(\.label),
+                total: accepted.total,
+                acceptedAt: accepted.acceptedAt,
+                viaLink: accepted.source == Canonical.QuoteAcceptance.sourceLink
+            )
+        }
+        isEditable = NativeQuoteOptions.isEditable(job)
+        isReadOnly = NativeQuoteOptions.isReadOnly(job)
+        jobTotal = job.estimateTotal
     }
 }
 
@@ -93,6 +212,12 @@ enum NativeQuoteOptions {
     /// approval has landed (even before the reconciler applies it).
     static func isReadOnly(_ job: Canonical.Job) -> Bool {
         job.quoteOptions?.acceptance != nil || job.approval?.decision == "approved"
+    }
+
+    /// Spec §6.5: options are started and edited only while the job is a
+    /// lead or a sent estimate and the choice is still open.
+    static func isEditable(_ job: Canonical.Job) -> Bool {
+        (job.status == "lead" || job.status == "estimate_sent") && !isReadOnly(job)
     }
 
     /// The cheapest tier total, for "from $X" copy. `nil` without options.
@@ -481,6 +606,30 @@ enum NativeQuoteOptions {
             result.approvalHistory = server.approvalHistory
         }
         return result
+    }
+
+    /// The graft over one pull: every `live` job whose id is in
+    /// `pendingJobIDs` (a change still queued) takes the pulled server copy's
+    /// decision per `graftingServerDecision(onto:from:)`. Returns the jobs in
+    /// live order and the grafted records, which the caller re-queues so the
+    /// pending push carries the decision instead of erasing it.
+    static func graftingServerDecisions(
+        live: [Canonical.Job],
+        pulled: [Canonical.Job],
+        pendingJobIDs: Set<String>
+    ) -> (jobs: [Canonical.Job], grafted: [Canonical.Job]) {
+        guard !pendingJobIDs.isEmpty else { return (live, []) }
+        let serverByID = Dictionary(pulled.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var grafted: [Canonical.Job] = []
+        let jobs = live.map { job -> Canonical.Job in
+            guard pendingJobIDs.contains(job.id),
+                  let server = serverByID[job.id],
+                  let next = graftingServerDecision(onto: job, from: server)
+            else { return job }
+            grafted.append(next)
+            return next
+        }
+        return (jobs, grafted)
     }
 
     // MARK: - Consumers (spec §6.4)

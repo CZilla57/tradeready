@@ -179,13 +179,31 @@ enum NativeEstimateFollowUp {
 
     /// Default copy only. The eventual UI must keep it editable and require a
     /// user-reviewed Apple composer or explicit copy action.
+    ///
+    /// Phase 25 (spec 2026-10-02 §6.4): while good/better/best options are
+    /// undecided the copy names the options and quotes the lowest tier
+    /// ("from $X"). Accepted options read as a normal single estimate.
     static func message(
         job: Canonical.Job,
         customerFirstName: String
     ) -> String {
-        "Hi \(customerFirstName), just checking in on the estimate I sent over for "
+        if let fromTotal = undecidedOptionsFromTotal(job) {
+            return "Hi \(customerFirstName), just checking in on your quote options for "
+                + "\(job.title) (from \(quote(fromTotal))). Happy to answer any "
+                + "questions — want me to get you on the schedule?"
+        }
+        return "Hi \(customerFirstName), just checking in on the estimate I sent over for "
             + "\(job.title) (\(quote(job.estimateTotal))). Happy to answer any "
             + "questions — want me to get you on the schedule?"
+    }
+
+    /// Phase 25: the lowest tier total of undecided quote options, or `nil`
+    /// for a single-total estimate, accepted options, or options without
+    /// tiers. Computed here rather than in `NativeQuoteOptions.swift`, which
+    /// several runners that compile this file do not include.
+    private static func undecidedOptionsFromTotal(_ job: Canonical.Job) -> Decimal? {
+        guard let options = job.quoteOptions, options.acceptance == nil else { return nil }
+        return options.tiers.map(\.estimateTotal).min()
     }
 
     private static func reminderDate(for sent: Date, calendar: Calendar) -> Date? {

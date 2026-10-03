@@ -38,6 +38,12 @@ Written 2026-07-18.
       orders too). Unblocked when `sh supabase/verify/job_approval_preserve.sh`
       passes, the migration is applied in the Supabase SQL editor, and
       `preserve_job_approvals_trg` exists on `public.jobs`; then delete this entry.
+- [ ] **Quote options — deploy the Worker and publish the `tradeready-legal` `feat/quote-options` pages before the native build.**
+      The live `estimate.html` posts no `selection`, so the Worker refuses an
+      approval of an options estimate ("Please choose an option."). Unblocked
+      when the Worker and both pages (`estimate.html`, `portal.html`) are live;
+      then delete this entry. Order: spec
+      `docs/superpowers/specs/2026-10-02-quote-options-design.md` §12.
 
 ---
 
