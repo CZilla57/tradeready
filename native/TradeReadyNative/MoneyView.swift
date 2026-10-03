@@ -187,6 +187,9 @@ struct MoneyView: View {
             if let mix = overview.customerMix {
                 NativeMoneyCustomerMixCardView(card: mix)
             }
+            if let leadSources = overview.leadSources {
+                NativeMoneyLeadSourceCardView(card: leadSources)
+            }
             if overview.invoiceAging.showsCard {
                 NativeMoneyInvoiceAgingCardView(card: overview.invoiceAging)
             }

@@ -1393,19 +1393,23 @@ public extension Canonical {
         public var portal: Portal?
         public var archivedAt: DateString?
         public var importBatchId: String?
+        /// Phase 27: how the customer first found the business (a preset key
+        /// or custom label, `NativeLeadSource`). Absent means Unknown.
+        public var leadSource: String?
         public var preservation: Preservation
         public init(from decoder: Decoder) throws {
             var o = try ObjectReader(decoder); id = try o.required("id"); name = try o.required("name")
             email = try o.required("email"); phone = try o.required("phone"); address = try o.required("address")
             notes = try o.required("notes"); createdAt = try o.optional("createdAt"); portal = try o.optional("portal")
-            archivedAt = try o.optional("archivedAt"); importBatchId = try o.optional("importBatchId"); preservation = o.finish()
+            archivedAt = try o.optional("archivedAt"); importBatchId = try o.optional("importBatchId")
+            leadSource = try o.optional("leadSource"); preservation = o.finish()
         }
         public func encode(to encoder: Encoder) throws {
             var o = ObjectWriter(preservation); try o.put(id, for: "id"); try o.put(name, for: "name")
             try o.put(email, for: "email"); try o.put(phone, for: "phone"); try o.put(address, for: "address")
             try o.put(notes, for: "notes"); try o.putOptional(createdAt, for: "createdAt"); try o.putOptional(portal, for: "portal")
             try o.putOptional(archivedAt, for: "archivedAt"); try o.putOptional(importBatchId, for: "importBatchId")
-            try o.encode(to: encoder)
+            try o.putOptional(leadSource, for: "leadSource"); try o.encode(to: encoder)
         }
     }
 
@@ -1525,6 +1529,9 @@ public extension Canonical {
         public var manageToken: String?
         public var history: [BookingHistoryEntry]?
         public var source, sourceCustomerId, jobRef, portalKind, handledAt: String?
+        /// Phase 27: the booking link's `?src=` marketing tag, cleaned by the
+        /// Worker validator (never empty, at most 40 characters).
+        public var leadSource: String?
         public var preservation: Preservation
         public init(from decoder: Decoder) throws {
             var o = try ObjectReader(decoder); id = try o.required("id"); status = try o.required("status")
@@ -1535,7 +1542,7 @@ public extension Canonical {
             kind = try o.optional("kind"); slot = try o.optional("slot"); manageToken = try o.optional("manageToken")
             history = try o.optional("history"); source = try o.optional("source"); sourceCustomerId = try o.optional("sourceCustomerId")
             jobRef = try o.optional("jobRef"); portalKind = try o.optional("portalKind"); handledAt = try o.optional("handledAt")
-            preservation = o.finish()
+            leadSource = try o.optional("leadSource"); preservation = o.finish()
         }
         public func encode(to encoder: Encoder) throws {
             var o = ObjectWriter(preservation); try o.put(id, for: "id"); try o.put(status, for: "status")
@@ -1547,7 +1554,7 @@ public extension Canonical {
             try o.putOptional(history, for: "history"); try o.putOptional(source, for: "source")
             try o.putOptional(sourceCustomerId, for: "sourceCustomerId"); try o.putOptional(jobRef, for: "jobRef")
             try o.putOptional(portalKind, for: "portalKind"); try o.putOptional(handledAt, for: "handledAt")
-            try o.encode(to: encoder)
+            try o.putOptional(leadSource, for: "leadSource"); try o.encode(to: encoder)
         }
     }
 }

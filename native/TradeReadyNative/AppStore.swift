@@ -13458,6 +13458,7 @@ extension AppStore {
             taxValues: taxSettingsValues,
             mileageRate: snapshot.payload.settings?.mileageRate ?? NativeMileage.defaultMileageRate,
             laborCostRate: snapshot.payload.settings?.laborCostRate,
+            customers: canonicalCustomers,
             now: now
         )
     }
@@ -13511,7 +13512,10 @@ extension AppStore {
         guard ensurePersistenceWritable() else { return .failure(.persistenceUnavailable) }
         let batchID = Self.importBatchIDGenerator.importBatchID()
         var updated = snapshot
+        let customersBefore = updated.payload.customers ?? []
         var createdCustomers: [Canonical.Customer] = []
+        // Matched customers whose blank fields the import filled (Phase 27, D5).
+        var filledCustomers: [Canonical.Customer] = []
         var createdJobs: [Canonical.Job] = []
         var createdInvoices: [Canonical.Invoice] = []
         var createdExpenses: [Canonical.Expense] = []
@@ -13526,6 +13530,7 @@ extension AppStore {
                 batchID: batchID, environment: environment
             )
             createdCustomers = result.records.filter { $0.importBatchId == batchID }
+            filledCustomers = Self.importFilledCustomers(before: customersBefore, after: result.records, batchID: batchID)
             updated.payload.customers = result.records
             counts = result.counts
             outcomes = result.outcomes
@@ -13537,6 +13542,7 @@ extension AppStore {
                 batchID: batchID, dateFormat: dateFormat, environment: environment
             )
             createdCustomers = result.customers.filter { $0.importBatchId == batchID }
+            filledCustomers = Self.importFilledCustomers(before: customersBefore, after: result.customers, batchID: batchID)
             createdJobs = result.jobs.filter { $0.importBatchId == batchID }
             updated.payload.customers = result.customers
             updated.payload.jobs = result.jobs
@@ -13553,6 +13559,7 @@ extension AppStore {
                 environment: environment
             )
             createdCustomers = result.customers.filter { $0.importBatchId == batchID }
+            filledCustomers = Self.importFilledCustomers(before: customersBefore, after: result.customers, batchID: batchID)
             createdInvoices = result.invoices.filter { $0.importBatchId == batchID }
             updated.payload.customers = result.customers
             updated.payload.invoices = result.invoices
@@ -13577,7 +13584,9 @@ extension AppStore {
             migrationMessage = "Import failed. Nothing was changed."
             return .failure(.persistenceUnavailable)
         }
-        for record in createdCustomers { enqueueUpsert(table: "customers", recordId: record.id, record: record) }
+        for record in createdCustomers + filledCustomers {
+            enqueueUpsert(table: "customers", recordId: record.id, record: record)
+        }
         for record in createdJobs { enqueueUpsert(table: "jobs", recordId: record.id, record: record) }
         for record in createdInvoices { enqueueUpsert(table: "invoices", recordId: record.id, record: record) }
         for record in createdExpenses { enqueueUpsert(table: "expenses", recordId: record.id, record: record) }
@@ -13594,6 +13603,23 @@ extension AppStore {
             batchID: batchID, entity: entity, fileHash: fileHash,
             counts: counts, outcomes: outcomes, truncated: truncated
         ))
+    }
+
+    /// Phase 27 push-gap fix (spec 2026-10-02-lead-source-design.md §3, D5):
+    /// the engine backfills blank email/phone/address/lead source on MATCHED
+    /// customers too, and those edits must reach the server, not only the
+    /// local snapshot. Returns the pre-existing records whose wire form
+    /// changed; records this batch created are published separately.
+    private static func importFilledCustomers(
+        before: [Canonical.Customer],
+        after: [Canonical.Customer],
+        batchID: String
+    ) -> [Canonical.Customer] {
+        let beforeByID = Dictionary(before.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return after.filter { record in
+            guard record.importBatchId != batchID, let previous = beforeByID[record.id] else { return false }
+            return (try? mutationPayload(record)) != (try? mutationPayload(previous))
+        }
     }
 
     /// Undoes one import batch. Strips ONLY that batch's own created records

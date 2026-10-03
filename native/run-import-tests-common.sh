@@ -3,6 +3,7 @@
 # run-csv-import/import-mapping/import-engine/import-history runners.
 IMPORT_TEST_SOURCES="
 $ROOT_DIR/native/TradeReadyNative/Domain/CanonicalModels.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeLeadSource.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/FinancialDomain.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeCashBasis.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeCSVExport.swift

@@ -54,6 +54,8 @@ sh "$ROOT_DIR/native/run-quote-options-tests.sh"
 sh "$ROOT_DIR/native/run-quote-options-store-tests.sh"
 # Phase 20: custom job / inspection forms (pure domain; store wiring is in store-integration).
 sh "$ROOT_DIR/native/run-job-forms-tests.sh"
+# Phase 27: lead source tracking (normalizer, capture rules, report, coach block).
+sh "$ROOT_DIR/native/run-lead-source-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-pdf-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-delivery-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-message-draft-tests.sh"

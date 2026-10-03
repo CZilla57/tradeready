@@ -42,6 +42,29 @@ private func testMapping() {
     expectEqual(unknown, [nil, "phone"], "unknown header nil, snake_case normalizes")
 }
 
+// Phase 27 (spec 2026-10-02-lead-source-design.md §4). Competitor header
+// names are unverified, so these pin the deliberately broad synonym list.
+private func testLeadSourceMapping() {
+    let jobber = NativeImportMapping.detectMapping(entity: .customers, headers: ["Name", "Email", "Lead source"])
+    expectEqual(jobber, ["name", "email", "leadSource"], "Jobber-style \"Lead source\" maps")
+    let housecall = NativeImportMapping.detectMapping(entity: .customers, headers: ["Customer", "Mobile Phone", "Lead Source"])
+    expectEqual(housecall, ["name", "phone", "leadSource"], "Housecall-style \"Lead Source\" maps")
+    let survey = NativeImportMapping.detectMapping(
+        entity: .customers,
+        headers: ["How did you hear about us?", "How did you hear", "Source", "Referral Source", "Marketing source",
+                  "lead_channel", "Lead-Source"]
+    )
+    expectEqual(survey, Array(repeating: "leadSource", count: 7), "every lead source synonym maps")
+    // The existing customer vocabulary is unchanged by the new synonyms.
+    let existing = NativeImportMapping.detectMapping(entity: .customers, headers: ["Customer Name", "Street Address", "Comments"])
+    expectEqual(existing, ["name", "address", "notes"], "existing customer headers keep their fields")
+    let jobs = NativeImportMapping.detectMapping(entity: .jobs, headers: ["Lead Source"])
+    expectEqual(jobs, [nil], "lead source is a customers-only field")
+    let field = NativeImportMapping.fieldDefs[.customers]?.first { $0.key == "leadSource" }
+    expectEqual(field, NativeImportFieldDef(key: "leadSource", label: "Lead source", required: false),
+                "lead source is an optional customer field")
+}
+
 private func testDateDetection() {
     expectEqual(NativeImportMapping.detectDateFormat(samples: ["2026-03-01"]), .ymd, "ISO is YMD")
     expectEqual(NativeImportMapping.detectDateFormat(samples: ["01/02/2026"]), .mdy, "ambiguous defaults to MDY")
@@ -77,6 +100,7 @@ private func testFieldDefs() {
 }
 
 testMapping()
+testLeadSourceMapping()
 testDateDetection()
 testParseImportDate()
 testFieldDefs()

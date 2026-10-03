@@ -53,10 +53,14 @@ struct NativeBusinessSnapshotAggregate: Equatable {
 
 /// `BusinessSnapshot` — the aggregate plus the snapshot stamp and the optional
 /// tax block (absent, never zeroed, when the tax inputs could not be built).
+/// Phase 27 adds the optional year-to-date lead-source block (absent when no
+/// customer has a source); it sits after `tax` so the memberwise init stays
+/// source-compatible.
 struct NativeBusinessSnapshot: Equatable {
     var asOf: String
     var aggregate: NativeBusinessSnapshotAggregate
     var tax: NativeTaxSnapshotBlock?
+    var leadSources: NativeLeadSourceSnapshotBlock?
 
     var revenueThisMonth: Decimal { aggregate.revenueThisMonth }
     var revenueLastMonth: Decimal { aggregate.revenueLastMonth }
@@ -192,7 +196,8 @@ enum NativeBusinessSnapshotEngine {
 
     // MARK: getBusinessSnapshot
 
-    /// The live-shaped snapshot: aggregate + `asOf` + tax. `asOf` is the **UTC**
+    /// The live-shaped snapshot: aggregate + `asOf` + tax + the Phase 27
+    /// year-to-date lead-source block. `asOf` is the **UTC**
     /// calendar date of `now`, matching RN's
     /// `now.toISOString().split("T")[0]` (the one deliberate UTC use in this
     /// feature — it stamps when the snapshot was taken, not a business window).
@@ -217,7 +222,10 @@ enum NativeBusinessSnapshotEngine {
                     invoices: invoices, expenses: expenses, trips: trips,
                     values: values, mileageRate: mileageRate, now: now
                 )
-                : nil
+                : nil,
+            leadSources: NativeLeadSourceReport.snapshotBlock(
+                customers: customers, jobs: jobs, invoices: invoices, now: now
+            )
         )
     }
 

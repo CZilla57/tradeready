@@ -3016,10 +3016,19 @@ struct ScheduleBookingRecoveryTests {
                     "\(id) [M1]: …and its customer (found by name: no duplicate)")
         expectEqual(bookedCustomers(d).count, 1, "\(id): one customer on the device")
         expectEqual(d.queued("jobs"), 0, "\(id) [D-B3-2]: nothing is queued for the job")
-        expectEqual(d.queued("customers"), 0, "\(id): …or the customer")
+        // Phase 27 (spec 2026-10-02-lead-source-design.md §3): the Expo build
+        // records no lead source, so the matched customer's blank source is
+        // filled with the booking link (first touch, like a blank email) and
+        // that one fill is queued; every contact field is kept.
+        expectEqual(bookedCustomers(d).first?.leadSource, "booking_link",
+                    "\(id) [Phase 27]: the customer's blank lead source is filled")
+        expectEqual(bookedCustomers(d).first?.email, "sam@example.test", "\(id): …its contact fields are kept")
+        expectEqual(d.queued("customers"), 1, "\(id) [Phase 27]: …and only that fill is queued for the customer")
         expectEqual(d.queued("bookingRequests"), 1, "\(id) [M1]: the linked request is queued")
         d.reach.online = true
         await syncAndWait(d)
+        expectEqual(d.links.row("customers", "c-other-1")?["leadSource"] as? String, "booking_link",
+                    "\(id) [Phase 27]: after the push the cloud customer has the source")
         expectEqual(d.links.row("jobs", leadJobID)?["status"] as? String, "scheduled",
                     "\(id) [D-B3-2]: after the push the cloud job is still the other device's")
         expectEqual(d.links.requestRow("req-1")?["convertedJobId"] as? String, leadJobID,
@@ -3071,6 +3080,8 @@ struct ScheduleBookingRecoveryTests {
         expectEqual(customers.first?.address, "9 Oak Ave", "\(id) [I1]: …and the blank address")
         expectEqual(customers.first?.phone, "555-0100", "\(id) [I1]: the phone the customer had is kept")
         expectEqual(customers.first?.notes, "repeat", "\(id): …and every other field")
+        expectEqual(customers.first?.leadSource, "booking_link",
+                    "\(id) [Phase 27]: the blank lead source is filled with the booking link")
         expectEqual(d.queued("customers"), 1, "\(id) [I1]: the filled customer is queued")
         expectEqual(d.queued("jobs") + d.queued("bookingRequests"), 2, "\(id): …with the job and the linked request")
         d.reach.online = true
@@ -3078,6 +3089,7 @@ struct ScheduleBookingRecoveryTests {
         let cloud = d.links.row("customers", "cust-sam")
         expectEqual(cloud?["email"] as? String, "sam@example.test", "\(id) [I1]: the cloud customer has the email")
         expectEqual(cloud?["phone"] as? String, "555-0100", "\(id) [I1]: …and keeps its phone")
+        expectEqual(cloud?["leadSource"] as? String, "booking_link", "\(id) [Phase 27]: …and has the lead source")
         expectEqual(d.data.liveRowCount(table: "customers", userID: d.subject), 1, "\(id): one customer in the cloud")
     }
 
@@ -3133,6 +3145,48 @@ struct ScheduleBookingRecoveryTests {
                "\(id) [M1]: that job deleted before the commit: nothing is converted")
         expect(recheck(fresh, jobs: [otherJob], customers: [known]) == nil,
                "\(id): the plan's lead appeared meanwhile (another device won): nothing is converted")
+
+        // Phase 27 (spec 2026-10-02-lead-source-design.md §3): the recheck
+        // fills a blank lead source like a blank contact field, and a source
+        // set after the plan (first touch) is never replaced.
+        expectEqual(customer(same)?.leadSource, "booking_link",
+                    "\(id) [Phase 27]: nothing changed: the planned lead source fill is carried")
+        expectEqual(customer(raced)?.leadSource, "booking_link",
+                    "\(id) [Phase 27]: …and still fills a source left blank meanwhile")
+        var sourcedMeanwhile = known
+        sourcedMeanwhile.leadSource = "referral"
+        let sourcedRace = recheck(fresh, jobs: [], customers: [sourcedMeanwhile])
+        expectEqual(customer(sourcedRace)?.leadSource, "referral",
+                    "\(id) [Phase 27]: a source set after the plan is never replaced")
+        var complete = known
+        complete.email = "sam@example.test"
+        complete.address = "9 Oak Ave"
+        var tagged = workerBooking()
+        tagged["leadSource"] = "nextdoor"
+        guard let taggedData = try? JSONSerialization.data(withJSONObject: tagged),
+              let taggedRequest = try? JSONDecoder().decode(Canonical.BookingRequest.self, from: taggedData)
+        else {
+            expect(false, "\(id): fixture: the tagged booking decodes")
+            return
+        }
+        let sourceOnlyPlan = NativeBookingIntake.plan(
+            requests: [taggedRequest], jobs: [], customers: [complete], settings: settings,
+            makeCustomerID: { "c-new" }, nowISO: { writeStamp })
+        let sourceOnly = NativeScheduleBookingPolicy.recheckedIntakePlan(
+            sourceOnlyPlan, currentRequests: [taggedRequest], currentJobs: [], currentCustomers: [complete])
+        expectEqual(customer(sourceOnly)?.leadSource, "nextdoor",
+                    "\(id) [Phase 27]: the link's ?src= tag fills a blank source")
+        expect(sourceOnly?.customersChanged == true
+               && sourceOnly?.drafts.contains { $0.table == "customers" && $0.recordId == "cust-sam" } == true,
+               "\(id) [Phase 27]: …and a source-only fill is queued")
+        var completeSourced = complete
+        completeSourced.leadSource = "google"
+        let unchanged = NativeScheduleBookingPolicy.recheckedIntakePlan(
+            sourceOnlyPlan, currentRequests: [taggedRequest], currentJobs: [], currentCustomers: [completeSourced])
+        expectEqual(customer(unchanged)?.leadSource, "google",
+                    "\(id) [Phase 27]: a customer sourced meanwhile keeps it")
+        expect(unchanged?.drafts.contains { $0.table == "customers" } == false,
+               "\(id) [Phase 27]: …and is not queued")
     }
 
     /// K6: the account changes while the foreground refresh's pull is in its

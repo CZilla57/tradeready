@@ -13,7 +13,7 @@
 
 import { createRateLimiter, validatePricebookPayload } from '../../lib/guards.js';
 import { enforceDailyCap } from '../../lib/aiUsage.js';
-import { appCors, jsonBody } from '../appCors.js';
+import { appCors, clientIp, jsonBody } from '../appCors.js';
 
 const GROQ_MODEL = 'openai/gpt-oss-20b';
 
@@ -45,7 +45,7 @@ export async function pricebookSuggestHandler(c) {
   }
 
   const user = await userRes.json().catch(() => null);
-  const rateKey = (user && user.id) || c.req.header('x-forwarded-for') || 'anonymous';
+  const rateKey = (user && user.id) || clientIp(c);
   if (!allowRequest(rateKey)) {
     return c.json({ error: 'Too many requests. Please wait a minute and try again.' }, 429);
   }

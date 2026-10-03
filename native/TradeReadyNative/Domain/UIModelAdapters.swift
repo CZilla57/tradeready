@@ -169,6 +169,7 @@ enum CanonicalUIAdapters {
             "createdAt": .string(timestamp(value.createdAt))
         ]
         if let archivedAt = value.archivedAt { fields["archivedAt"] = .string(archivedAt) }
+        if let leadSource = value.leadSource { fields["leadSource"] = .string(leadSource) }
         return try decode(fields)
     }
 
@@ -813,6 +814,7 @@ enum CanonicalUIAdapters {
         update(&fields, "notes", edit.value.notes, original.notes)
         if edit.value.createdAt != original.createdAt { fields["createdAt"] = .string(timestamp(edit.value.createdAt)) }
         updateOptional(&fields, "archivedAt", edit.value.archivedAt, original.archivedAt)
+        updateOptional(&fields, "leadSource", edit.value.leadSource, original.leadSource)
         return try decode(fields)
     }
 
@@ -966,7 +968,7 @@ enum CanonicalUIAdapters {
         Customer(id: value.id, name: value.name, email: value.email, phone: value.phone,
                  address: value.address, notes: value.notes,
                  createdAt: try parsed(value.createdAt ?? "1970-01-01", field: "customer.createdAt", calendar: calendar),
-                 archivedAt: value.archivedAt)
+                 archivedAt: value.archivedAt, leadSource: value.leadSource)
     }
 
     static func job(from value: Canonical.Job, calendar: Calendar = .current) throws -> Job {

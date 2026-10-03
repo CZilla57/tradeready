@@ -410,6 +410,87 @@ struct NativeMoneyCustomerMixCard: Equatable {
     }
 }
 
+// MARK: - Lead sources (Phase 27, spec 2026-10-02-lead-source-design.md §5)
+
+struct NativeMoneyLeadSourceRow: Equatable {
+    var bucketKey: String
+    var name: String
+    var collected: Decimal
+    var newCustomers: Int
+    var won: Int
+    var sent: Int
+    /// `collected / leader * 100` for the bar; 0 when nothing was collected.
+    var fraction: Double
+    var isUnknown: Bool
+    /// "$1,200.00"
+    var collectedText: String
+    /// "2/4 won · 50% close · 3 new"; the close rate reads "—" when nothing
+    /// was sent.
+    var detailText: String
+    /// The row's single VoiceOver element.
+    var accessibilityLabel: String
+}
+
+/// `Lead sources` — the §5 report for the chip's window: one row per bucket,
+/// Unknown last. Hidden when there are no customers at all; shown with a
+/// one-line hint when customers exist but none has a source yet.
+struct NativeMoneyLeadSourceCard: Equatable {
+    static let title = "Lead sources"
+    static let setupHint = "Set \u{201C}How they found you\u{201D} on a customer to see which marketing brings in work."
+
+    var rows: [NativeMoneyLeadSourceRow]
+    var showsSetupHint: Bool
+
+    static func make(
+        customers: [Canonical.Customer],
+        jobs: [Canonical.Job],
+        invoices: [Canonical.Invoice],
+        start: Date,
+        end: Date
+    ) -> NativeMoneyLeadSourceCard? {
+        guard !customers.isEmpty else { return nil }
+        let report = NativeLeadSourceReport.make(
+            customers: customers, jobs: jobs, invoices: invoices, start: start, end: end
+        )
+        let leader = report.rows.map(\.collected).max() ?? 0
+        return NativeMoneyLeadSourceCard(
+            rows: report.rows.map { row(for: $0, leader: leader) },
+            showsSetupHint: !report.hasAnySource
+        )
+    }
+
+    static func closeRateText(_ rate: Decimal?) -> String {
+        rate.map { "\(NativeMoneyFormat.percentInt($0))%" } ?? "\u{2014}"
+    }
+
+    private static func row(for row: NativeLeadSourceReportRow, leader: Decimal) -> NativeMoneyLeadSourceRow {
+        let collectedText = NativeMoneyFormat.money(row.collected)
+        let closeText = closeRateText(row.closeRate)
+        let estimates: String
+        if row.estimatesSent > 0 {
+            let noun = row.estimatesSent == 1 ? "estimate" : "estimates"
+            estimates = "\(row.jobsWon) of \(row.estimatesSent) \(noun) won, \(closeText) close rate"
+        } else {
+            estimates = "no estimates sent"
+        }
+        let spoken = "\(row.displayName): \(collectedText) collected, "
+            + "\(NativeMoneyFormat.plural(row.newCustomers, "new customer", "new customers")), \(estimates)"
+        return NativeMoneyLeadSourceRow(
+            bucketKey: row.bucketKey,
+            name: row.displayName,
+            collected: row.collected,
+            newCustomers: row.newCustomers,
+            won: row.jobsWon,
+            sent: row.estimatesSent,
+            fraction: NativeMoneyFormat.clampedPercent(part: row.collected, whole: leader),
+            isUnknown: row.isUnknown,
+            collectedText: collectedText,
+            detailText: "\(row.jobsWon)/\(row.estimatesSent) won \u{00B7} \(closeText) close \u{00B7} \(row.newCustomers) new",
+            accessibilityLabel: spoken
+        )
+    }
+}
+
 // MARK: - Days to pay (InvoiceAgingCard)
 
 struct NativeMoneySlowPayerRow: Equatable {
@@ -940,6 +1021,8 @@ struct NativeMoneyOverview: Equatable {
     var expenseTrends: NativeMoneyExpenseTrendsCard
     var topCustomers: NativeMoneyTopCustomersCard?
     var customerMix: NativeMoneyCustomerMixCard?
+    /// Phase 27: hidden (nil) when there are no customers.
+    var leadSources: NativeMoneyLeadSourceCard?
     var invoiceAging: NativeMoneyInvoiceAgingCard
     var receivables: NativeMoneyReceivablesCard
     var funnel: NativeMoneyConversionFunnelCard
@@ -961,6 +1044,7 @@ struct NativeMoneyOverview: Equatable {
         taxValues: NativeTaxSettingsValues,
         mileageRate: Decimal,
         laborCostRate: Decimal?,
+        customers: [Canonical.Customer] = [],
         now: Date
     ) -> NativeMoneyOverview {
         let range = NativeCashBasis.range(for: filter.rawValue, now: now)
@@ -985,6 +1069,9 @@ struct NativeMoneyOverview: Equatable {
             ),
             customerMix: NativeMoneyCustomerMixCard.make(
                 invoices: invoices, start: range.start, end: range.end
+            ),
+            leadSources: NativeMoneyLeadSourceCard.make(
+                customers: customers, jobs: jobs, invoices: invoices, start: range.start, end: range.end
             ),
             invoiceAging: NativeMoneyInvoiceAgingCard.make(invoices: invoices),
             receivables: NativeMoneyReceivablesCard.make(invoices: invoices, jobs: jobs, now: now),

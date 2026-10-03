@@ -244,6 +244,18 @@ do {
     )
     expect(promoted.canSave,
            "invoice-derived edit intent may promote a missing record without the create-only block")
+
+    // Phase 27: the editor's "Other…" text is normalized on save.
+    func savedSource(_ raw: String?) -> String? {
+        var draft = customer(id: "new", name: "Lead Source Draft")
+        draft.leadSource = raw
+        return NativeCustomerIdentity.editorSavePlan(for: draft, existingCustomers: existing, mode: .create)
+            .customer.leadSource
+    }
+    expect(savedSource("  google ads ") == "google", "a typed preset alias saves as its preset key")
+    expect(savedSource("nextdoor") == "nextdoor", "a picked preset key saves unchanged")
+    expect(savedSource(" Home   Show ") == "Home Show", "a custom label saves trimmed and collapsed")
+    expect(savedSource("   ") == nil && savedSource(nil) == nil, "a blank source saves as Not set")
 }
 
 do {
@@ -435,6 +447,34 @@ do {
         _ = try NativeCustomerIdentity.merge(snapshot: original, winnerID: winner.id, loserID: winner.id)
         expect(false, "self merge is rejected")
     } catch NativeCustomerMergeError.sameCustomer {}
+
+    // Phase 27 first touch (spec 2026-10-02-lead-source-design.md §3): the
+    // winner keeps its source and fills from the loser only when blank.
+    expect(winner.leadSource == "referral" && mergedWinner?.leadSource == "referral",
+           "merge keeps the winner's lead source")
+    func mergedSource(winner winnerSource: String?, loser loserSource: String?) throws -> String? {
+        var sourcedWinner = winner
+        sourcedWinner.leadSource = winnerSource
+        var sourcedLoser = loser
+        sourcedLoser.leadSource = loserSource
+        let snapshot = Canonical.Snapshot(payload: .init(customers: [sourcedLoser, sourcedWinner]))
+        let result = try NativeCustomerIdentity.merge(snapshot: snapshot, winnerID: winner.id, loserID: loser.id)
+        let mergedCustomer = result.snapshot.payload.customers?.first { $0.id == winner.id }
+        let upsert = result.mutations.first { $0.table == "customers" && $0.recordId == winner.id && $0.op == .upsert }
+        guard case let .object(payload)? = upsert?.payload else { return "missing upsert" }
+        let wireSource: String?
+        if case let .string(value)? = payload["leadSource"] { wireSource = value } else { wireSource = nil }
+        expect(wireSource == mergedCustomer?.leadSource, "the winner upsert carries the merged source")
+        return mergedCustomer?.leadSource
+    }
+    let filledFromLoser = try mergedSource(winner: nil, loser: "nextdoor")
+    expect(filledFromLoser == "nextdoor", "a blank winner source fills from the loser")
+    let whitespaceWinner = try mergedSource(winner: "  ", loser: "Home Show")
+    expect(whitespaceWinner == "Home Show", "a whitespace winner source counts as blank")
+    let keptWinner = try mergedSource(winner: "google", loser: "yelp")
+    expect(keptWinner == "google", "a winner source is never replaced by the loser's")
+    let bothBlank = try mergedSource(winner: nil, loser: nil)
+    expect(bothBlank == nil, "two blank sources stay blank")
 }
 
 do {

@@ -126,6 +126,7 @@ public enum NativeBookingIntake {
                     email: request.email,
                     phone: request.phone,
                     address: request.address,
+                    leadSource: leadSourceCandidate(for: request),
                     makeCustomerID: makeCustomerID,
                     nowISO: nowISO
                 )
@@ -186,6 +187,18 @@ public enum NativeBookingIntake {
         )
     }
 
+    // MARK: - Lead source (Phase 27, spec 2026-10-02-lead-source-design.md §1/§3)
+
+    /// The first-touch source a booking may give the customer it creates or
+    /// a matched customer whose source is blank: the link's `?src=` tag, else
+    /// "Online booking link". Portal requests come from an existing customer
+    /// and never tag one, even when a dangling `sourceCustomerId` falls back
+    /// to the name-keyed upsert.
+    public static func leadSourceCandidate(for request: Canonical.BookingRequest) -> String? {
+        if request.source == "portal" { return nil }
+        return NativeLeadSource.normalize(request.leadSource) ?? NativeLeadSource.bookingLinkKey
+    }
+
     // MARK: - Customer linking (RN `upsertCustomerInList` parity)
 
     public struct CustomerUpsert {
@@ -200,15 +213,19 @@ public enum NativeBookingIntake {
     /// Finds a record by normalized name (backfilling only *blank* contact
     /// fields — never clobbering existing data) or appends a fresh record.
     /// Pure: no I/O, so one in-memory pass can batch many conversions.
+    /// `leadSource` (normalized) follows the same first-touch rule: set on a
+    /// new record, filled only when a matched record's source is blank.
     public static func upsertCustomer(
         in customers: [Canonical.Customer],
         name: String,
         email: String,
         phone: String,
         address: String,
+        leadSource: String? = nil,
         makeCustomerID: () -> String,
         nowISO: () -> String
     ) -> CustomerUpsert {
+        let source = NativeLeadSource.normalize(leadSource)
         let key = normalizedName(name)
         guard !key.isEmpty else { return CustomerUpsert(customer: nil, customers: customers, changed: false, didCreate: false) }
         if let index = customers.firstIndex(where: { normalizedName($0.name) == key }) {
@@ -217,6 +234,7 @@ public enum NativeBookingIntake {
             if isBlank(merged.email), !email.isEmpty { merged.email = email; touched = true }
             if isBlank(merged.phone), !phone.isEmpty { merged.phone = phone; touched = true }
             if isBlank(merged.address), !address.isEmpty { merged.address = address; touched = true }
+            if isBlank(merged.leadSource ?? ""), let source { merged.leadSource = source; touched = true }
             guard touched else {
                 return CustomerUpsert(customer: merged, customers: customers, changed: false, didCreate: false)
             }
@@ -224,7 +242,7 @@ public enum NativeBookingIntake {
             next[index] = merged
             return CustomerUpsert(customer: merged, customers: next, changed: true, didCreate: false)
         }
-        let built = decodeCustomer([
+        var fields: [String: Canonical.JSONValue] = [
             "id": .string(makeCustomerID()),
             "name": .string(name.trimmingCharacters(in: .whitespacesAndNewlines)),
             "email": .string(email),
@@ -232,7 +250,9 @@ public enum NativeBookingIntake {
             "address": .string(address),
             "notes": .string(""),
             "createdAt": .string(nowISO()),
-        ])
+        ]
+        if let source { fields["leadSource"] = .string(source) }
+        let built = decodeCustomer(fields)
         return CustomerUpsert(customer: built, customers: customers + [built], changed: true, didCreate: true)
     }
 

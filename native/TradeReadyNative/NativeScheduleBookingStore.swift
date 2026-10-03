@@ -356,6 +356,10 @@ enum NativeScheduleBookingPolicy {
             if isBlank(merged.email), !isBlank(customer.email) { merged.email = customer.email; filled = true }
             if isBlank(merged.phone), !isBlank(customer.phone) { merged.phone = customer.phone; filled = true }
             if isBlank(merged.address), !isBlank(customer.address) { merged.address = customer.address; filled = true }
+            // Phase 27 first touch: a source set since the plan was built wins.
+            if isBlank(merged.leadSource ?? ""), !isBlank(customer.leadSource ?? "") {
+                merged.leadSource = customer.leadSource; filled = true
+            }
             guard filled else { continue }
             nextCustomers[index] = merged
             filledCustomers.append(customer.id)
