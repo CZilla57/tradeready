@@ -211,6 +211,66 @@ describe('account deletion backend parity', () => {
         assert.ok(!JSON.stringify(logged).includes('private-object-key'));
       });
 
+      test('purges the invoice PDF bucket too, even when the photo purge fails', async () => {
+        const logged = [];
+        const events = [];
+        let calls = 0;
+        const service = createAccountDeletionService({
+          fetchImpl: async () => {
+            calls += 1;
+            return calls === 1 ? fakeResponse(200, { id: USER_ID }) : fakeResponse(200);
+          },
+          logger: { error: (message) => logged.push(message) },
+        });
+        const photos = {
+          async list() {
+            throw new Error('private-object-key');
+          },
+        };
+        const invoicePdfs = {
+          async list(options) {
+            events.push(`list-pdfs:${options.prefix}`);
+            return {
+              objects: [{ key: `${USER_ID}/inv-1.pdf` }, { key: 'another-user/inv-2.pdf' }],
+              truncated: false,
+            };
+          },
+          async delete(keys) {
+            events.push(`delete-pdfs:${keys.join(',')}`);
+          },
+        };
+
+        assert.deepEqual(
+          await service.handle(request({ env: { ...ENV, PHOTOS: photos, INVOICE_PDFS: invoicePdfs } })),
+          { status: 200, body: { success: true } }
+        );
+        assert.deepEqual(events, [`list-pdfs:${USER_ID}/`, `delete-pdfs:${USER_ID}/inv-1.pdf`]);
+        assert.deepEqual(logged, ['delete-account: R2 photo purge failed after account deletion']);
+      });
+
+      test('logs an invoice PDF purge failure without failing the deletion', async () => {
+        const logged = [];
+        let calls = 0;
+        const service = createAccountDeletionService({
+          fetchImpl: async () => {
+            calls += 1;
+            return calls === 1 ? fakeResponse(200, { id: USER_ID }) : fakeResponse(200);
+          },
+          logger: { error: (message) => logged.push(message) },
+        });
+        const invoicePdfs = {
+          async list() {
+            return { objects: [], truncated: true, cursor: '' };
+          },
+        };
+
+        assert.deepEqual(
+          await service.handle(request({ env: { ...ENV, INVOICE_PDFS: invoicePdfs } })),
+          { status: 200, body: { success: true } }
+        );
+        assert.deepEqual(logged, ['delete-account: R2 invoice PDF purge failed after account deletion']);
+      });
+
       test('rate-limits the sixth destructive request from one IP', async () => {
         const service = createAccountDeletionService({
           fetchImpl: async () => fakeResponse(401),
