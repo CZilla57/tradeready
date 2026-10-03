@@ -972,6 +972,330 @@ run("canonical quote types preserve absence, nulls and unknown keys") {
     expect(!CanonicalUIAdapters.estimateApprovalsMatch(approvalValue, other), "a missing selection breaks the approval match")
 }
 
+// MARK: - Review fixes (2026-10-03, spec §12)
+//
+// The reviewer's scenario: Good is the job's own pricing (2 h × $95 → ×1.10 /
+// 0.80 = $261.25), Better is 4 h × $95 (380 × 1.10 / 0.80 = $522.50), plus a
+// $150 surge protector add-on with a $60 internal cost. Better + add-on =
+// $672.50.
+
+private let goodTotal = d("261.25")
+private let betterTotal = d("522.5")
+private let betterWithSurge = d("672.5")
+
+private func reviewJob(status: String = "estimate_sent") throws -> Canonical.Job {
+    var job = try NativeQuoteOptions.startOptions(job: try baseJob(status: status), makeTierID: sequentialIDs("qt_"))
+    var better = NativeJobPricingDraft(job: job, tier: job.quoteOptions!.tier(id: "qt_2")!, settings: nil)
+    better.laborHours = 4
+    job = try NativeQuoteOptions.tierPricingSaved(job: job, tierID: "qt_2", draft: better)
+    return try NativeQuoteOptions.addAddOn(
+        job: job, draft: NativeQuoteAddOnDraft(label: "Surge protector", price: 150, cost: 60),
+        makeAddOnID: sequentialIDs("qa_")
+    )
+}
+
+/// The approved approval the Worker stores when the customer picks `tierID`
+/// (+ `addOnIDs`) on the page built from `sent`.
+private func approvedSelection(of sent: Canonical.Job, tierID: String, addOnIDs: [String]) throws -> Canonical.EstimateApproval {
+    let snapshot = try CanonicalUIAdapters.estimateApprovalSnapshot(job: sent, customerName: nil, businessName: "Hopper HVAC")
+    let selection = try NativeQuoteOptions.resolveSelection(
+        snapshotOptions: snapshot.options!, tierId: tierID, addOnIds: addOnIDs
+    ).get()
+    return try approval(for: sent, decision: "approved", selection: selection)
+}
+
+private func invoiceLines(_ job: Canonical.Job, status: String? = nil, sessions: [JobInvoiceTimeSession] = []) -> (breakdown: JobInvoiceBillableBreakdown, lines: [JobInvoiceLineDraft]) {
+    let directCosts = (job.jobCosts ?? []).map { cost in
+        JobInvoiceDirectCost(
+            label: CanonicalUIAdapters.estimateDirectCostLabel(cost), category: cost.category,
+            quantity: cost.quantity, unitCost: cost.unitCost, markupPercent: cost.markupPercent,
+            markupPolicy: cost.markupPolicy, customerVisible: cost.customerVisible
+        )
+    }
+    let breakdown = JobInvoiceDomain.computeBillableBreakdown(
+        estimateTotal: job.estimateTotal, laborHours: job.laborHours, laborRate: job.laborRate,
+        materials: job.materials.map { (quantity: $0.quantity, unitCost: $0.unitCost) },
+        materialMarkup: job.materialMarkup, directCosts: directCosts,
+        status: status ?? job.status, timeSessions: sessions, changeOrders: [],
+        addOnLines: NativeQuoteOptions.invoiceAddOnLines(job: job),
+        approvedQuote: NativeQuoteOptions.approvedInvoiceQuote(job: job)
+    )
+    let lines = JobInvoiceDomain.buildInvoiceLineItems(
+        breakdown: breakdown, laborRate: job.laborRate, materialCount: job.materials.count,
+        singleMaterialName: job.materials.count == 1 ? job.materials[0].name : nil, approvedChangeOrders: []
+    )
+    return (breakdown, lines)
+}
+
+private func lineSum(_ lines: [JobInvoiceLineDraft]) -> Decimal {
+    lines.reduce(Decimal.zero) { $0 + $1.amount }
+}
+
+run("review fix 1: options removed after sending — the customer's choice is restored from the snapshot") {
+    let sent = try reviewJob()
+    expect(sent.quoteOptions?.tier(id: "qt_2")?.estimateTotal == betterTotal && sent.estimateTotal == goodTotal,
+           "fixture: Good $261.25 recommended, Better $522.50")
+    // The owner removes the options (keeping Good) while the link is live …
+    var job = try NativeQuoteOptions.removeOptions(job: sent, keepingTierID: "qt_1")
+    expect(job.quoteOptions == nil && job.estimateTotal == goodTotal, "options removed, back to $261.25")
+    // … and the customer approves the sent Better + surge protector.
+    job.approval = try approvedSelection(of: sent, tierID: "qt_2", addOnIDs: ["qa_1"])
+    expect(job.approval?.selection?.total == betterWithSurge, "the server records $672.50")
+
+    guard let reconciled = NativeQuoteOptions.reconcileEstimateDecision(job: job),
+          let options = reconciled.quoteOptions, let acceptance = options.acceptance
+    else { expect(false, "removed options: the selection is applied"); return }
+    expect(reconciled.status == "approved", "removed options: approved")
+    expect(options.tiers.map(\.id) == ["qt_1", "qt_2"] && options.tiers.map(\.name) == ["Good", "Better"]
+           && options.tiers.map(\.estimateTotal) == [goodTotal, betterTotal] && options.recommendedTierId == "qt_1",
+           "removed options: the sent tiers are restored with their frozen totals")
+    expect(options.addOns.map(\.id) == ["qa_1"] && options.addOns.first?.price == 150 && options.addOns.first?.cost == nil,
+           "removed options: the sent add-on is restored at its frozen amount (its private cost was removed with it)")
+    expect(acceptance.tierId == "qt_2" && acceptance.addOnIds == ["qa_1"] && acceptance.source == "link"
+           && acceptance.total == betterWithSurge && acceptance.acceptedAt == "2026-10-02T10:30:00.000Z",
+           "removed options: a link acceptance of Better + add-on")
+    expect(reconciled.estimateTotal == betterWithSurge, "removed options: the job total is the $672.50 the customer agreed to")
+    expect(reconciled.laborHours == 2, "removed options: Better's calculator inputs were removed, so the job pricing stays (§6.3)")
+    expect(NativeQuoteOptions.reconcileEstimateDecision(job: reconciled) == nil, "removed options: applied once")
+
+    let state = NativeQuoteOptionsState(job: reconciled)
+    expect(state.acceptance?.tierName == "Better" && state.acceptance?.viaLink == true && state.acceptance?.total == betterWithSurge,
+           "removed options: the sheet shows the customer's choice")
+
+    let snapshot = try CanonicalUIAdapters.estimateApprovalSnapshot(job: reconciled, customerName: nil, businessName: "Hopper HVAC")
+    expect(snapshot.options == nil && snapshot.total == betterWithSurge
+           && snapshot.lineItems.map(\.label) == ["Labor (4 hrs @ $95/hr)", "Overhead & operating costs", "Surge protector"]
+           && snapshot.lineItems.map(\.amount) == [380, d("142.5"), 150],
+           "removed options: the accepted estimate shows the frozen Better lines and the add-on")
+    let invoice = invoiceLines(reconciled)
+    expect(invoice.breakdown.total == betterWithSurge && lineSum(invoice.lines) == betterWithSurge,
+           "removed options: invoice amount and lines are both $672.50")
+    expect(invoice.lines.map(\.description) == ["Labor (4 hrs @ $95/hr)", "Overhead & operating costs", "Surge protector"]
+           && invoice.lines.map(\.category) == ["labor", "overhead", "other"],
+           "removed options: the invoice bills the approved lines")
+
+    // Options restarted after sending (new tier ids): the drafts the customer
+    // never saw give way to what they chose from.
+    var restarted = try NativeQuoteOptions.startOptions(job: try NativeQuoteOptions.removeOptions(job: sent, keepingTierID: "qt_1"),
+                                                        makeTierID: sequentialIDs("qt_new_"))
+    restarted.approval = job.approval
+    let fromRestart = NativeQuoteOptions.reconcileEstimateDecision(job: restarted)
+    expect(fromRestart?.quoteOptions?.tiers.map(\.id) == ["qt_1", "qt_2"]
+           && fromRestart?.quoteOptions?.acceptance?.tierId == "qt_2"
+           && fromRestart?.estimateTotal == betterWithSurge,
+           "restarted options: the sent options and the customer's choice replace the unsent drafts")
+}
+
+run("review fix 1: a single price approved over never-sent draft options resolves") {
+    // Sent as a single $261.25 estimate; options started afterwards, Better
+    // priced and recommended (the job now mirrors $522.50).
+    let single = try baseJob()
+    let sentApproval = try approval(for: single, decision: "approved")
+    expect(sentApproval.snapshot.options == nil && sentApproval.snapshot.total == goodTotal, "fixture: single-price snapshot")
+    let drafts = try NativeQuoteOptions.setRecommendedTier(job: try reviewJob(), tierID: "qt_2")
+    expect(drafts.estimateTotal == betterTotal && drafts.laborHours == 4, "fixture: the job mirrors Better")
+    var job = drafts
+    job.approval = sentApproval
+
+    guard let reconciled = NativeQuoteOptions.reconcileEstimateDecision(job: job) else {
+        expect(false, "single price: the approval changes the job"); return
+    }
+    expect(reconciled.status == "approved", "single price: approved")
+    expect(reconciled.quoteOptions == nil, "single price: the never-sent drafts are dropped (no pending choice)")
+    expect(reconciled.estimateTotal == goodTotal, "single price: the job total is the approved $261.25")
+    expect(reconciled.laborHours == 2 && reconciled.laborRate == 95,
+           "single price: the draft tier that still prices the sent estimate (Good) becomes the job's pricing")
+    expect(NativeQuoteOptions.reconcileEstimateDecision(job: reconciled) == nil, "single price: applied once")
+    let state = NativeQuoteOptionsState(job: reconciled)
+    expect(!state.hasOptions && state.acceptance == nil && !state.isEditable, "single price: no pending options remain")
+    expect(NativeQuoteOptions.approvedInvoiceQuote(job: reconciled) == nil, "single price: pricing matches, so today's invoice lines")
+    expect(lineSum(invoiceLines(reconciled).lines) == goodTotal, "single price: invoice lines sum to $261.25")
+
+    // No draft still prices what was sent (Good edited to 3 h too): the job
+    // keeps its pricing, takes the approved total, and bills the approved lines.
+    var good = NativeJobPricingDraft(job: drafts, tier: drafts.quoteOptions!.tier(id: "qt_1")!, settings: nil)
+    good.laborHours = 3
+    var edited = try NativeQuoteOptions.tierPricingSaved(job: drafts, tierID: "qt_1", draft: good)
+    edited.approval = sentApproval
+    guard let unmatched = NativeQuoteOptions.reconcileEstimateDecision(job: edited) else {
+        expect(false, "single price, no match: the approval changes the job"); return
+    }
+    expect(unmatched.quoteOptions == nil && unmatched.estimateTotal == goodTotal && unmatched.laborHours == 4,
+           "single price, no match: drafts dropped, approved total, current pricing kept")
+    let quote = NativeQuoteOptions.approvedInvoiceQuote(job: unmatched)
+    expect(quote?.lines == [
+        JobInvoiceLineDraft(description: "Labor (2 hrs @ $95/hr)", amount: 190, category: "labor"),
+        JobInvoiceLineDraft(description: "Overhead & operating costs", amount: d("71.25"), category: "overhead")
+    ], "single price, no match: the invoice bills the approved lines")
+    let invoice = invoiceLines(unmatched)
+    expect(invoice.breakdown.total == goodTotal && lineSum(invoice.lines) == goodTotal,
+           "single price, no match: invoice amount and lines are both $261.25")
+}
+
+run("review fix 1: the options sheet says when the live link shows an earlier version") {
+    let sent = try reviewJob()
+    var job = sent
+    job.approval = try approval(for: sent, decision: nil)
+    expect(!NativeQuoteOptionsState(job: job).linkShowsEarlierVersion, "unchanged since sending: no notice")
+    let renamed = try NativeQuoteOptions.renameTier(job: job, tierID: "qt_2", name: "Premium")
+    expect(NativeQuoteOptionsState(job: renamed).linkShowsEarlierVersion && NativeQuoteOptionsState(job: renamed).isEditable,
+           "edited after sending: notice shown, edits still allowed")
+    let removed = try NativeQuoteOptions.removeOptions(job: job, keepingTierID: "qt_1")
+    expect(NativeQuoteOptionsState(job: removed).linkShowsEarlierVersion, "removed after sending: notice shown")
+    var single = try baseJob()
+    single.approval = try approval(for: single, decision: nil)
+    expect(!NativeQuoteOptionsState(job: single).linkShowsEarlierVersion, "single price sent, no options: no notice")
+    expect(NativeQuoteOptionsState(job: try NativeQuoteOptions.startOptions(job: single)).linkShowsEarlierVersion,
+           "options started after a single price was sent: notice shown")
+    expect(!NativeQuoteOptionsState(job: sent).linkShowsEarlierVersion, "never sent: no notice")
+    var approvedJob = job
+    approvedJob.approval?.decision = "approved"
+    expect(!NativeQuoteOptionsState(job: approvedJob).linkShowsEarlierVersion, "approved: no notice")
+    var noChoice = sent
+    noChoice.approval = try approval(for: sent, decision: "approved")
+    expect(NativeQuoteOptionsState(job: noChoice).approvedWithoutChoice && !NativeQuoteOptionsState(job: job).approvedWithoutChoice,
+           "an options approval without a selection is reported as such, not as pending")
+}
+
+run("review fix 2: decline then approve on the same link moves the job to approved") {
+    expect(JobLifecycleRules.statusAfterEstimateDecision(.declined, decision: .approved) == .approved,
+           "declined → approved")
+    expect(JobLifecycleRules.statusAfterEstimateDecision(.declined, decision: .declined) == .declined,
+           "declined stays declined on a decline")
+    let sent = try reviewJob(status: "declined")
+    var job = sent
+    job.approval = try approvedSelection(of: sent, tierID: "qt_2", addOnIDs: ["qa_1"])
+    let reconciled = NativeQuoteOptions.reconcileEstimateDecision(job: job)
+    expect(reconciled?.status == "approved" && reconciled?.quoteOptions?.acceptance?.tierId == "qt_2"
+           && reconciled?.estimateTotal == betterWithSurge,
+           "options: a declined job approved later is approved with the selection applied")
+
+    var plain = try baseJob(status: "declined")
+    plain.approval = try approval(for: plain, decision: "approved")
+    expect(NativeQuoteOptions.reconcileEstimateDecision(job: plain)?.status == "approved",
+           "single price: the same rule moves a declined job to approved")
+
+    // A revised declined estimate has no live approval: a stale decision in
+    // its history never resurrects it, and a stale server copy carrying the
+    // old token cannot graft onto the re-sent approval.
+    var revised = try baseJob(status: "lead")
+    var archivedApproval = try approval(for: revised, decision: "declined")
+    archivedApproval.declineReason = "Too expensive"
+    revised.approvalHistory = [archivedApproval]
+    expect(NativeQuoteOptions.reconcileEstimateDecision(job: revised) == nil, "revised: history is never reconciled")
+    var resent = revised
+    resent.status = "estimate_sent"
+    resent.approval = try approval(for: revised, decision: nil)
+    resent.approval?.token = String(repeating: "n", count: 48)
+    var stale = resent
+    stale.approval = try approval(for: revised, decision: "approved")
+    expect(NativeQuoteOptions.graftingServerDecision(onto: resent, from: stale) == nil,
+           "revised: an approval on the revoked token is not grafted")
+    expect(NativeQuoteOptions.reconcileEstimateDecision(job: resent) == nil, "revised: the re-sent estimate stays awaiting a reply")
+}
+
+run("review fix 4: a tier edited after sending bills the frozen selection") {
+    let sent = try reviewJob()
+    // Better re-priced to 8 h after sending, not re-sent.
+    var job = sent
+    var better = NativeJobPricingDraft(job: job, tier: job.quoteOptions!.tier(id: "qt_2")!, settings: nil)
+    better.laborHours = 8
+    job = try NativeQuoteOptions.tierPricingSaved(job: job, tierID: "qt_2", draft: better)
+    job.approval = try approvedSelection(of: sent, tierID: "qt_2", addOnIDs: ["qa_1"])
+    guard let reconciled = NativeQuoteOptions.reconcileEstimateDecision(job: job) else {
+        expect(false, "drift: the selection is applied"); return
+    }
+    expect(reconciled.estimateTotal == betterWithSurge && reconciled.laborHours == 8,
+           "drift: consented $672.50 with Better's current (8 h) pricing")
+    expect(reconciled.quoteOptions?.tier(id: "qt_2")?.estimateTotal == betterTotal,
+           "drift: the accepted tier shows the price the customer saw")
+    expect(reconciled.quoteOptions?.addOns.first?.cost == 60, "drift: the add-on's private cost carries over by id")
+
+    let invoice = invoiceLines(reconciled)
+    expect(invoice.breakdown.total == betterWithSurge, "drift: invoice amount $672.50")
+    expect(invoice.lines == [
+        JobInvoiceLineDraft(description: "Labor (4 hrs @ $95/hr)", amount: 380, category: "labor"),
+        JobInvoiceLineDraft(description: "Overhead & operating costs", amount: d("142.5"), category: "overhead"),
+        JobInvoiceLineDraft(description: "Surge protector", amount: 150, category: "other")
+    ], "drift: invoice lines are the approved Better lines plus the add-on (not Labor $760)")
+    expect(lineSum(invoice.lines) == invoice.breakdown.total, "drift: lines sum to the amount due")
+
+    // Tracked time replaces the approved labor line at the job's rate.
+    let tracked = invoiceLines(reconciled, status: "complete", sessions: [
+        JobInvoiceTimeSession(start: "2026-10-03T08:00:00.000Z", end: "2026-10-03T15:00:00.000Z")
+    ])
+    expect(tracked.breakdown.usedTrackedTime && tracked.breakdown.total == d("957.5")
+           && tracked.lines.first?.amount == 665 && tracked.lines.first?.category == "labor",
+           "drift + tracked 7 h: labor $665 replaces the approved $380 (672.50 + 665 − 380)")
+    expect(lineSum(tracked.lines) == tracked.breakdown.total, "drift + tracked: lines sum to the amount due")
+
+    let snapshot = try CanonicalUIAdapters.estimateApprovalSnapshot(job: reconciled, customerName: nil, businessName: "Hopper HVAC")
+    expect(snapshot.lineItems.map(\.amount) == [380, d("142.5"), 150] && snapshot.total == betterWithSurge,
+           "drift: the accepted estimate shows the frozen lines")
+
+    let profit = NativeJobProfitability.input(job: reconciled, invoices: [], expenses: [], laborCostRate: nil)
+    expect(profit.estimatedRevenue == betterWithSurge && profit.estimatedDirectCost == 60,
+           "drift: profitability revenue is the consented total, cost includes the add-on cost")
+
+    // No drift: the derived lines are the approved ones, so today's wording.
+    var exact = sent
+    exact.approval = job.approval
+    let undrifted = NativeQuoteOptions.reconcileEstimateDecision(job: exact)!
+    expect(NativeQuoteOptions.approvedInvoiceQuote(job: undrifted) == nil, "no drift: derived invoice lines")
+    let undriftedInvoice = invoiceLines(undrifted)
+    expect(undriftedInvoice.lines.first?.amount == 380 && lineSum(undriftedInvoice.lines) == betterWithSurge,
+           "no drift: lines still sum to $672.50")
+
+    // Owner-recorded acceptances keep current pricing.
+    let owner = try NativeQuoteOptions.applyAcceptance(
+        job: job, tierId: "qt_2", addOnIds: ["qa_1"], acceptedAt: "2026-10-03T09:00:00.000Z", source: "owner"
+    )
+    expect(NativeQuoteOptions.approvedInvoiceQuote(job: owner) == nil
+           && CanonicalUIAdapters.linkApprovedEstimateLines(job: owner) == nil,
+           "owner-recorded: current pricing applies")
+
+    // The owner re-prices after acceptance: the owner's pricing applies again.
+    var repricing = NativeJobPricingDraft(job: reconciled, settings: nil)
+    repricing.laborHours = 9
+    let repriced = try CanonicalUIAdapters.canonical(from: repricing, baseline: reconciled)
+    expect(repriced.estimateTotal != betterWithSurge && NativeQuoteOptions.approvedInvoiceQuote(job: repriced) == nil,
+           "re-priced after acceptance: today's derived lines")
+}
+
+run("review fix 5: saving the same new add-on twice creates one add-on") {
+    let job = try reviewJob()
+    let once = try NativeQuoteOptions.addAddOn(job: job, draft: .init(label: "Wi-Fi thermostat", price: 89), makeAddOnID: { "qa_sheet" })
+    let twice = try NativeQuoteOptions.addAddOn(job: once, draft: .init(label: "Wi-Fi thermostat", price: 89), makeAddOnID: { "qa_sheet" })
+    expect(twice.quoteOptions?.addOns.map(\.id) == ["qa_1", "qa_sheet"], "a repeated save keeps one add-on")
+    expect(sameJSON(twice, once), "a repeated save is a no-op")
+    var full = job
+    for index in 2...NativeQuoteOptions.maxAddOns {
+        full = try NativeQuoteOptions.addAddOn(job: full, draft: .init(label: "Extra", price: 5), makeAddOnID: { "qa_x\(index)" })
+    }
+    let replay = try NativeQuoteOptions.addAddOn(job: full, draft: .init(label: "Extra", price: 5), makeAddOnID: { "qa_x10" })
+    expect(replay.quoteOptions?.addOns.count == 10, "a repeated save at the limit is not refused")
+}
+
+run("review fix 6: long direct-cost labels are capped at the Worker's 300-character line limit") {
+    var job = try reviewJob()
+    var better = NativeJobPricingDraft(job: job, tier: job.quoteOptions!.tier(id: "qt_2")!, settings: nil)
+    better.jobCosts = [
+        try jobCost("jc-long", label: String(repeating: "x", count: 400), category: "permit", quantity: "1",
+                    unitCost: "10", markupPercent: "0", policy: "passthrough", visible: true),
+        try jobCost("jc-emoji", label: String(repeating: "🔥", count: 200), category: "other", quantity: "1",
+                    unitCost: "5", markupPercent: "0", policy: "passthrough", visible: true)
+    ]
+    job = try NativeQuoteOptions.tierPricingSaved(job: job, tierID: "qt_2", draft: better)
+    let options = try NativeQuoteOptions.snapshotOptions(job: job)!
+    let labels = options.tiers.flatMap { $0.lineItems.map(\.label) }
+    expect(labels.allSatisfy { $0.utf16.count <= 300 }, "every frozen line label fits the Worker's 300 code units")
+    let tierLabels = options.tiers[1].lineItems.map(\.label)
+    expect(tierLabels[1] == String(repeating: "x", count: 299) + "…", "a long label keeps 299 characters and an ellipsis")
+    expect(tierLabels[2] == String(repeating: "🔥", count: 149) + "…", "an emoji label is cut on a character boundary")
+    expect(CanonicalUIAdapters.estimateDirectCostLabel(job.quoteOptions!.tier(id: "qt_2")!.jobCosts![0]) == tierLabels[1],
+           "the invoice's direct-cost label matches the capped estimate label")
+}
+
 if failures == 0 {
     print("PASS: native quote options tests (\(checks) checks)")
 } else {

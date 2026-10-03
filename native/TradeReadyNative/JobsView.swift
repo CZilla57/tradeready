@@ -502,20 +502,28 @@ struct JobDetailView: View {
                     }
                 }
             case .declined:
-                if let reason = store.activeEstimateApproval(jobID: job.id)?.declineReason,
-                   !reason.isEmpty {
-                    LabeledContent("Customer reason", value: reason)
-                }
-                Button {
-                    showingRevisionConfirmation = true
-                } label: {
-                    if isBeginningRevision {
-                        Label("Preparing revision…", systemImage: "hourglass")
-                    } else {
-                        Label("Revise declined estimate", systemImage: "arrow.uturn.backward.circle")
+                if store.activeEstimateApproval(jobID: job.id)?.decision == "approved" {
+                    // Phase 25 review fix: the customer approved on the same
+                    // link after declining. There is nothing to revise; the
+                    // decision reconciler moves the job to Approved.
+                    Label("The customer approved this estimate after declining it. It moves to Approved on the next sync.",
+                          systemImage: "checkmark.seal")
+                } else {
+                    if let reason = store.activeEstimateApproval(jobID: job.id)?.declineReason,
+                       !reason.isEmpty {
+                        LabeledContent("Customer reason", value: reason)
                     }
+                    Button {
+                        showingRevisionConfirmation = true
+                    } label: {
+                        if isBeginningRevision {
+                            Label("Preparing revision…", systemImage: "hourglass")
+                        } else {
+                            Label("Revise declined estimate", systemImage: "arrow.uturn.backward.circle")
+                        }
+                    }
+                    .disabled(isBeginningRevision)
                 }
-                .disabled(isBeginningRevision)
             }
         }
     }
@@ -642,8 +650,22 @@ struct JobEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State var job: Job
     @State private var isScheduled: Bool
+    @State private var showingQuoteOptions = false
     private let isNewRecord: Bool
     private let duplicateTemplate: Canonical.Job?
+
+    /// Phase 25 review fix: the recommended option's total while the job (or
+    /// the duplicated template) carries undecided good/better/best options;
+    /// `nil` when the editor owns the price.
+    private var undecidedOptionsTotal: Decimal? {
+        if let duplicateTemplate {
+            return CanonicalUIAdapters.hasUndecidedQuoteOptions(duplicateTemplate) ? duplicateTemplate.estimateTotal : nil
+        }
+        guard let state = store.quoteOptionsState(jobID: job.id), state.hasOptions, state.acceptance == nil else {
+            return nil
+        }
+        return state.jobTotal
+    }
 
     init(job: Job, isNewRecord: Bool = false) {
         _job = State(initialValue: job)
@@ -688,12 +710,32 @@ struct JobEditor: View {
                         DatePicker("Ends", selection: Binding(get: { job.scheduledEnd ?? (job.scheduledAt ?? .now).addingTimeInterval(3600) }, set: { job.scheduledEnd = $0 }), displayedComponents: [.date, .hourAndMinute])
                     }
                 }
-                Section("Estimate") {
-                    CurrencyField(title: "Estimate total", value: $job.estimateTotal)
-                    LabeledContent("Labor hours") {
-                        TextField("0", value: $job.laborHours, format: .number).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                if let recommendedTotal = undecidedOptionsTotal {
+                    // Phase 25 review fix (invariant M1): the price is the
+                    // recommended option's until the customer chooses, so it
+                    // is edited in the options sheet, never typed here.
+                    Section {
+                        LabeledContent("Total (recommended option)", value: NSDecimalNumber(decimal: recommendedTotal).doubleValue.currency)
+                        if duplicateTemplate == nil {
+                            Button("Edit prices in Options", systemImage: "square.stack.3d.up") {
+                                showingQuoteOptions = true
+                            }
+                        }
+                    } header: {
+                        Text("Estimate")
+                    } footer: {
+                        Text(duplicateTemplate == nil
+                             ? "Prices come from your good / better / best options. Edit them in Options."
+                             : "Prices come from the copied options. Edit them in Options after saving.")
                     }
-                    CurrencyField(title: "Hourly rate", value: $job.laborRate)
+                } else {
+                    Section("Estimate") {
+                        CurrencyField(title: "Estimate total", value: $job.estimateTotal)
+                        LabeledContent("Labor hours") {
+                            TextField("0", value: $job.laborHours, format: .number).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                        }
+                        CurrencyField(title: "Hourly rate", value: $job.laborRate)
+                    }
                 }
                 Section {
                     LabeledField(label: "Notes") { TextField("Anything worth remembering", text: $job.notes, axis: .vertical) }
@@ -706,6 +748,7 @@ struct JobEditor: View {
             )
             .navigationBarTitleDisplayMode(.inline)
             .nativeKeyboardDoneBar()
+            .sheet(isPresented: $showingQuoteOptions) { NativeQuoteOptionsView(jobID: job.id) }
             .toolbar {
                 DismissableFormToolbar(title: duplicateTemplate != nil ? "Duplicate" : isNewRecord ? "New Job" : "Job") {
                     if !isScheduled {
