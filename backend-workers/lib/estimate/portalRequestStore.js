@@ -30,6 +30,32 @@ async function insertPortalRequest(env, userId, request) {
   if (!res.ok) throw new Error(`Supabase insert ${res.status}: ${await res.text()}`);
 }
 
+// Insert-if-absent for one-per-episode rows (Phase 32 quote_update). Same
+// ignore-duplicates contract as insertPortalRequest, plus
+// return=representation so the caller learns whether THIS call created the
+// row: PostgREST returns the inserted row, or [] when the id already existed.
+// That boolean drives notify-once — a retry or second click never re-alerts.
+async function insertRequestIfAbsent(env, userId, request) {
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/bookingRequests`, {
+    method: 'POST',
+    headers: {
+      ...headers(env),
+      'Content-Type': 'application/json',
+      Prefer: 'resolution=ignore-duplicates,return=representation',
+    },
+    body: JSON.stringify({
+      id: request.id,
+      user_id: userId,
+      data: request,
+      updated_at: new Date().toISOString(),
+      deleted: false,
+    }),
+  });
+  if (!res.ok) throw new Error(`Supabase insert ${res.status}: ${await res.text()}`);
+  const rows = await res.json();
+  return Array.isArray(rows) && rows.length > 0;
+}
+
 // Best-effort security log (markLog convention: NEVER throws — a broken log
 // table must not take the write path down). token_prefix only, never the
 // raw token.
@@ -69,4 +95,10 @@ async function fetchSettingsData(env, userId) {
   return rows.length ? rows[0].data || {} : {};
 }
 
-module.exports = { insertPortalRequest, logPortalEvent, countTodayRequests, fetchSettingsData };
+module.exports = {
+  insertPortalRequest,
+  insertRequestIfAbsent,
+  logPortalEvent,
+  countTodayRequests,
+  fetchSettingsData,
+};

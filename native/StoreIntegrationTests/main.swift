@@ -3961,6 +3961,38 @@ struct StoreIntegrationTests {
                    "10.12 gate ordering: zero visible insights suppresses the card even when otherwise eligible")
             expect(NativeInsightsCardPolicy.isVisible(setupComplete: true, hero: nil, insights: five),
                    "10.12 gate ordering: setup complete + no hero + insights present shows the card")
+
+            // Phase 32 (spec 2026-10-03 §6.8): quote_expired is dismiss-only
+            // (its id carries the date, so an extension re-arms it);
+            // quote_expiring resolves on its own and has no mute affordance.
+            expect(NativeInsightsCardPolicy.isMuteable(.quoteExpired) && NativeInsightsCardPolicy.snoozeDays(for: .quoteExpired) == nil,
+                   "Phase 32 quote_expired is dismiss-only")
+            expect(!NativeInsightsCardPolicy.isMuteable(.quoteExpiring), "Phase 32 quote_expiring is not muteable")
+            expect(NativeInsightsCardPolicy.symbolName(for: .quoteExpiring) == "hourglass"
+                   && NativeInsightsCardPolicy.symbolName(for: .quoteExpired) == "hourglass.bottomhalf.filled",
+                   "Phase 32 quote kinds use the hourglass symbols")
+            let expired = insight1012(.quoteExpired, id: "quote_expired:j9:2026-09-01")
+            let expiring = insight1012(.quoteExpiring, id: "quote_expiring:j8:2026-09-25")
+            let dismissed = [NativeInsightMutes.makeMute(id: expired.id, now: now)]
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [expiring, expired], mutes: dismissed, now: now).map(\.id) == [expiring.id],
+                   "Phase 32 a dismissed quote_expired row stays hidden")
+            let reArmed = insight1012(.quoteExpired, id: "quote_expired:j9:2026-09-20")
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [reArmed], mutes: dismissed, now: now).map(\.id) == [reArmed.id],
+                   "Phase 32 an extended-then-expired estimate (new date, new id) shows again")
+            // The dismiss-only aggregate carries its newest date, so
+            // dismissing one batch never hides the next one for good.
+            let batch = insight1012(.quoteExpired, id: "quote_expired:all:2026-09-01")
+            let batchDismissed = [NativeInsightMutes.makeMute(id: batch.id, now: now)]
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [batch], mutes: batchDismissed, now: now).isEmpty,
+                   "Phase 32 a dismissed quote_expired aggregate stays hidden")
+            let nextBatch = insight1012(.quoteExpired, id: "quote_expired:all:2026-09-20")
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [nextBatch], mutes: batchDismissed, now: now).map(\.id) == [nextBatch.id],
+                   "Phase 32 the next quote_expired aggregate shows despite the earlier dismissal")
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [expired, expiring], mutes: nil, now: now).map(\.id) == [expiring.id],
+                   "Phase 32 fail-closed hides quote_expired but keeps the self-resolving quote_expiring")
+            expect(NativeInsightsCardPolicy.muteControlsAvailable(for: .quoteExpired, mutes: [])
+                   && !NativeInsightsCardPolicy.muteControlsAvailable(for: .quoteExpiring, mutes: []),
+                   "Phase 32 only quote_expired offers mute controls")
         }
 
         // --- Every checklist destination (pure `NativeSetupChecklist.route`).

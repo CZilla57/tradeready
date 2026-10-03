@@ -582,20 +582,26 @@ public extension Canonical {
         public var total: Decimal
         public var currency: String
         public var options: Options?
+        /// Phase 32: the inclusive `YYYY-MM-DD` the customer is shown, and
+        /// the IANA zone it is evaluated in. Both present or both absent.
+        public var validUntil: DateString?
+        public var validUntilTimeZone: String?
         public var preservation: Preservation
         public init(from decoder: Decoder) throws {
             var o = try ObjectReader(decoder)
             businessName = try o.required("businessName"); customerName = try o.required("customerName")
             jobTitle = try o.required("jobTitle"); lineItems = try o.required("lineItems")
             total = try o.required("total"); currency = try o.required("currency")
-            options = try o.optional("options"); preservation = o.finish()
+            options = try o.optional("options"); validUntil = try o.optional("validUntil")
+            validUntilTimeZone = try o.optional("validUntilTimeZone"); preservation = o.finish()
         }
         public func encode(to encoder: Encoder) throws {
             var o = ObjectWriter(preservation)
             try o.put(businessName, for: "businessName"); try o.put(customerName, for: "customerName")
             try o.put(jobTitle, for: "jobTitle"); try o.put(lineItems, for: "lineItems")
             try o.put(total, for: "total"); try o.put(currency, for: "currency")
-            try o.putOptional(options, for: "options"); try o.encode(to: encoder)
+            try o.putOptional(options, for: "options"); try o.putOptional(validUntil, for: "validUntil")
+            try o.putOptional(validUntilTimeZone, for: "validUntilTimeZone"); try o.encode(to: encoder)
         }
     }
 
@@ -955,6 +961,9 @@ public extension Canonical {
         public var recurringJobId: String?
         public var occurrenceNumber: Int?
         public var estimateSentAt: DateString?
+        /// Phase 32: local inclusive `YYYY-MM-DD` validity of the most recent
+        /// send. Meaningful only while `status == "estimate_sent"`.
+        public var estimateValidUntil: DateString?
         public var approval: EstimateApproval?
         public var approvalHistory: [EstimateApproval]?
         public var changeOrders: [ChangeOrder]?
@@ -978,7 +987,8 @@ public extension Canonical {
             invoiceId = try o.optional("invoiceId"); createdAt = try o.required("createdAt")
             photos = try o.optional("photos"); timeSessions = try o.optional("timeSessions")
             recurringJobId = try o.optional("recurringJobId"); occurrenceNumber = try o.optional("occurrenceNumber")
-            estimateSentAt = try o.optional("estimateSentAt"); approval = try o.optional("approval")
+            estimateSentAt = try o.optional("estimateSentAt"); estimateValidUntil = try o.optional("estimateValidUntil")
+            approval = try o.optional("approval")
             approvalHistory = try o.optional("approvalHistory")
             changeOrders = try o.optional("changeOrders"); archivedAt = try o.optional("archivedAt")
             importBatchId = try o.optional("importBatchId"); quoteOptions = try o.optional("quoteOptions")
@@ -1000,7 +1010,8 @@ public extension Canonical {
             try o.putOptional(invoiceId, for: "invoiceId"); try o.put(createdAt, for: "createdAt")
             try o.putOptional(photos, for: "photos"); try o.putOptional(timeSessions, for: "timeSessions")
             try o.putOptional(recurringJobId, for: "recurringJobId"); try o.putOptional(occurrenceNumber, for: "occurrenceNumber")
-            try o.putOptional(estimateSentAt, for: "estimateSentAt"); try o.putOptional(approval, for: "approval")
+            try o.putOptional(estimateSentAt, for: "estimateSentAt"); try o.putOptional(estimateValidUntil, for: "estimateValidUntil")
+            try o.putOptional(approval, for: "approval")
             try o.putOptional(approvalHistory, for: "approvalHistory")
             try o.putOptional(changeOrders, for: "changeOrders"); try o.putOptional(archivedAt, for: "archivedAt")
             try o.putOptional(importBatchId, for: "importBatchId"); try o.putOptional(quoteOptions, for: "quoteOptions")
@@ -1639,6 +1650,8 @@ public extension Canonical {
         public var reviewRequestEnabled: Bool
         public var reviewRequestTemplate, googleReviewLink: String
         public var reviewRequestDelayHours: Int
+        /// Phase 32: integer 0…365. Absent = 30; 0 = estimates don't expire.
+        public var estimateValidityDays: Int?
         public var preservation: Preservation
 
         public init(from decoder: Decoder) throws {
@@ -1670,6 +1683,7 @@ public extension Canonical {
             reviewRequestTemplate = try o.defaulted("reviewRequestTemplate", to: "")
             googleReviewLink = try o.defaulted("googleReviewLink", to: "")
             reviewRequestDelayHours = try o.defaulted("reviewRequestDelayHours", to: 3)
+            estimateValidityDays = try o.optional("estimateValidityDays")
             preservation = o.finish()
         }
 
@@ -1698,6 +1712,7 @@ public extension Canonical {
             try o.putDefaulted(anthropicKey, for: "anthropicKey"); try o.putDefaulted(groqKey, for: "groqKey")
             try o.putDefaulted(reviewRequestEnabled, for: "reviewRequestEnabled"); try o.putDefaulted(reviewRequestTemplate, for: "reviewRequestTemplate")
             try o.putDefaulted(googleReviewLink, for: "googleReviewLink"); try o.putDefaulted(reviewRequestDelayHours, for: "reviewRequestDelayHours")
+            try o.putOptional(estimateValidityDays, for: "estimateValidityDays")
             try o.encode(to: encoder)
         }
     }

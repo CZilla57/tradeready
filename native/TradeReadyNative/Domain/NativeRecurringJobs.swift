@@ -170,6 +170,8 @@ extension Canonical.Job {
         self.recurringJobId = rule.id
         self.occurrenceNumber = occurrence
         self.estimateSentAt = nil
+        // Phase 32 §3: an occurrence is never a sent estimate, so no validity.
+        self.estimateValidUntil = nil
         self.approval = nil
         self.approvalHistory = nil
         self.changeOrders = nil

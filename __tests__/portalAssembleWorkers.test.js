@@ -104,7 +104,7 @@ describe("assemblePortalView — whitelist boundary", () => {
     for (const a of out.appointments)
       expect(Object.keys(a).sort()).toEqual(["date", "end", "icsUrl", "jobRef", "manageUrl", "start", "title"]);
     for (const e of out.estimates)
-      expect(Object.keys(e).sort()).toEqual(["approvalUrl", "decision", "hasOptions", "title", "total"]);
+      expect(Object.keys(e).sort()).toEqual(["approvalUrl", "decision", "expired", "hasOptions", "title", "total", "validUntil"]);
     for (const co of out.changeOrders)
       expect(Object.keys(co).sort()).toEqual(["amount", "changeUrl", "jobTitle", "status", "title"]);
     for (const i of out.invoices)
@@ -159,7 +159,7 @@ describe("change orders", () => {
 describe("estimates (v1 behavior unchanged)", () => {
   test("only approval-carrying jobs, frozen snapshot values", () => {
     expect(assemble().estimates).toEqual([
-      { title: "Fence build", total: 2400, decision: null, hasOptions: false,
+      { title: "Fence build", total: 2400, decision: null, hasOptions: false, validUntil: null, expired: false,
         approvalUrl: `https://gettradereadyapp.com/estimate.html?j=j_est&t=${"t".repeat(48)}` },
     ]);
   });
@@ -192,7 +192,7 @@ describe("estimates with good/better/best options (Phase 25)", () => {
 
   test("undecided: hasOptions and the lowest tier total (the page shows From $X)", () => {
     expect(estimatesFor({ snapshot: optionsSnapshot })).toEqual([
-      { title: "AC replacement", total: 1200, decision: null, hasOptions: true,
+      { title: "AC replacement", total: 1200, decision: null, hasOptions: true, validUntil: null, expired: false,
         approvalUrl: `https://gettradereadyapp.com/estimate.html?j=j_opt&t=${"o".repeat(48)}` },
     ]);
   });
@@ -219,6 +219,57 @@ describe("estimates with good/better/best options (Phase 25)", () => {
     expect(flat).not.toContain("Standard unit");
     expect(flat).not.toContain("qa_haul");
     expect(flat).not.toContain("tiers");
+  });
+});
+
+describe("estimate valid-until dates (Phase 32)", () => {
+  // validUntil is inclusive in the owner's zone (spec §2.4): Phoenix is
+  // UTC-7, so Nov 2 ends at 2026-11-03T07:00Z.
+  const dated = (validUntil, validUntilTimeZone = "America/Phoenix") => ({
+    jobTitle: "Fence build", total: 2400, validUntil, validUntilTimeZone,
+  });
+  const estimatesAt = (nowMs, approval) => assemble({
+    nowMs,
+    jobRows: [{ id: "j_d", data: { title: "Fence", customerId: "c1", approval: { token: "d".repeat(48), ...approval } } }],
+  }).estimates;
+
+  test("undecided and valid: the date crosses, not expired (23:30 local on the date)", () => {
+    const [e] = estimatesAt(Date.parse("2026-11-03T06:30:00Z"), { snapshot: dated("2026-11-02") });
+    expect(e).toMatchObject({ validUntil: "2026-11-02", expired: false, decision: null });
+  });
+
+  test("undecided and past the date in the owner zone: expired", () => {
+    const [e] = estimatesAt(Date.parse("2026-11-03T07:00:00Z"), { snapshot: dated("2026-11-02") });
+    expect(e).toMatchObject({ validUntil: "2026-11-02", expired: true, decision: null });
+  });
+
+  test("an option estimate past its date is expired and still shows its lowest tier", () => {
+    const snapshot = {
+      ...dated("2026-11-02"),
+      options: { recommendedTierId: "b", tiers: [{ id: "a", name: "A", lineItems: [], total: 900 }, { id: "b", name: "B", lineItems: [], total: 2400 }] },
+    };
+    const [e] = estimatesAt(Date.parse("2026-11-04T00:00:00Z"), { snapshot });
+    expect(e).toMatchObject({ total: 900, hasOptions: true, expired: true });
+  });
+
+  test("expired is false once the customer decided", () => {
+    const later = Date.parse("2026-12-01T00:00:00Z");
+    expect(estimatesAt(later, { snapshot: dated("2026-11-02"), decision: "declined" })[0])
+      .toMatchObject({ validUntil: "2026-11-02", expired: false, decision: "declined" });
+    expect(estimatesAt(later, { snapshot: dated("2026-11-02"), decision: "approved" })[0])
+      .toMatchObject({ validUntil: "2026-11-02", expired: false, decision: "approved" });
+  });
+
+  test("an unknown zone is judged anywhere-on-Earth; undated never expires", () => {
+    expect(estimatesAt(Date.parse("2026-11-03T11:59:59Z"), { snapshot: dated("2026-11-02", "Mars/Olympus") })[0].expired).toBe(false);
+    expect(estimatesAt(Date.parse("2026-11-03T12:00:00Z"), { snapshot: dated("2026-11-02", "Mars/Olympus") })[0].expired).toBe(true);
+    expect(estimatesAt(Date.parse("2099-01-01T00:00:00Z"), { snapshot: { jobTitle: "Old", total: 1 } })[0])
+      .toMatchObject({ validUntil: null, expired: false });
+  });
+
+  test("the zone itself never crosses the wire", () => {
+    const flat = JSON.stringify(estimatesAt(Date.parse("2026-11-01T00:00:00Z"), { snapshot: dated("2026-11-02") }));
+    expect(flat).not.toContain("America/Phoenix");
   });
 });
 

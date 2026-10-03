@@ -1288,7 +1288,9 @@ Enum definitions:
   other (`types/models.ts:44-45`).
 - `InsightKind` = labor_overrun, low_margin_estimate, uninvoiced_complete, due_soon,
   open_slot, unscheduled_approved, maintenance_due, expense_anomaly
-  (`utils/todayInsights.ts:28`).
+  (`utils/todayInsights.ts:28`), plus the native-only quote_expiring and quote_expired
+  (Roadmap Phase 32, `docs/superpowers/specs/2026-10-03-quote-expiration-design.md`
+  §6.8). The two kinds are an additive enum change only, so `catalogVersion` stays 1.
 
 Autocapture adds `$screen` (§9.3) and the SDK's `Application …` lifecycle events
 (installed, updated, opened, backgrounded; exact names are set by the pinned SDK).
@@ -1305,7 +1307,7 @@ JSON. Each event maps to a list of allowed property-shape variants.
     "PaymentMethod": ["stripe","cash","check","card","other"],
     "JobStatus": ["lead","estimate_sent","approved","scheduled","in_progress","complete","invoiced","paid","declined"],
     "ExpenseCategoryId": ["materials","tools","fuel","labor","insurance","software","marketing","other"],
-    "InsightKind": ["labor_overrun","low_margin_estimate","uninvoiced_complete","due_soon","open_slot","unscheduled_approved","maintenance_due","expense_anomaly"]
+    "InsightKind": ["labor_overrun","low_margin_estimate","uninvoiced_complete","due_soon","open_slot","unscheduled_approved","maintenance_due","expense_anomaly","quote_expiring","quote_expired"]
   },
   "events": {
     "ai_chat_sent": [{"source": "insight_prefill|organic", "provider": "anthropic|groq|backend"}],

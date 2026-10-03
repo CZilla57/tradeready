@@ -288,6 +288,88 @@ run("lead source is typed on customers and booking requests") {
     expect(taggedJSON == .object(requestFields), "a tagged booking request round-trips exactly")
 }
 
+// Phase 32 (spec 2026-10-03-quote-expiration-design.md §2, §6.1): the job's
+// valid-until date, the settings default and the snapshot's date + zone are
+// typed optional fields. Absent stays absent; present round-trips exactly and
+// survives an unrelated edit.
+run("quote expiry fields are typed and preserved") {
+    guard case var .object(jobFields)? = rich["quoteOptionsJob"],
+          case var .object(approvalFields)? = jobFields["approval"],
+          case var .object(snapshotFields)? = approvalFields["snapshot"],
+          case var .object(settingsFields)? = rich["settings"]
+    else { throw NSError(domain: "CanonicalTests", code: 14, userInfo: [NSLocalizedDescriptionKey: "Missing quote options job or settings"]) }
+
+    snapshotFields["validUntil"] = .string("2026-11-02")
+    snapshotFields["validUntilTimeZone"] = .string("America/Phoenix")
+    approvalFields["snapshot"] = .object(snapshotFields)
+    jobFields["approval"] = .object(approvalFields)
+    jobFields["estimateValidUntil"] = .string("2026-11-02")
+    let jobSource = Canonical.JSONValue.object(jobFields)
+    let job = try decoder.decode(Canonical.Job.self, from: encoder.encode(jobSource))
+    expect(job.estimateValidUntil == "2026-11-02" && job.preservation.unknownFields["estimateValidUntil"] == nil,
+           "estimateValidUntil decodes as a typed field")
+    expect(job.approval?.snapshot.validUntil == "2026-11-02"
+           && job.approval?.snapshot.validUntilTimeZone == "America/Phoenix"
+           && job.approval?.snapshot.preservation.unknownFields["validUntil"] == nil
+           && job.approval?.snapshot.preservation.unknownFields["validUntilTimeZone"] == nil,
+           "snapshot validUntil and validUntilTimeZone decode as typed fields")
+    let datedJSON = try json(job)
+    expect(datedJSON == jobSource, "a dated job and snapshot round-trip exactly")
+
+    var retitled = job
+    retitled.title = "Retitled"
+    let retitledFields = try object(retitled)
+    guard case let .object(retitledApproval)? = retitledFields["approval"],
+          case let .object(retitledSnapshot)? = retitledApproval["snapshot"]
+    else { throw NSError(domain: "CanonicalTests", code: 15) }
+    expect(retitledFields["estimateValidUntil"] == .string("2026-11-02")
+           && retitledSnapshot["validUntil"] == .string("2026-11-02")
+           && retitledSnapshot["validUntilTimeZone"] == .string("America/Phoenix"),
+           "an unrelated edit keeps the dates")
+
+    var cleared = job
+    cleared.estimateValidUntil = nil
+    cleared.approval?.snapshot.validUntil = nil
+    cleared.approval?.snapshot.validUntilTimeZone = nil
+    let clearedFields = try object(cleared)
+    guard case let .object(clearedApproval)? = clearedFields["approval"],
+          case let .object(clearedSnapshot)? = clearedApproval["snapshot"]
+    else { throw NSError(domain: "CanonicalTests", code: 16) }
+    expect(clearedFields["estimateValidUntil"] == nil && clearedSnapshot["validUntil"] == nil
+           && clearedSnapshot["validUntilTimeZone"] == nil,
+           "clearing the dates removes the keys")
+
+    let undated: Canonical.Job = try field("quoteOptionsJob", from: rich)
+    let undatedFields = try object(undated)
+    guard case let .object(undatedApproval)? = undatedFields["approval"],
+          case let .object(undatedSnapshot)? = undatedApproval["snapshot"]
+    else { throw NSError(domain: "CanonicalTests", code: 17) }
+    expect(undated.estimateValidUntil == nil && undatedFields["estimateValidUntil"] == nil
+           && undatedSnapshot["validUntil"] == nil && undatedSnapshot["validUntilTimeZone"] == nil,
+           "an undated job and snapshot stay without the keys")
+    let legacyJob: Canonical.Job = try field("job", from: legacy)
+    let legacyFields = try object(legacyJob)
+    expect(legacyJob.estimateValidUntil == nil && legacyFields["estimateValidUntil"] == nil,
+           "a legacy job stays without estimateValidUntil")
+
+    let plainSettings: Canonical.Settings = try field("settings", from: rich)
+    let plainSettingsFields = try object(plainSettings)
+    expect(plainSettings.estimateValidityDays == nil && plainSettingsFields["estimateValidityDays"] == nil,
+           "settings without a validity stay without the key")
+    settingsFields["estimateValidityDays"] = .number(14)
+    let settingsSource = Canonical.JSONValue.object(settingsFields)
+    let settings = try decoder.decode(Canonical.Settings.self, from: encoder.encode(settingsSource))
+    expect(settings.estimateValidityDays == 14 && settings.preservation.unknownFields["estimateValidityDays"] == nil,
+           "estimateValidityDays decodes as a typed field")
+    let settingsJSON = try json(settings)
+    expect(settingsJSON == settingsSource, "settings with a validity round-trip exactly")
+    settingsFields["estimateValidityDays"] = .number(0)
+    let zero = try decoder.decode(Canonical.Settings.self, from: encoder.encode(Canonical.JSONValue.object(settingsFields)))
+    let zeroFields = try object(zero)
+    expect(zero.estimateValidityDays == 0 && zeroFields["estimateValidityDays"] == .number(0),
+           "0 (no expiry) is kept, not dropped")
+}
+
 run("versioned envelope") {
     let job: Canonical.Job = try field("job", from: rich)
     var envelope = Canonical.Envelope(schemaVersion: 7, payload: job)

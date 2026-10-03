@@ -317,11 +317,21 @@ enum CanonicalUIAdapters {
     /// - Accepted: a single estimate of the job's (accepted, M2) pricing plus
     ///   one line per accepted add-on. Add-on prices are subtracted before the
     ///   residual operating-cost line; there is no `options` key.
+    ///
+    /// Phase 32 (spec 2026-10-03 §2.3, §6.1): `validUntil` (`YYYY-MM-DD`) and
+    /// `validUntilTimeZone` (IANA id) are frozen into the snapshot as a term of
+    /// the offer. Both present or both absent; exactly one throws
+    /// `invalidCanonicalRecord("estimate-validity")`.
     static func estimateApprovalSnapshot(
         job: Canonical.Job,
         customerName: String?,
-        businessName: String
+        businessName: String,
+        validUntil: Canonical.DateString? = nil,
+        validUntilTimeZone: String? = nil
     ) throws -> Canonical.EstimateApprovalSnapshot {
+        guard (validUntil == nil) == (validUntilTimeZone == nil) else {
+            throw CanonicalUIAdapterError.invalidCanonicalRecord("estimate-validity")
+        }
         var lineItems: [Canonical.JSONValue]
         var total = job.estimateTotal
         var optionsField: [String: Canonical.JSONValue]?
@@ -360,6 +370,10 @@ enum CanonicalUIAdapters {
             "currency": .string("USD")
         ]
         if let optionsField { fields["options"] = .object(optionsField) }
+        if let validUntil, let validUntilTimeZone {
+            fields["validUntil"] = .string(validUntil)
+            fields["validUntilTimeZone"] = .string(validUntilTimeZone)
+        }
         return try decode(fields)
     }
 
@@ -530,10 +544,22 @@ enum CanonicalUIAdapters {
     /// additive fields preserved from a future writer. Used after the
     /// sync-before-mint round trip so a stale review can never freeze newer
     /// canonical estimate values.
+    ///
+    /// Phase 32 (spec 2026-10-03 §6.1): `validUntil` and `validUntilTimeZone`
+    /// are terms of the offer and compare exactly. `ignoringValidity: true`
+    /// compares as if both were absent on both sides: the declined-revision
+    /// guard and the extension check use it so a fresh date alone never
+    /// counts as a revision (or as a pricing change).
     static func estimateApprovalSnapshotsMatch(
         _ lhs: Canonical.EstimateApprovalSnapshot,
-        _ rhs: Canonical.EstimateApprovalSnapshot
+        _ rhs: Canonical.EstimateApprovalSnapshot,
+        ignoringValidity: Bool = false
     ) -> Bool {
+        if !ignoringValidity {
+            guard lhs.validUntil == rhs.validUntil,
+                  lhs.validUntilTimeZone == rhs.validUntilTimeZone
+            else { return false }
+        }
         guard lhs.businessName == rhs.businessName,
               lhs.customerName == rhs.customerName,
               lhs.jobTitle == rhs.jobTitle,
@@ -766,6 +792,7 @@ enum CanonicalUIAdapters {
             "reviewRequestTemplate": .string(value.reviewRequestTemplate),
             "googleReviewLink": .string(value.googleReviewLink),
             "reviewRequestDelayHours": .number(Decimal(value.reviewRequestDelayHours)),
+            "estimateValidityDays": .number(Decimal(value.estimateValidityDays)),
             // Native-only preferences stay inside the canonical record's
             // preservation bag instead of a second persisted model.
             "appearance": .string(value.appearance.rawValue),
@@ -945,6 +972,8 @@ enum CanonicalUIAdapters {
         update(&fields, "googleReviewLink", edit.value.googleReviewLink, original.googleReviewLink)
         update(&fields, "reviewRequestTemplate", edit.value.reviewRequestTemplate, original.reviewRequestTemplate)
         if edit.value.reviewRequestDelayHours != original.reviewRequestDelayHours { fields["reviewRequestDelayHours"] = .number(Decimal(edit.value.reviewRequestDelayHours)) }
+        // Phase 32: absent reads as 30, so an untouched default never writes the key.
+        if edit.value.estimateValidityDays != original.estimateValidityDays { fields["estimateValidityDays"] = .number(Decimal(edit.value.estimateValidityDays)) }
         if edit.value.appearance != original.appearance { fields["appearance"] = .string(edit.value.appearance.rawValue) }
         if edit.value.bookingEnabled != original.bookingEnabled { fields["bookingEnabled"] = .bool(edit.value.bookingEnabled) }
 
@@ -1046,6 +1075,8 @@ enum CanonicalUIAdapters {
         result.bookableSlotsEnabled = value.schedule?.bookableSlotsEnabled ?? false
         result.reviewRequestEnabled = value.reviewRequestEnabled; result.googleReviewLink = value.googleReviewLink
         result.reviewRequestDelayHours = value.reviewRequestDelayHours; result.reviewRequestTemplate = value.reviewRequestTemplate
+        // Phase 32: absent = 30; a malformed stored value is clamped into 0…365.
+        result.estimateValidityDays = min(max(value.estimateValidityDays ?? 30, 0), 365)
         if case let .string(raw)? = value.preservation.unknownFields["appearance"] {
             result.appearance = Appearance(rawValue: raw) ?? .system
         }

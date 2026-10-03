@@ -7,6 +7,7 @@ import { fetchJob, constantTimeEqual } from '../../../lib/estimateStore.js';
 import { createRateLimiter } from '../../../lib/guards.js';
 import { applyCors } from '../../../lib/estimate/cors.js';
 import { snapshotDigest } from '../../../lib/estimate/quoteOptions.js';
+import { snapshotExpiry } from '../../../lib/estimate/estimateExpiry.js';
 import { clientIp } from '../../appCors.js';
 
 const allow = createRateLimiter({ limit: 30 });
@@ -35,6 +36,7 @@ export async function estimateViewHandler(c) {
     return c.json({ error: 'This link is invalid or has expired.' }, 404);
   }
 
+  const nowMs = Date.now();
   const body = {
     ...a.snapshot,
     decision: a.decision || null,
@@ -44,6 +46,10 @@ export async function estimateViewHandler(c) {
     // Echoed back by the page on respond; option estimates require it so a
     // decision made on a superseded snapshot is refused (Phase 25 §4).
     snapshotDigest: snapshotDigest(a.snapshot),
+    // Phase 32: past its valid-until date in the owner's zone, so respond
+    // will refuse an approval (410). validUntil/validUntilTimeZone already
+    // arrive through the snapshot spread. An approval is never "expired".
+    expired: a.decision !== 'approved' && snapshotExpiry(a.snapshot, nowMs).expired,
   };
   // The customer's accepted good/better/best choice (server-written by
   // respond, under the approved lock).

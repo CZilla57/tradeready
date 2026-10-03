@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto';
 import { fetchJobForUser, upsertJob, planApprovalWrite } from '../../../lib/estimateStore.js';
 import { createRateLimiter } from '../../../lib/guards.js';
 import { hasSnapshotOptions, validateSnapshotOptions } from '../../../lib/estimate/quoteOptions.js';
+import { validateSnapshotValidity } from '../../../lib/estimate/estimateExpiry.js';
 import { jsonBody } from '../../appCors.js';
 
 const allow = createRateLimiter({ limit: 10 });
@@ -73,6 +74,13 @@ export async function estimateCreateLinkHandler(c) {
     const optionsError = validateSnapshotOptions(snapshot);
     if (optionsError) return c.json({ error: optionsError }, 400);
   }
+  // Quote expiration (Phase 32): validUntil + validUntilTimeZone travel
+  // together, are real, and are not already past in the owner's zone — so a
+  // link can never be born expired. Undated snapshots skip this entirely.
+  // Extension and re-issue both arrive here and reuse planApprovalWrite.
+  const nowMs = Date.now();
+  const validityError = validateSnapshotValidity(snapshot, nowMs);
+  if (validityError) return c.json({ error: validityError }, 400);
   if (changeOrderId !== undefined && typeof changeOrderId !== 'string') {
     return c.json({ error: 'changeOrderId must be a string' }, 400);
   }
@@ -88,7 +96,7 @@ export async function estimateCreateLinkHandler(c) {
     return c.json({ error: 'Estimate not synced yet. Open the app while online and try again.' }, 422);
   }
 
-  const sentAt = new Date().toISOString();
+  const sentAt = new Date(nowMs).toISOString();
 
   if (changeOrderId) {
     const plan = planChangeOrderLink(row.data?.changeOrders, changeOrderId, snapshot, sentAt,

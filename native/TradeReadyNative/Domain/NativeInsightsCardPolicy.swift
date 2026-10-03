@@ -13,14 +13,18 @@ enum NativeInsightsCardPolicy {
     static let visibleLimit = 3
 
     /// `MUTEABLE_KINDS` — long-horizon conditions that can't self-clear.
-    /// The other five kinds deliberately have no dismiss/snooze affordance;
-    /// they disappear on their own as their condition resolves.
+    /// The other kinds deliberately have no dismiss/snooze affordance; they
+    /// disappear on their own as their condition resolves.
+    ///
+    /// Phase 32 (spec 2026-10-03 §6.8): `quote_expired` is dismiss-only (its
+    /// id carries the date, so an extension re-arms it); `quote_expiring`
+    /// resolves on its own and is not muteable.
     static let muteableKinds: Set<NativeInsightKind> = [
-        .lowMarginEstimate, .maintenanceDue, .expenseAnomaly,
+        .lowMarginEstimate, .maintenanceDue, .expenseAnomaly, .quoteExpired,
     ]
 
-    /// `SNOOZE_DAYS` — only `maintenance_due` offers "Snooze"; the other two
-    /// muteable kinds are dismiss-only (their ids are already time/price
+    /// `SNOOZE_DAYS` — only `maintenance_due` offers "Snooze"; the other
+    /// muteable kinds are dismiss-only (their ids are already time/price/date
     /// scoped, so a plain dismiss naturally expires).
     static let snoozeDaysByKind: [NativeInsightKind: Int] = [.maintenanceDue: 30]
 
@@ -45,6 +49,8 @@ enum NativeInsightsCardPolicy {
         case .unscheduledApproved: return "calendar"
         case .maintenanceDue: return "wrench.and.screwdriver"
         case .expenseAnomaly: return "chart.line.uptrend.xyaxis"
+        case .quoteExpiring: return "hourglass"
+        case .quoteExpired: return "hourglass.bottomhalf.filled"
         }
     }
 
@@ -55,7 +61,7 @@ enum NativeInsightsCardPolicy {
     /// Fail-closed (brief step 5, decision row 17): `mutes == nil` means the
     /// mute store could not be read. RN would degrade to `[]` (an EMPTY mute
     /// list, which is unsafe here — it would let an actively-dismissed row
-    /// resurrect). Native instead renders ONLY the five non-muteable
+    /// resurrect). Native instead renders ONLY the non-muteable
     /// (self-resolving) kinds, unfiltered — those kinds have no persisted
     /// mute state to begin with, so omitting mute-filtering for them cannot
     /// resurrect a dismissal. Muteable-kind rows are hidden entirely rather
