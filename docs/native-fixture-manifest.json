@@ -2073,10 +2073,6 @@
    "path": "__tests__/bookingValidate.test.js",
    "sha256": "8152cecdc398117cd76988c9bcb64859b1fae5d55fb8a6cf2a05ab5f67acad50"
   },
-  "bookingValidateLeadSource": {
-   "path": "__tests__/bookingValidateLeadSource.test.js",
-   "sha256": "9c39948c00721fc4903ad069d3730bba685a038574473962c87606be1c27b352"
-  },
   "bulkInvoiceActions": {
    "path": "__tests__/bulkInvoiceActions.test.ts",
    "sha256": "c87254d1e807a23bd5e6c0ab852f4c6645077c0711bfe1dfacdd4df0af79e567"
