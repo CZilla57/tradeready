@@ -7,7 +7,7 @@
    "testSources": [
     {
      "path": "native/AccessibilityAuditTests",
-     "sha256": "b035a213e1b73284e4c90bd420bf5c7fbaa1e2b273f35be8446a4488e7ab5b2f"
+     "sha256": "b5cd3ed6a0de69e8899237e330e71b55c58fee10c5a73c4b92e698f377624c97"
     }
    ],
    "fixtures": []
@@ -451,7 +451,7 @@
    "testSources": [
     {
      "path": "native/ConfirmationTests",
-     "sha256": "d6301ec8be96eddb3f8cfea1e29c72502608637236fe8866fdeefa9f45645c83"
+     "sha256": "16d32e1f2c8e798ae6ddbdb88cf94cbba4845d33ba7effd248d5cb5f44f1a0b1"
     }
    ],
    "fixtures": []
@@ -862,11 +862,11 @@
   },
   "job-forms": {
    "script": "native/run-job-forms-tests.sh",
-   "scriptSha256": "b1c9fb262ed35cbf2dc4cd86b2a3720ef15afa8b041a029f8f3dd0948e7f390e",
+   "scriptSha256": "acb8f464a64d4648a3a901037e58b9f74dfc3d77cc455eac778155b9a8ce6233",
    "testSources": [
     {
      "path": "native/JobFormsTests",
-     "sha256": "0c592ca2c4dbdf106d950a7a20ed5b44fbd31da7bd25172d25f3a7fbfaeb5c00"
+     "sha256": "ef8fc3a12c03f4e84867af0f0e6333c4307cc7c78de7b1f76b38c47789b76d7d"
     },
     {
      "path": "native/CanonicalTests",
@@ -942,7 +942,7 @@
    "testSources": [
     {
      "path": "native/LayoutMetricsTests",
-     "sha256": "c65ab5130679ca2dadf81a49738fda815b6a7d81f169d61f57e2e698e747c765"
+     "sha256": "f74317a4c411056c091f52cfc816247a97596ea1b8bdc965d805d6ee13e6e366"
     }
    ],
    "fixtures": []

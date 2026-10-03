@@ -193,7 +193,8 @@ private struct PhotoThumbnail: View {
     }
 }
 
-private struct NativeJobPhotoViewer: View {
+/// Module-wide so a form item's photos open in the same viewer (Phase 20).
+struct NativeJobPhotoViewer: View {
     @Environment(\.dismiss) private var dismiss
     let photo: Canonical.JobPhoto
     let bytes: Data?

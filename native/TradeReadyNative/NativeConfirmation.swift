@@ -5,6 +5,8 @@ enum NativeConfirmationIntent: Equatable, Sendable {
     case deleteInvoice(recordID: String)
     case deleteCustomer(recordID: String)
     case mergeCustomer(loserID: String, winnerID: String)
+    /// Phase 20: a job form instance (the shared 8 s undo restores it).
+    case deleteForm(recordID: String)
 }
 
 enum NativeConfirmationEmphasis: Equatable, Sendable {
@@ -25,6 +27,7 @@ struct NativeConfirmationRequest: Equatable, Identifiable, Sendable {
         case .deleteInvoice(let recordID): "delete-invoice:\(recordID)"
         case .deleteCustomer(let recordID): "delete-customer:\(recordID)"
         case .mergeCustomer(let loserID, let winnerID): "merge-customer:\(loserID):\(winnerID)"
+        case .deleteForm(let recordID): "delete-form:\(recordID)"
         }
     }
 
@@ -61,6 +64,19 @@ struct NativeConfirmationRequest: Equatable, Identifiable, Sendable {
             message: "\(customer) will be removed. Their jobs and invoices will remain, but will no longer link to a saved customer record. "
                 + "You can undo for a few seconds.",
             actionTitle: "Delete customer",
+            emphasis: .destructive
+        )
+    }
+
+    /// Phase 20: photos captured from the form stay in the job's Photos
+    /// section, so the message says so.
+    static func deleteForm(id: String, title: String) -> NativeConfirmationRequest {
+        .init(
+            intent: .deleteForm(recordID: id),
+            title: "Delete form?",
+            message: "\"\(displayName(title, fallback: "This form"))\" and its answers will be removed. "
+                + "Its photos stay in the job's Photos section. You can undo for a few seconds.",
+            actionTitle: "Delete form",
             emphasis: .destructive
         )
     }

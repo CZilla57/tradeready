@@ -4,8 +4,10 @@ import Foundation
 // `Canonical.Form`/`Canonical.FormItem` round-trips and `NativeJobForms`
 // (built-in library, trade keys, picker, ids, instantiate, answers, the
 // completion rule, reopen, edits and caps, save-as-template, dangling photo
-// ids). Spec: docs/superpowers/specs/2026-10-02-job-forms-design.md §7. The
-// AppStore wiring is covered in native/StoreIntegrationTests.
+// ids), the forms screens' state rules (`NativeJobFormsPresentation`) and the
+// PDF report's document model (`NativeFormPDFDocument`). Spec:
+// docs/superpowers/specs/2026-10-02-job-forms-design.md §7. The AppStore
+// wiring is covered in native/StoreIntegrationTests.
 
 var failures = 0
 var checks = 0
@@ -631,8 +633,371 @@ run("lookups") {
     expectEqual(NativeJobForms.activeTemplates(in: all).map(\.id), ["fm4_t"], "templates only")
 }
 
+// MARK: - Screen state (Domain/NativeJobFormsPresentation.swift)
+
+typealias Presentation = NativeJobFormsPresentation
+
+let phoenix: Calendar = {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(identifier: "America/Phoenix")!
+    return calendar
+}()
+
+func jobPhoto(_ id: String, job: String = jobID) throws -> Canonical.JobPhoto {
+    try decode(Canonical.JobPhoto.self, .object([
+        "id": .string(id), "jobId": .string(job), "createdAt": .string("2026-10-02T16:00:00.000Z"),
+    ]))
+}
+
+run("presentation: job detail rows and status") {
+    var form = sample()
+    form = try NativeJobForms.setChecked(form, itemID: "fi_2", true)
+    let open = Presentation.rowSummary(form)
+    expectEqual(open.progressLabel, "1/5", "row progress is answered over answerable (sections and unknown kinds excluded)")
+    expectEqual(open.statusLabel, "In progress", "an open form's badge says In progress")
+    expect(!open.isCompleted, "not completed")
+    expectEqual(open.accessibilityLabel, "Sample, 1 of 5 answered, in progress", "the row reads as one sentence")
+    expectEqual(open.id, formID, "rows are identified by form id")
+    expectEqual(Presentation.statusText(form, calendar: phoenix), "In progress", "status text while open")
+    expect(Presentation.isEditable(form), "an open instance is editable")
+
+    form.completedAt = "2025-10-03T03:00:00.000Z"
+    let done = Presentation.rowSummary(form)
+    expectEqual(done.statusLabel, "Completed", "a completed form's badge says Completed (text, not color)")
+    expectEqual(done.accessibilityLabel, "Sample, 1 of 5 answered, completed", "completed row reads its status")
+    expectEqual(Presentation.statusText(form, calendar: phoenix), "Completed Oct 2, 2025",
+                "the completed date is the owner's local date (03:00Z is still Oct 2 in Phoenix)")
+    form.completedAt = "2025-10-03T03:00:00Z"
+    expectEqual(Presentation.statusText(form, calendar: phoenix), "Completed Oct 2, 2025", "a stamp without fractions parses")
+    form.completedAt = "not a date"
+    expectEqual(Presentation.statusText(form, calendar: phoenix), "Completed", "an unreadable stamp still says Completed")
+    expect(!Presentation.isEditable(form), "a completed instance is read-only")
+    var template = sample(); template.kind = "template"
+    expect(!Presentation.isEditable(template), "a template takes no answers")
+    expectEqual(Presentation.progressText(.init(answered: 7, answerable: 12)), "7 of 12 answered", "long progress text")
+}
+
+run("presentation: item groups by section") {
+    let groups = Presentation.itemGroups(sample())
+    expectEqual(groups.map(\.id), ["fi_1"], "one group, keyed by its heading")
+    expectEqual(groups.first?.title, "Start", "the heading is the group title")
+    expectEqual(groups.first?.items.map(\.id), ["fi_2", "fi_3", "fi_4", "fi_5", "fi_6", "fi_7"],
+                "every non-heading item, unknown kinds included (the screen explains them)")
+    let mixed = Canonical.Form(
+        id: formID, kind: "instance", jobId: jobID, title: "Mixed",
+        items: [
+            .init(id: "fi_1", kind: "check", label: "Before any heading"),
+            .init(id: "fi_2", kind: "section", label: "Empty"),
+            .init(id: "fi_3", kind: "section", label: "Outside"),
+            .init(id: "fi_4", kind: "passFail", label: "Unit"),
+            .init(id: "fi_5", kind: "section", label: "Trailing"),
+        ],
+        createdAt: "2026-10-02T16:00:00.000Z"
+    )
+    let mixedGroups = Presentation.itemGroups(mixed)
+    expectEqual(mixedGroups.map(\.id), ["start", "fi_3"], "an empty or trailing heading makes no group")
+    expectEqual(mixedGroups.map(\.title), [nil, "Outside"], "items before the first heading have no title")
+    expectEqual(mixedGroups.map { $0.items.map(\.id) }, [["fi_1"], ["fi_4"]], "items stay in form order")
+}
+
+run("presentation: kinds and flags") {
+    expectEqual(NativeJobForms.ItemKind.allCases.map(Presentation.kindName),
+                ["Section heading", "Checkbox", "Pass / Fail / N/A", "Text answer"], "kind names")
+    expectEqual(Presentation.kindName(rawKind: "signature"), "Unsupported item", "an unknown kind is named")
+    expectEqual(Set(["section", "check", "passFail", "text", "x"].map(Presentation.kindSymbol)).count, 5, "distinct kind symbols")
+    let items = sample().items
+    expectEqual(Presentation.flagsText(items[1]), "Required", "required flag")
+    expectEqual(Presentation.flagsText(items[4]), "Photo required", "photo flag")
+    expectEqual(Presentation.flagsText(items[5]), nil, "no flags")
+    expectEqual(Presentation.flagsText(items[6]), nil, "an unknown kind's flags are not shown")
+    var both = items[3]; both.photoRequired = true
+    expectEqual(Presentation.flagsText(both), "Required · Photo required", "both flags")
+    var section = items[0]; section.required = true
+    expectEqual(Presentation.flagsText(section), nil, "a section heading shows no flags")
+}
+
+run("presentation: text drafts commit only real changes") {
+    expectEqual(Presentation.textToCommit(draft: "", stored: nil), nil, "empty equals absent")
+    expectEqual(Presentation.textToCommit(draft: "41 psi", stored: "41 psi"), nil, "unchanged")
+    expectEqual(Presentation.textToCommit(draft: "42 psi", stored: "41 psi"), "42 psi", "changed")
+    expectEqual(Presentation.textToCommit(draft: "", stored: "41 psi"), "", "clearing is a change")
+    expectEqual(Presentation.textToCommit(draft: " ", stored: nil), " ", "whitespace is kept as typed")
+    expectEqual(Presentation.clamped(String(repeating: "a", count: 2_005), field: .answer).count, 2_000, "answers stop at 2,000")
+    expectEqual(Presentation.clamped(String(repeating: "n", count: 1_200), field: .note).count, 1_000, "notes stop at 1,000")
+    expectEqual(Presentation.clamped("short", field: .note), "short", "short text is untouched")
+    expectEqual(Presentation.TextSlot.answer.limit, NativeJobForms.Limits.textMaxLength, "answer cap")
+    expectEqual(Presentation.TextSlot.note.limit, NativeJobForms.Limits.noteMaxLength, "note cap")
+
+    var form = sample()
+    form = try NativeJobForms.setText(form, itemID: "fi_4", "41 psi")
+    form = try NativeJobForms.setNote(form, itemID: "fi_2", "old")
+    let drafts: [Presentation.DraftKey: String] = [
+        .init(itemID: "fi_6", field: .answer): "later item",
+        .init(itemID: "fi_4", field: .answer): "41 psi",
+        .init(itemID: "fi_2", field: .note): "new note",
+        .init(itemID: "fi_99", field: .answer): "gone",
+        .init(itemID: "fi_3", field: .note): "",
+    ]
+    let pending = Presentation.pendingCommits(drafts: drafts, form: form)
+    expectEqual(pending.map(\.key.itemID), ["fi_2", "fi_6"], "only changed drafts, in form order; gone items dropped")
+    expectEqual(pending.map(\.value), ["new note", "later item"], "the typed values")
+    expectEqual(Presentation.storedText(form.items[3], field: .answer), "41 psi", "stored answer")
+    expectEqual(Presentation.storedText(form.items[3], field: .note), "", "absent note reads empty")
+    expect(Presentation.showsNote(form.items[1], opened: false), "an item with a note shows it")
+    expect(!Presentation.showsNote(form.items[2], opened: false), "no note, not opened: the Add note button shows")
+    expect(Presentation.showsNote(form.items[2], opened: true), "an opened note shows")
+    expect(Presentation.textCommitDebounceSeconds >= 1 && Presentation.textCommitDebounceSeconds <= 3,
+           "text commits after a short pause, not per keystroke")
+}
+
+run("presentation: photo slots") {
+    var item = sample().items[4]
+    item.photoIds = ["p1", "p_gone", "p2"]
+    let slots = Presentation.photoSlots(item, existingPhotoIDs: ["p1", "p2", "p_other"])
+    expectEqual(slots.resolvedIDs, ["p1", "p2"], "resolved in stored order")
+    expectEqual(slots.danglingIDs, ["p_gone"], "a deleted photo is dangling")
+    expectEqual(slots.remaining, 8, "room counts only the shown photos")
+    expect(!slots.isFull, "not full")
+    expectEqual(Presentation.photoCountLabel(slots), "2 of 10 photos", "count label")
+    expectEqual(Presentation.danglingIDsToDetach(slots, adding: 1), [], "nothing to detach while the stored ids fit")
+
+    item.photoIds = (1 ... 7).map { "p\($0)" } + ["g1", "g2", "g3"]
+    let crowded = Presentation.photoSlots(item, existingPhotoIDs: Set((1 ... 7).map { "p\($0)" }))
+    expectEqual(crowded.remaining, 3, "three slots shown")
+    expectEqual(Presentation.danglingIDsToDetach(crowded, adding: 1), ["g1"], "one dangling id makes room for one photo")
+    expectEqual(Presentation.danglingIDsToDetach(crowded, adding: 3), ["g1", "g2", "g3"], "three for three")
+    var form = sample()
+    form.items[4].photoIds = item.photoIds
+    for id in Presentation.danglingIDsToDetach(crowded, adding: 1) {
+        form = try NativeJobForms.removePhoto(form, itemID: "fi_5", photoID: id)
+    }
+    form = try NativeJobForms.addPhoto(form, itemID: "fi_5", photoID: "p8")
+    expectEqual(form.items[4].photoIds?.count, 10, "after detaching, the domain accepts the new photo")
+
+    item.photoIds = (1 ... 10).map { "p\($0)" }
+    let full = Presentation.photoSlots(item, existingPhotoIDs: Set((1 ... 10).map { "p\($0)" }))
+    expect(full.isFull && full.remaining == 0, "ten shown photos fill the item")
+    item.photoIds = nil
+    expectEqual(Presentation.photoSlots(item, existingPhotoIDs: []).remaining, 10, "no photos: ten slots")
+    expectEqual(Presentation.photoAccessibilityLabel(index: 1, count: 3, itemLabel: "Panel", isAvailable: true),
+                "Photo 2 of 3, Panel", "thumbnail label")
+    expectEqual(Presentation.photoAccessibilityLabel(index: 0, count: 1, itemLabel: "Panel", isAvailable: false),
+                "Photo 1 of 1, Panel, waiting for download", "a photo without bytes says so")
+}
+
+run("presentation: completion refusal messages") {
+    let missing = NativeJobForms.missingItems(sample(), existingPhotoIDs: [])
+    let byItem = Presentation.missingByItem(missing)
+    expectEqual(byItem["fi_2"], "Not checked", "a row's missing reason")
+    expectEqual(byItem["fi_5"], "Needs a photo", "a photo reason")
+    expectEqual(byItem["fi_7"], nil, "an unknown kind never blocks")
+    expectEqual(Presentation.incompleteMessage(missing),
+                "4 items still need attention:\n• Ticked: Not checked\n• Tested: Needs Pass, Fail or N/A\n• Reading: Needs an answer\n• Photo: Needs a photo",
+                "every missing item, typed, in form order")
+    expectEqual(Presentation.incompleteMessage(Array(missing.prefix(1))), "1 item still needs attention:\n• Ticked: Not checked",
+                "singular")
+    let capped = Presentation.incompleteMessage(missing, limit: 2)
+    expect(capped.hasSuffix("… and 2 more, marked in the list."), "a long list is capped and points at the rows")
+    expectEqual(capped.components(separatedBy: "\n").count, 4, "head, two lines and the rest")
+    expectEqual(Presentation.incompleteMessage([]), "Every required item is answered.", "nothing missing")
+    expect(Presentation.incompleteTitle.contains("complete"), "refusal title")
+}
+
+run("presentation: every error has a text message") {
+    let errors: [NativeJobForms.FormError] = [
+        .notFound, .jobNotFound, .notAnInstance, .notATemplate, .readOnlyCompleted, .notCompleted,
+        .unknownTemplate("builtin:x"), .templateArchived, .invalidTitle, .invalidItemCount, .invalidLabel,
+        .textTooLong, .noteTooLong, .tooManyPhotos, .itemNotFound("fi_1"), .itemNotAnswerable("fi_1"),
+        .wrongItemKind("fi_1"), .duplicateItemID("fi_1"), .invalidItemID, .invalidFormID, .invalidPhotoID,
+        .invalidOrder, .invalidKind, .missingJob, .duplicateFormID, .notSaved,
+        .incomplete([.init(itemID: "fi_2", label: "Ticked", reasons: [.notChecked])]),
+    ]
+    for error in errors {
+        let message = Presentation.message(for: error)
+        expect(!message.isEmpty && message.hasSuffix(".") || message.contains("•"), "\(error): a sentence")
+        expect(!message.contains("fi_") && !message.contains("builtin:"), "\(error): no internal ids in the message")
+    }
+    expectEqual(Presentation.message(for: .readOnlyCompleted), "This form is complete. Reopen it to make changes.", "read-only")
+    expectEqual(Presentation.message(for: .tooManyPhotos), "An item can hold up to 10 photos.", "photo cap")
+    expectEqual(Presentation.message(for: .invalidTitle), "Enter a title of up to 80 characters.", "title cap")
+    expect(Presentation.message(for: .invalidItemCount).contains("100"), "item cap")
+    expect(Presentation.message(for: .notSaved).contains("Nothing was changed"), "a failed save says nothing changed")
+    expect(Presentation.message(for: .incomplete([.init(itemID: "fi_2", label: "Ticked", reasons: [.notChecked])]))
+           .contains("• Ticked: Not checked"), "incomplete lists the item")
+}
+
+run("presentation: item drafts and editor caps") {
+    var draft = Presentation.ItemDraft()
+    expectEqual(draft.kind, .check, "a new item starts as a checkbox")
+    expectEqual(draft.validationMessage, "Enter a label.", "a blank label cannot save")
+    draft.label = "   "
+    expect(!draft.isValid, "whitespace is blank")
+    draft.label = "  Filter replaced  "
+    expect(draft.isValid && draft.trimmedLabel == "Filter replaced", "trimmed label saves")
+    draft.label = String(repeating: "x", count: 201)
+    expect(!draft.isValid && draft.validationMessage?.contains("200") == true, "a long label cannot save")
+    draft = .init(kind: .section, label: "Outdoor", required: true, photoRequired: true)
+    expect(!draft.effectiveRequired && !draft.effectivePhotoRequired, "a heading takes no flags")
+    draft.kind = .passFail
+    expect(draft.effectiveRequired && draft.effectivePhotoRequired, "answerable kinds keep the flags")
+    let items = sample().items
+    expectEqual(Presentation.itemDraft(for: items[1]), .init(kind: .check, label: "Ticked", required: true, photoRequired: false),
+                "edit draft from an item")
+    expectEqual(Presentation.itemDraft(for: items[6]), nil, "an unknown kind is not edited")
+
+    var form = sample()
+    expectEqual(Presentation.itemCapText(form), "7 of 100 items", "cap text")
+    expect(Presentation.canAddItem(form) && Presentation.canDeleteItem(form), "room to add and delete")
+    form.items = (1 ... 100).map { .init(id: "fi_\($0)", kind: "check", label: "Item \($0)") }
+    expect(!Presentation.canAddItem(form), "100 items: no more")
+    form.items = [.init(id: "fi_1", kind: "check", label: "Only")]
+    expect(!Presentation.canDeleteItem(form), "the last item stays")
+    var completed = sample(); completed.completedAt = "2026-10-02T17:00:00.000Z"
+    expect(!Presentation.canAddItem(completed) && !Presentation.canDeleteItem(completed), "a completed form is not edited")
+    var template = sample(); template.kind = "template"; template.completedAt = "2026-10-02T17:00:00.000Z"
+    expect(Presentation.canAddItem(template), "a template is always editable")
+    expectEqual(Presentation.itemCountLabel(1), "1 item", "singular count")
+    expectEqual(Presentation.itemCountLabel(12), "12 items", "plural count")
+    let entry = NativeJobForms.PickerEntry(ref: .builtin("site-safety"), title: "Site safety checklist", itemCount: 9)
+    expectEqual(Presentation.pickerEntryAccessibilityLabel(entry), "Site safety checklist, 9 items", "picker row label")
+    var long = sample(); long.title = String(repeating: "T", count: 80)
+    expectEqual(Presentation.defaultTemplateTitle(long).count, 80, "template title starts as the form title")
+    let saved = try NativeJobForms.makeTemplate(from: sample(), templateID: "fm9_tpl", title: "Mine", now: now)
+    expect(Presentation.templateSavedMessage(saved).contains("\"Mine\"")
+           && Presentation.templateSavedMessage(saved).contains("Settings › Forms & checklists"), "saved notice names the template and where it lives")
+}
+
+// MARK: - PDF document model (N/NativeFormPDF.swift)
+
+func pdfDocument(
+    _ form: Canonical.Form,
+    photos: [Canonical.JobPhoto] = [],
+    available: Set<String> = []
+) -> NativeFormPDFDocument {
+    NativeFormPDFDocument(
+        form: form, jobTitle: " Panel upgrade ", customerName: "Pat O'Brien", jobAddress: "10 Main St",
+        businessName: " Rector Electric ", businessContactName: "Chad", businessPhone: "555-0100",
+        businessEmail: "hello@example.test", businessAddress: "20 Trade Ave",
+        jobPhotos: photos, availablePhotoIDs: available, calendar: phoenix
+    )
+}
+
+run("pdf: header, status and progress") {
+    var form = sample()
+    form = try NativeJobForms.setChecked(form, itemID: "fi_2", true)
+    let open = pdfDocument(form)
+    expectEqual(open.businessName, "Rector Electric", "business name trimmed")
+    expectEqual(open.jobTitle, "Panel upgrade", "job title trimmed")
+    expectEqual(open.customerName, "Pat O'Brien", "customer")
+    expectEqual(open.jobAddress, "10 Main St", "address")
+    expectEqual(open.formTitle, "Sample", "form title")
+    expectEqual(open.statusText, "In progress", "an open form says In progress")
+    expectEqual(open.progressText, "1 of 5 answered", "progress")
+    form.completedAt = "2025-10-03T03:00:00.000Z"
+    expectEqual(pdfDocument(form).statusText, "Completed Oct 2, 2025", "the completed date in the owner's time zone")
+}
+
+run("pdf: sections and answered/unanswered text") {
+    let blank = pdfDocument(sample())
+    expectEqual(blank.sections.map(\.title), ["Start"], "one section")
+    let rows = blank.sections[0].rows
+    expectEqual(rows.map(\.itemID), ["fi_2", "fi_3", "fi_4", "fi_5", "fi_6"], "answerable items only; the unknown kind is left out")
+    expectEqual(rows.map(\.badge), [.notChecked, .noResult, nil, .notChecked, nil], "unanswered badges")
+    expectEqual(rows.map(\.answer), ["", "", "No answer", "", "No answer"], "unanswered text items say No answer")
+    expect(rows.allSatisfy { !$0.isAnswered && $0.note.isEmpty && $0.photos.isEmpty }, "nothing answered yet")
+
+    var form = sample()
+    form = try NativeJobForms.setChecked(form, itemID: "fi_2", true)
+    form = try NativeJobForms.setResult(form, itemID: "fi_3", .fail)
+    form = try NativeJobForms.setText(form, itemID: "fi_4", "  41 psi \n")
+    form = try NativeJobForms.setNote(form, itemID: "fi_3", "  Loose lug at slot 4  ")
+    form = try NativeJobForms.setText(form, itemID: "fi_6", "   ")
+    let answered = pdfDocument(form).sections[0].rows
+    expectEqual(answered.map(\.badge), [.checked, .fail, nil, .notChecked, nil], "answered badges")
+    expectEqual(answered[2].answer, "41 psi", "a text answer is trimmed")
+    expect(answered[2].isAnswered, "the text item is answered")
+    expectEqual(answered[4].answer, "No answer", "a blank answer reads as unanswered")
+    expect(!answered[4].isAnswered, "and is not answered")
+    expectEqual(answered[1].note, "Loose lug at slot 4", "the note is trimmed")
+    for result in NativeJobForms.PassFailResult.allCases {
+        let set = try NativeJobForms.setResult(sample(), itemID: "fi_3", result)
+        let badge = pdfDocument(set).sections[0].rows[1].badge
+        expectEqual(badge?.label, result == .na ? "N/A" : result.rawValue.uppercased(), "\(result) badge text")
+    }
+
+    let mixed = Canonical.Form(
+        id: formID, kind: "instance", jobId: jobID, title: "Mixed",
+        items: [
+            .init(id: "fi_1", kind: "text", label: "Before any heading", text: "first"),
+            .init(id: "fi_2", kind: "section", label: "Only future"),
+            .init(id: "fi_3", kind: "signature", label: "Future"),
+            .init(id: "fi_4", kind: "section", label: "Outside"),
+            .init(id: "fi_5", kind: "passFail", label: "Unit", result: "pass"),
+        ],
+        createdAt: "2026-10-02T16:00:00.000Z"
+    )
+    let sections = pdfDocument(mixed).sections
+    expectEqual(sections.map(\.title), ["", "Outside"], "untitled lead section; a heading with only unknown items is dropped")
+    expectEqual(sections.map { $0.rows.map(\.itemID) }, [["fi_1"], ["fi_5"]], "rows by section")
+}
+
+run("pdf: badges are text with a palette tone") {
+    let all: [NativeFormPDFBadge] = [.pass, .fail, .na, .checked, .notChecked, .noResult]
+    expectEqual(all.map(\.label), ["PASS", "FAIL", "N/A", "CHECKED", "NOT CHECKED", "NO RESULT"], "badge labels")
+    expectEqual(Set(all.map(\.label)).count, all.count, "every badge reads differently without color")
+    expectEqual(all.map(\.tone), [.success, .danger, .neutral, .success, .neutral, .neutral], "badge tones")
+}
+
+run("pdf: photo resolution") {
+    var form = sample()
+    form = try NativeJobForms.addPhoto(form, itemID: "fi_5", photoID: "p_here")
+    form = try NativeJobForms.addPhoto(form, itemID: "fi_5", photoID: "p_gone")
+    form = try NativeJobForms.addPhoto(form, itemID: "fi_5", photoID: "p_remote")
+    form = try NativeJobForms.addPhoto(form, itemID: "fi_5", photoID: "p_other_job")
+    form = try NativeJobForms.addPhoto(form, itemID: "fi_2", photoID: "p_first")
+    form.items[4].photoIds?.append("p_here")
+    let photos = [try jobPhoto("p_here"), try jobPhoto("p_remote"), try jobPhoto("p_first"),
+                  try jobPhoto("p_other_job", job: "job-2")]
+    let document = pdfDocument(form, photos: photos, available: ["p_here", "p_first", "p_other_job"])
+    let rows = document.sections[0].rows
+    expectEqual(rows[3].photos, [.init(id: "p_here", isAvailable: true), .init(id: "p_remote", isAvailable: false)],
+                "deleted and other-job ids are left out, a duplicate once; a photo without bytes is a placeholder")
+    expectEqual(rows[0].photos, [.init(id: "p_first", isAvailable: true)], "a check item's photo")
+    expectEqual(document.photoIDs, ["p_first", "p_here", "p_remote"], "every drawn photo, in document order")
+    expect(NativeFormPDFDocument.photoUnavailableText == "Photo not available on this device", "placeholder text (spec §5)")
+}
+
+run("pdf: filename") {
+    expectEqual(pdfDocument(try instance()).filename, "Form-Electrical-safety-inspection-Pat-O-Brien.pdf",
+                "Form-<title>-<customer>.pdf in ASCII letters and digits")
+    var accented = sample(); accented.title = "Café / bâtiment №5"
+    expectEqual(NativeFormPDFDocument(
+        form: accented, jobTitle: "", customerName: "", jobAddress: "", businessName: "", businessContactName: "",
+        businessPhone: "", businessEmail: "", businessAddress: "", jobPhotos: [], availablePhotoIDs: []
+    ).filename, "Form-Caf-b-timent-5.pdf", "non-ASCII characters separate words")
+    var symbols = sample(); symbols.title = "!!!"
+    expectEqual(NativeFormPDFDocument(
+        form: symbols, jobTitle: "", customerName: " ", jobAddress: "", businessName: "", businessContactName: "",
+        businessPhone: "", businessEmail: "", businessAddress: "", jobPhotos: [], availablePhotoIDs: []
+    ).filename, "Form.pdf", "nothing usable: Form.pdf")
+    expectEqual(NativeFormPDFDocument.filenameComponent(String(repeating: "a", count: 90)).count, 60, "components stop at 60")
+}
+
+run("pdf: every built-in renders every answerable item") {
+    for template in NativeJobForms.builtinTemplates {
+        let form = try NativeJobForms.instantiate(.builtin(template.key), customTemplates: [], jobID: jobID, formID: formID, now: now)
+        let document = pdfDocument(form)
+        let rows = document.sections.flatMap(\.rows)
+        expectEqual(rows.count, template.items.filter { $0.kind.isAnswerable }.count, "\(template.key): one row per answerable item")
+        expectEqual(document.sections.map(\.title), template.items.filter { $0.kind == .section }.map(\.label),
+                    "\(template.key): one section per heading")
+        expect(rows.allSatisfy { $0.badge != nil || $0.answer == NativeFormPDFDocument.unansweredText },
+               "\(template.key): every row shows a badge or the unanswered text")
+    }
+}
+
 if failures == 0 {
-    print("PASS: job forms domain tests (\(checks) checks)")
+    print("PASS: job forms domain, screen state and PDF document tests (\(checks) checks)")
 } else {
     print("FAILED: \(failures) of \(checks) job forms checks")
     exit(1)

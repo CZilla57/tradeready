@@ -133,3 +133,73 @@ It is shared through the existing `NativeActivitySheet` from a temporary file th
 | D2 | Template builder | No drag-and-drop builder; built-ins plus "save as template", with item add/delete/reorder |
 | D3 | Photos | Reuse job photos with `formId`/`formItemId` back-references |
 | D4 | Job delete | No cascade (matches photos) |
+
+## 10. Build record (2026-10-03)
+
+### Data layer verification
+
+The committed data layer (`1352da0`, merged in `494bd87`) was re-run before any screen work, one runner at a time: `store-integration`, `initial-sync`, `delta-sync`, `mutation-push`, `sync-coordinator`, `two-device-convergence`, `sync-backfill`, `rejected-changes` (183 checks), `record-deletion`, `repository`, `snapshot`, `canonical` and `job-forms` (537 checks) all pass. The store-integration forms case covers add, answer, photo capture from an item, the completion refusal, complete, reopen, edit, save as template, archive, delete with the shared undo, the hidden-on-job-delete rule and a relaunch. No data-layer fix was needed.
+
+### What was built
+
+- `N/NativeJobFormsView.swift`
+  - **Job detail › Forms & checklists**, just before Photos. Each row shows the title, "7/12 answered" and a text badge ("Completed" or "In progress", with a symbol), read as one VoiceOver element. Rows swipe to Delete, and "Add form" opens the picker.
+  - **Add form picker**: your templates, then your trade's built-ins, then General. A "Show templates for every trade" toggle adds the rest. A picked form opens straight away.
+  - **Fill screen** (a sheet). Progress and status sit on top, then the items grouped by section:
+    - a toggle per check, a segmented Pass/Fail/N/A control with "Clear result", and a multi-line answer field;
+    - "Add note" on every answerable item;
+    - Library and Camera photo buttons with "n of 10 photos" and thumbnails (View photo, or Remove from this item, which keeps it in the job's Photos);
+    - then Mark complete or Reopen, Share PDF, Edit items, Save as template and Delete form.
+- `N/NativeJobFormEditorView.swift`
+  - **Items editor**, pushed from the fill screen or from Settings: rename; add, edit, delete and reorder items. Reorder uses Edit and drag, plus VoiceOver Move up / Move down. The editor shows "12 of 100 items".
+  - **Item sheet**: kind, label, and the required and photo-required flags.
+  - **Settings › Your business › Forms & checklists**: your templates (edit or archive) and the built-in library for reference.
+- `N/NativeFormPDF.swift`
+  - **`NativeFormPDFDocument`** (pure): header, status, progress, sections and rows with badges, answers and notes, photo resolution, and the filename.
+  - **`NativeFormPDFRenderer`** (`UIGraphicsPDFRenderer`, iOS only).
+- `N/Domain/NativeJobFormsPresentation.swift` (pure, host-tested): row summaries, status and progress text, item groups, kind names and flags, draft commit rules and caps, photo slots, completion refusal text, a text message for every `FormError`, the item draft, and the editor caps.
+- **Smaller edits:**
+  - `N/JobsView.swift`: mounts the section.
+  - `N/SettingsView.swift`: the `.forms` destination.
+  - `N/NativeConfirmation.swift`: a `deleteForm` intent.
+  - `N/NativeJobPhotosView.swift`: the full-screen viewer is now module-wide.
+  - `N/Domain/NativeAccessibilityAudit.swift`: adds the FAIL and neutral PDF badge pairs to the audited contrast table.
+
+### Decisions where the spec was silent
+
+- **Presentation.** The form opens as a sheet with its own navigation stack, like the change-order and quote-option sheets. Edit items pushes inside it, and the same editor is pushed from Settings.
+- **Picker order.** Custom templates come first ("Your templates"), then the trade's built-ins, then General.
+- **Text commits.** A text answer or note is written:
+  - when editing ends;
+  - after a 1.5 s pause in typing;
+  - before Mark complete, Share PDF, Save as template, Done and dismissal.
+
+  A field stops at its cap (2,000 or 1,000 characters) instead of failing on save.
+- **Refused completion.** An alert lists every missing item with its typed reason (capped at 6 lines, "… and N more"). Each missing row is then marked "Still needed: …" in text.
+- **Completed form.** Every control is disabled and a read-only notice shows. Edit items is off. Share PDF, Save as template and Delete stay available.
+- **Photos per item.** The domain caps the stored `photoIds`, ids of deleted photos included. The screen shows only the photos that still resolve. Before a capture, the screen detaches just enough dangling ids that the room it shows is real (`danglingIDsToDetach`). The library picker never offers more photos than the room left.
+- **Item kind.** An item's kind is fixed once it is added: the edit sheet changes the label and flags only. New items are added at the end and can then be reordered. Deleting an item asks first, and the last item cannot be deleted.
+- **Templates.** Templates are archived, never deleted, from a swipe or from the editor, after a confirmation. Archiving pops the editor.
+- **Template location.** Template management lives in Settings as the spec says. The pricebook and trade templates live under Money.
+- **PDF: what is left out.** Items of an unknown kind are omitted, and so are headings with no items under them.
+- **PDF: badges.** Badges are text: PASS, FAIL, N/A, CHECKED, NOT CHECKED and NO RESULT. PASS and CHECKED use the PAID pair. FAIL uses a new danger pair (danger text on a light red wash, about 5.6:1). The other badges use a new neutral pair (secondary on light gray, about 5.2:1).
+- **PDF: text, filename and footer.** A blank text answer reads "No answer". The filename is `Form-<title>-<customer>.pdf`. The footer reads "business • form • Page N".
+- **PDF: rendering and cleanup.** The PDF renders off the main thread into a temporary folder that is removed when the share sheet closes.
+- **Analytics.** The new screens send no analytics events. A new screen case needs the analytics-event suite, which runs only in the final gate. This is a follow-up.
+- **Parity matrix.** `docs/native-parity-matrix.md` is unchanged. It tracks React Native parity rows, and the other post-launch native-only phases (25, 27) have no rows either.
+
+### Spec points that turned out wrong
+
+- **§5 photo size.** Four photos per row at 160 pt do not fit the 516 pt column of a Letter page with 48 pt margins. Cells are drawn at about 121 pt, four across. The bitmap is still capped at 160 pt (320 px at 2×) and recompressed as JPEG at quality 0.7 before drawing.
+- **§0 images in PDFs.** "No PDF embeds photos today" is true, but the estimate and invoice renderers already draw the business logo image, so embedding images needed no new technique.
+
+### Tests (2026-10-03, run one at a time)
+
+- **Data-layer runners:** `run-job-forms-tests.sh` passes with 741 checks: the 537 domain checks plus screen state and the PDF document model. Every step-1 runner passes again: `store-integration`, `initial-sync`, `delta-sync`, `mutation-push`, `sync-coordinator`, `two-device-convergence`, `sync-backfill`, `rejected-changes` (183), `record-deletion`, `repository`, `snapshot` and `canonical`.
+- **Other runners touched:** `run-confirmation-tests.sh` passes (`deleteForm` added). `run-schedule-booking-settings-tests.sh` passes; it compiles the changed audit palette.
+- **Audit inventories:** `run-accessibility-audit-tests.sh` and `run-layout-metrics-tests.sh` have both been updated for the new views. The updated checks are the view inventory, Done-bar coverage, swipe count 12, in-row destructive count 18, the form PDF palette, the scroll roots and the photo chip row.
+  - Accessibility: 2028 of 2029 pass.
+  - Layout: 912 of 915 pass.
+  - The remaining failures are the known pre-existing ones only: `RootView.swift:234` `.borderedProminent`, `RootView` six tabs, `CoachView.swift:68` Done, and the `.keyboardShortcut` count.
+- **Release compile:** generic iOS, signing off: **BUILD SUCCEEDED**.
+- **Not run here:** device evidence (VoiceOver, AX5, camera, the share sheet and the rendered PDF on an iPhone) is deferred to Phase 12.

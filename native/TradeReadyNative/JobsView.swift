@@ -401,6 +401,8 @@ struct JobDetailView: View {
         NativeChangeOrdersSection(jobID: job.id)
         NativeTimeTrackingSection(jobID: job.id)
         NativeJobProfitabilitySection(jobID: job.id)
+        // Phase 20: forms and checklists sit just before Photos (spec §4).
+        NativeJobFormsSection(jobID: job.id)
         NativeJobPhotosView(jobID: job.id)
         statusSection(job)
         EstimateApprovalHistorySection(approvals: store.estimateApprovalHistory(jobID: job.id))

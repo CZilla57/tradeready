@@ -436,6 +436,13 @@ let scrollRootInventory: [String: Int] = [
     "NativeQuoteOptionsView.swift|NativeQuoteOptionsView|Form": 1,
     "NativeQuoteOptionsView.swift|NativeQuoteAddOnEditorView|Form": 1,
     "NativeQuoteOptionsView.swift|NativeQuoteOwnerChoiceView|Form": 1,
+    // Phase 20: the Add form picker, the fill screen, the items editor, the
+    // item sheet and Settings › Forms & checklists.
+    "NativeJobFormsView.swift|NativeFormPickerView|List": 1,
+    "NativeJobFormsView.swift|NativeJobFormView|List": 1,
+    "NativeJobFormEditorView.swift|NativeFormItemsEditor|List": 1,
+    "NativeJobFormEditorView.swift|NativeFormItemSheet|Form": 1,
+    "NativeJobFormEditorView.swift|NativeFormTemplatesView|List": 1,
     "NativeRecurringInvoicesView.swift|NativeRecurringInvoicesView|List": 1,
     "NativeRecurringInvoicesView.swift|NativeRecurringInvoiceEditor|Form": 1,
     "NativeRecurringJobsView.swift|NativeRecurringJobsView|List": 1,
@@ -463,6 +470,8 @@ let horizontalChipRows: [String: Int] = [
     "JobsView.swift": 1, "MoneyView.swift": 1, "NativeExpenseEditor.swift": 2,
     "NativeExportDataView.swift": 1, "NativeImportView.swift": 1, "NativeJobPhotosView.swift": 1,
     "NativeMileageLogView.swift": 1, "NativeInvoiceOutreachView.swift": 1, "NativeTripEditor.swift": 1,
+    // Phase 20: a form item's photo thumbnails.
+    "NativeJobFormsView.swift": 1,
 ]
 
 /// Every `SettingsPage` screen shares the capped `SettingsPage` Form.
