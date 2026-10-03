@@ -40,7 +40,7 @@
    "testSources": [
     {
      "path": "native/AdapterTests",
-     "sha256": "45f5e4391df444c531bbc585335fac3a54f2feba73a05145187e4d2568d66d13"
+     "sha256": "d4f2a237f75987bb6d7c9bba15c1dd2a59316667ccc871b379455319306a35a5"
     },
     {
      "path": "native/CanonicalTests",
@@ -295,7 +295,7 @@
    "testSources": [
     {
      "path": "native/BusinessRulesTests",
-     "sha256": "161fcb3b1ffe6e644ac714dc92626a21171d5f4b53da6808117a5bb32ba46f29"
+     "sha256": "afbda266e79c9c0eb1919114b846cfca0c9857e7c549eda64152640154f32667"
     }
    ],
    "fixtures": []
@@ -822,7 +822,7 @@
    "testSources": [
     {
      "path": "native/InvoiceFromJobTests",
-     "sha256": "a8201d5f8c5306ce120cab2a996601cf016c51c9ccce26e9d701138917b0f91b"
+     "sha256": "fbe0490480b4c62d50bbc5bd161b97866bedd1b3c360205f23b85cb2a53248a0"
     }
    ],
    "fixtures": []
@@ -1335,7 +1335,7 @@
    "testSources": [
     {
      "path": "native/QuoteOptionsStoreTests",
-     "sha256": "0a3e05a71805464d714e30ba8df7447b828d5a9378be0c12adeee35e8ad86593"
+     "sha256": "17d126dc2d41203ec9642818b5d02c4fe60a650be58892426609f51a8604b6ae"
     }
    ],
    "fixtures": []
@@ -1346,7 +1346,7 @@
    "testSources": [
     {
      "path": "native/QuoteOptionsTests",
-     "sha256": "6f19af25f3fc6639764a6afe1b08b3a99fab168e9f2540a038b4660ee987139b"
+     "sha256": "eb2fac8d5f1fa18fad9039a697552cc637885d2452f9f653e417724b9bb029e8"
     },
     {
      "path": "native/CanonicalTests",

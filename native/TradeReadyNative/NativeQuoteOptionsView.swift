@@ -90,11 +90,26 @@ struct NativeQuoteOptionsView: View {
     @ViewBuilder
     private func form(_ state: NativeQuoteOptionsState) -> some View {
         Form {
+            if state.linkShowsEarlierVersion && state.isEditable {
+                // Phase 25 review fix: edits stay allowed, but the live link
+                // still offers what was sent, and an approval of it wins.
+                Section {
+                    Label(
+                        "Your customer’s approval link still shows the estimate you sent earlier. Re-send it from Review & send so they see these changes. If they approve the earlier version first, that is what the job uses.",
+                        systemImage: "exclamationmark.bubble"
+                    )
+                }
+            }
             if !state.hasOptions {
                 startSection(state)
             } else {
                 if let acceptance = state.acceptance {
                     acceptanceSection(acceptance)
+                } else if state.approvedWithoutChoice {
+                    Section {
+                        Label("The customer approved this estimate without choosing an option, so the job keeps the recommended option’s price.",
+                              systemImage: "checkmark.seal")
+                    }
                 } else if state.isReadOnly {
                     Section {
                         Label("The customer approved this estimate. Their choice is applied on the next sync.",
@@ -394,21 +409,27 @@ private struct NativeQuoteTierTextFields: View {
 /// The add-on sheet's editable copy; `addOnID` nil means a new add-on.
 struct NativeQuoteAddOnEditorDraft: Identifiable {
     let addOnID: String?
+    /// The id a new add-on is saved under, minted once per editor sheet, so
+    /// a repeated Save (a double tap) rewrites that same add-on instead of
+    /// creating a second one (`NativeQuoteOptions.addAddOn`).
+    let newAddOnID: String
     var label: String
     var description: String
     var price: Decimal?
     var cost: Decimal?
 
-    var id: String { addOnID ?? "new-add-on" }
+    var id: String { addOnID ?? newAddOnID }
 
-    init() {
+    init(newAddOnID: String = NativeQuoteOptions.newAddOnID()) {
         addOnID = nil
+        self.newAddOnID = newAddOnID
         label = ""
         description = ""
     }
 
     init(addOn: NativeQuoteOptionsState.AddOn) {
         addOnID = addOn.id
+        newAddOnID = addOn.id
         label = addOn.label
         description = addOn.description
         price = addOn.price
@@ -422,6 +443,7 @@ struct NativeQuoteAddOnEditorView: View {
     let jobID: String
     @State private var draft: NativeQuoteAddOnEditorDraft
     @State private var errorMessage: String?
+    @State private var isSaving = false
 
     init(jobID: String, draft: NativeQuoteAddOnEditorDraft) {
         self.jobID = jobID
@@ -478,6 +500,7 @@ struct NativeQuoteAddOnEditorView: View {
                     Button("Save", action: save)
                         .fontWeight(.semibold)
                         .keyboardShortcut("s", modifiers: .command)
+                        .disabled(isSaving)
                 }
             }
             .alert("Couldn’t save add-on", isPresented: Binding(
@@ -493,6 +516,10 @@ struct NativeQuoteAddOnEditorView: View {
     }
 
     private func save() {
+        // A second tap before the sheet closes is ignored; the add-on id is
+        // fixed per sheet as well, so even a repeated save cannot duplicate.
+        guard !isSaving else { return }
+        isSaving = true
         let value = NativeQuoteAddOnDraft(
             label: draft.label,
             description: draft.description,
@@ -502,11 +529,12 @@ struct NativeQuoteAddOnEditorView: View {
         let saved = if let addOnID = draft.addOnID {
             store.editQuoteAddOn(jobID: jobID, addOnID: addOnID, draft: value)
         } else {
-            store.addQuoteAddOn(jobID: jobID, draft: value)
+            store.addQuoteAddOn(jobID: jobID, draft: value, addOnID: draft.newAddOnID)
         }
         if saved {
             dismiss()
         } else {
+            isSaving = false
             errorMessage = store.migrationMessage ?? "The add-on could not be saved."
         }
     }

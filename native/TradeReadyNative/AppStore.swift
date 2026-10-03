@@ -3325,9 +3325,14 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Adds an add-on. `addOnID` is the editor's once-per-sheet id: saving
+    /// it again rewrites that add-on, so a double-tapped Save never creates
+    /// two (nil mints a fresh id).
     @discardableResult
-    func addQuoteAddOn(jobID: String, draft: NativeQuoteAddOnDraft) -> Bool {
-        mutateQuoteOptions(jobID: jobID) { try NativeQuoteOptions.addAddOn(job: $0, draft: draft) }
+    func addQuoteAddOn(jobID: String, draft: NativeQuoteAddOnDraft, addOnID: String? = nil) -> Bool {
+        mutateQuoteOptions(jobID: jobID) {
+            try NativeQuoteOptions.addAddOn(job: $0, draft: draft, makeAddOnID: { addOnID ?? NativeQuoteOptions.newAddOnID() })
+        }
     }
 
     @discardableResult
@@ -9980,7 +9985,10 @@ final class AppStore: ObservableObject {
             materials: materials, materialMarkup: job.materialMarkup, directCosts: directCosts,
             status: job.status, timeSessions: sessions, changeOrders: changeOrderMirrors(job),
             // Phase 25: accepted add-ons bill as their own lines.
-            addOnLines: NativeQuoteOptions.invoiceAddOnLines(job: job)
+            addOnLines: NativeQuoteOptions.invoiceAddOnLines(job: job),
+            // Phase 25 review fix: what the customer approved through the
+            // link bills as approved when current pricing has drifted.
+            approvedQuote: NativeQuoteOptions.approvedInvoiceQuote(job: job)
         )
     }
 
