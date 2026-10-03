@@ -106,17 +106,21 @@ enum NativeImportEngine {
     // MARK: customers
 
     /// `upsertCustomerInList`: backfill only BLANK contact fields, never clobber.
+    /// `leadSource` (Phase 27) is normalized and follows the same first-touch
+    /// rule: set on a created record, filled only when a match's is blank.
     static func upsertCustomer(
         _ customers: [Canonical.Customer],
         name: String,
         email: String = "",
         phone: String = "",
         address: String = "",
+        leadSource: String? = nil,
         createdAt: String,
         newID: () -> String
     ) -> (customer: Canonical.Customer?, customers: [Canonical.Customer], changed: Bool) {
         let key = normalizeName(name)
         if key.isEmpty { return (nil, customers, false) }
+        let source = NativeLeadSource.normalize(leadSource)
 
         if let index = customers.firstIndex(where: { normalizeName($0.name) == key }) {
             let existing = customers[index]
@@ -127,7 +131,11 @@ enum NativeImportEngine {
             merged["email"] = .string(mergedEmail)
             merged["phone"] = .string(mergedPhone)
             merged["address"] = .string(mergedAddress)
-            let changed = mergedEmail != existing.email || mergedPhone != existing.phone || mergedAddress != existing.address
+            let existingSourceBlank = (existing.leadSource ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let fillsSource = existingSourceBlank && source != nil
+            if fillsSource, let source { merged["leadSource"] = .string(source) }
+            let changed = mergedEmail != existing.email || mergedPhone != existing.phone
+                || mergedAddress != existing.address || fillsSource
             guard changed, let updated = decode(Canonical.Customer.self, merged) else {
                 return (existing, customers, false)
             }
@@ -136,7 +144,7 @@ enum NativeImportEngine {
             return (updated, next, true)
         }
 
-        let created = decode(Canonical.Customer.self, [
+        var createdFields: [String: Canonical.JSONValue] = [
             "id": .string(newID()),
             "name": .string(name.trimmingCharacters(in: .whitespaces)),
             "email": .string(email),
@@ -144,7 +152,9 @@ enum NativeImportEngine {
             "address": .string(address),
             "notes": .string(""),
             "createdAt": .string(createdAt),
-        ])!
+        ]
+        if let source { createdFields["leadSource"] = .string(source) }
+        let created = decode(Canonical.Customer.self, createdFields)!
         return (created, customers + [created], true)
     }
 
@@ -173,6 +183,7 @@ enum NativeImportEngine {
                 email: fieldValue(row, mapping, "email"),
                 phone: fieldValue(row, mapping, "phone"),
                 address: fieldValue(row, mapping, "address"),
+                leadSource: fieldValue(row, mapping, "leadSource"),
                 createdAt: environment.today(),
                 newID: environment.newCustomerID
             )

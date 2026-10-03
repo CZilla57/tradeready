@@ -66,6 +66,51 @@ run("customer edits preserve canonical-only fields") {
     expect(encoded["archivedAt"] == nil, "customer archive can be cleared without touching siblings")
 }
 
+// Phase 27 (spec 2026-10-02-lead-source-design.md §2): the editor's source
+// picker writes through the edit merge like any other optional.
+run("customer lead source projects, edits and clears without touching siblings") {
+    let source: Canonical.Customer = try field("customer", rich)
+    let sourceFields = try object(source)
+    var edit = try CanonicalUIAdapters.edit(source)
+    expect(edit.value.leadSource == "referral", "lead source projects into the UI model")
+
+    edit.value.leadSource = "nextdoor"
+    let changed = try CanonicalUIAdapters.canonical(from: edit)
+    var expected = sourceFields
+    expected["leadSource"] = .string("nextdoor")
+    let changedFields = try object(changed)
+    expect(changedFields == expected, "a source-only edit writes the source and nothing else")
+
+    edit.value.leadSource = "Home Show"
+    let custom = try CanonicalUIAdapters.canonical(from: edit)
+    expect(custom.leadSource == "Home Show", "a custom label is written verbatim")
+
+    edit.value.leadSource = nil
+    let cleared = try CanonicalUIAdapters.canonical(from: edit)
+    var withoutSource = sourceFields
+    withoutSource.removeValue(forKey: "leadSource")
+    let clearedFields = try object(cleared)
+    expect(clearedFields == withoutSource, "clearing the source removes the key and keeps siblings")
+
+    var unset = source
+    unset.leadSource = nil
+    var fill = try CanonicalUIAdapters.edit(unset)
+    expect(fill.value.leadSource == nil, "an absent source projects as nil")
+    fill.value.leadSource = "google"
+    let filled = try CanonicalUIAdapters.canonical(from: fill)
+    expect(filled.leadSource == "google", "a blank source can be set")
+
+    var draft = Customer(name: "New Lead")
+    draft.leadSource = "yelp"
+    let created = try CanonicalUIAdapters.canonical(from: draft)
+    let createdFields = try object(created)
+    expect(createdFields["leadSource"] == .string("yelp"), "a new customer's source is written")
+    let createdWithout = try object(CanonicalUIAdapters.canonical(from: Customer(name: "No Source")))
+    expect(createdWithout["leadSource"] == nil, "a new customer without a source has no key")
+    let projected = try CanonicalUIAdapters.customer(from: created)
+    expect(projected.leadSource == "yelp", "the UI projection carries the source")
+}
+
 run("settings logo reference projects, edits and clears without touching siblings") {
     let source: Canonical.Settings = try field("settings", rich)
     var edit = try CanonicalUIAdapters.edit(source)

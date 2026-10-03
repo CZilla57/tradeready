@@ -96,6 +96,13 @@ private func pricebookEntry(_ overrides: String = "") -> Canonical.PricebookEntr
     return try! decoder.decode(Canonical.PricebookEntry.self, from: Data(merge(base, overrides).utf8))
 }
 
+private func customer(_ overrides: String = "") -> Canonical.Customer {
+    let base = """
+    {"id":"c1","name":"Alice","email":"","phone":"","address":"","notes":""}
+    """
+    return try! decoder.decode(Canonical.Customer.self, from: Data(merge(base, overrides).utf8))
+}
+
 private let march10 = NativeCashBasis.localDate(year: 2026, month: 2, day: 10)
 
 // MARK: - Formatting
@@ -665,6 +672,85 @@ private func testOverviewComposition() {
     expect(!empty.funnel.showsCard, "the funnel hides itself in the true-empty state")
 }
 
+// MARK: - Lead sources (Phase 27)
+
+private func testLeadSourceCard() {
+    let invoices = [
+        invoice(#"{"id":"a","customer":"Alice","customerId":"c1","amount":1000,"due":"2026-03-01","paid":true,"paidAt":"2026-03-05"}"#),
+        invoice(#"{"id":"b","customer":"Bob","customerId":"c2","amount":500,"due":"2026-02-01","paid":true,"paidAt":"2026-02-05"}"#),
+        invoice(#"{"id":"c","customer":"Walk-in","amount":40,"due":"2026-03-02","paid":true,"paidAt":"2026-03-02"}"#),
+    ]
+    let jobs = [
+        job(#"{"id":"j1","customerId":"c1","status":"approved","estimateSentAt":"2026-03-02"}"#),
+        job(#"{"id":"j2","customerId":"c1","status":"declined","estimateSentAt":"2026-03-03"}"#),
+        job(#"{"id":"j3","customerId":"c2","status":"scheduled","estimateSentAt":"2026-02-03"}"#),
+    ]
+    let customers = [
+        customer(#"{"id":"c1","name":"Alice","leadSource":"google","createdAt":"2026-03-01"}"#),
+        customer(#"{"id":"c2","name":"Bob","leadSource":"Home show","createdAt":"2026-02-01"}"#),
+    ]
+    func overview(_ filter: NativeMoneyDateFilter, customers: [Canonical.Customer]) -> NativeMoneyOverview {
+        NativeMoneyOverview.make(
+            filter: filter, invoices: invoices, expenses: [], jobs: jobs,
+            trips: [], pricebook: [], taxValues: NativeTaxSettingsValues(),
+            mileageRate: decimal("0.7"), laborCostRate: nil, customers: customers, now: march10
+        )
+    }
+
+    expectEqual(overview(.thisMonth, customers: []).leadSources, nil,
+                "lead sources: hidden with no customers (the default argument)")
+    let defaulted = NativeMoneyOverview.make(
+        filter: .thisMonth, invoices: invoices, expenses: [], jobs: jobs,
+        trips: [], pricebook: [], taxValues: NativeTaxSettingsValues(),
+        mileageRate: decimal("0.7"), laborCostRate: nil, now: march10
+    )
+    expectEqual(defaulted.leadSources, nil, "lead sources: existing call sites compile and hide the card")
+
+    guard let thisMonth = overview(.thisMonth, customers: customers).leadSources else {
+        expect(false, "lead sources: present with customers")
+        return
+    }
+    expectEqual(thisMonth.rows.map(\.name), ["Google", "Home show", "Unknown"],
+                "lead sources: collected order, Unknown (the unattributed walk-in) last")
+    expectEqual(thisMonth.showsSetupHint, false, "lead sources: no hint once a customer has a source")
+    let google = thisMonth.rows[0]
+    expectEqual(google.collectedText, "$1,000.00", "lead sources: collected follows the chip")
+    expectEqual(google.detailText, "1/2 won \u{00B7} 50% close \u{00B7} 1 new", "lead sources: won/sent, close rate, new")
+    expectEqual(google.fraction, 100, "lead sources: the leader fills the bar")
+    expectEqual(google.accessibilityLabel,
+                "Google: $1,000.00 collected, 1 new customer, 1 of 2 estimates won, 50% close rate",
+                "lead sources: one spoken summary per row")
+    let homeShow = thisMonth.rows[1]
+    expectEqual(homeShow.detailText, "0/0 won \u{00B7} \u{2014} close \u{00B7} 0 new", "lead sources: em dash when nothing was sent")
+    expectEqual(homeShow.accessibilityLabel,
+                "Home show: $0.00 collected, 0 new customers, no estimates sent",
+                "lead sources: the spoken summary says no estimates were sent")
+    expectEqual(thisMonth.rows[2].collected, decimal("40"), "lead sources: Unknown carries the walk-in")
+    expectEqual(thisMonth.rows[2].isUnknown, true, "lead sources: Unknown flagged")
+
+    guard let lastMonth = overview(.lastMonth, customers: customers).leadSources else {
+        expect(false, "lead sources: present last month")
+        return
+    }
+    expectEqual(lastMonth.rows.map(\.name), ["Home show", "Google"], "lead sources: the chip re-windows the rows")
+    expectEqual(lastMonth.rows[0].collected, decimal("500"), "lead sources: last month's collected")
+    expectEqual(lastMonth.rows[0].detailText, "1/1 won \u{00B7} 100% close \u{00B7} 1 new", "lead sources: last month's cohort")
+    expectEqual(lastMonth.rows[0].accessibilityLabel,
+                "Home show: $500.00 collected, 1 new customer, 1 of 1 estimate won, 100% close rate",
+                "lead sources: singular estimate")
+
+    let unsourced = [customer(#"{"id":"c1","name":"Alice","createdAt":"2026-03-01"}"#)]
+    guard let hint = overview(.thisMonth, customers: unsourced).leadSources else {
+        expect(false, "lead sources: still shown when no customer has a source")
+        return
+    }
+    expectEqual(hint.showsSetupHint, true, "lead sources: the setup hint shows until a source is set")
+    expectEqual(hint.rows.map(\.name), ["Unknown"], "lead sources: only Unknown without sources")
+    expectEqual(hint.rows[0].collected, decimal("1040"), "lead sources: Unknown carries everything")
+    expect(NativeMoneyLeadSourceCard.setupHint.contains("How they found you"), "lead sources: hint names the customer field")
+    expectEqual(NativeMoneyLeadSourceCard.closeRateText(Decimal(2) / Decimal(3)), "67%", "lead sources: close rate rounds")
+}
+
 // MARK: - Runner
 
 testFormatting()
@@ -687,6 +773,7 @@ testPricebookCard()
 testExpenseListRows()
 testOverviewState()
 testOverviewComposition()
+testLeadSourceCard()
 
 if failures == 0 {
     print("MoneyCardsTests: all checks passed")

@@ -62,8 +62,33 @@ private func testHash() {
     expectEqual(NativeCSVImport.hashCsv("A,B\n1,2\n"), "a0842561", "hash matches the RN oracle")
 }
 
+// Phase 27 (spec 2026-10-02-lead-source-design.md §4): a source column in a
+// real CSV survives parse → header detection → customer import, normalized.
+private func testLeadSourceColumnEndToEnd() {
+    let csv = NativeCSVImport.parseCsv(
+        "Customer,Email,\"How did you hear about us?\"\n"
+            + "Ada Lovelace,ada@x.com,Google Ads\n"
+            + "\"Hopper, Grace\",g@x.com,\"Home show, spring\"\n"
+            + "Alan Turing,a@x.com,\n"
+    )
+    let mapping = NativeImportMapping.detectMapping(entity: .customers, headers: csv.headers)
+    expectEqual(mapping, ["name", "email", "leadSource"], "survey-style source header detected")
+    var counter = 0
+    let result = NativeImportEngine.buildCustomerImport(
+        rows: csv.rows, mapping: mapping, existing: [], batchID: "imp_csv",
+        environment: NativeImportEnvironment(
+            nowMs: { 0 }, today: { "2026-03-01" },
+            newCustomerID: { counter += 1; return "c\(counter)" },
+            newJobID: { "j" }, newExpenseID: { "e" }
+        )
+    )
+    expectEqual(result.records.map(\.leadSource), ["google", "Home show, spring", nil],
+                "imported sources are normalized; a blank cell stays Unknown")
+}
+
 testParseCsv()
 testHash()
+testLeadSourceColumnEndToEnd()
 
 if failures == 0 {
     print("CSVImportTests: all checks passed")

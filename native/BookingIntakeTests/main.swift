@@ -323,5 +323,102 @@ do {
            "customer creation stays time-based per device (L3 limitation retained)")
 }
 
+// 14. Phase 27 lead source (spec 2026-10-02-lead-source-design.md §1/§3):
+// the link's `?src=` tag (or "booking_link") is the first touch for a created
+// customer or a matched customer whose source is blank; portal requests never
+// tag one.
+do {
+    func request(leadSource: String?, extra: String = "") -> Canonical.BookingRequest {
+        var fields = """
+        {"id":"bk_src","status":"new","name":"Dana Rivers",
+         "phone":"555-0142","email":"dana@example.com","address":"12 Elm St",
+         "details":"Leak","preferredTiming":"","createdAt":"2026-08-04T15:00:00.000Z"\(extra)
+        """
+        if let leadSource { fields += ",\"leadSource\":\"\(leadSource)\"" }
+        return decodeRequest(fields + "}")
+    }
+    func createdSource(_ request: Canonical.BookingRequest) -> String? {
+        let plan = NativeBookingIntake.plan(
+            requests: [request], jobs: [], customers: [],
+            settings: settings, makeCustomerID: idFactory("c_new"), nowISO: { fixedNow })
+        expect(plan.createdCustomerIDs == ["c_new"], "a customer is created for \(request.leadSource ?? "no tag")")
+        return plan.customers.first?.leadSource
+    }
+
+    expect(request(leadSource: "nextdoor").leadSource == "nextdoor", "the request decodes its tag")
+    expect(createdSource(request(leadSource: "nextdoor")) == "nextdoor", "a ?src= preset tags the new customer")
+    expect(createdSource(request(leadSource: nil)) == "booking_link", "no tag defaults to the booking link")
+    expect(createdSource(request(leadSource: "Home Show")) == "Home Show", "a custom tag is kept verbatim")
+    expect(createdSource(request(leadSource: "Google Ads")) == "google", "a tag alias normalizes to its preset")
+    expect(createdSource(request(leadSource: "   ")) == "booking_link", "a blank tag falls back to the booking link")
+
+    let created = NativeBookingIntake.plan(
+        requests: [request(leadSource: "yelp")], jobs: [], customers: [],
+        settings: settings, makeCustomerID: idFactory("c_new"), nowISO: { fixedNow })
+    let customerDraft = created.drafts.first { $0.table == "customers" }
+    guard case let .object(draftFields)? = customerDraft?.payload else {
+        expect(false, "created customer draft present"); exit(1)
+    }
+    expect(draftFields["leadSource"] == .string("yelp"), "the created customer's upsert carries the source")
+
+    // Matched customer with a blank source: filled, and the match counts as a change.
+    let blankMatch = decodeCustomer("""
+    {"id":"c1","name":"Dana Rivers","email":"dana@example.com","phone":"555-0142",
+     "address":"12 Elm St","notes":""}
+    """)
+    let filled = NativeBookingIntake.plan(
+        requests: [request(leadSource: "nextdoor")], jobs: [], customers: [blankMatch],
+        settings: settings, makeCustomerID: idFactory("c_dup"), nowISO: { fixedNow })
+    expect(filled.customers.count == 1 && filled.customers[0].leadSource == "nextdoor",
+           "a matched customer's blank source is filled")
+    expect(filled.customersChanged && filled.createdCustomerIDs.isEmpty
+           && filled.drafts.contains { $0.table == "customers" && $0.recordId == "c1" },
+           "the source-only fill is a published customer change")
+    let defaultFill = NativeBookingIntake.plan(
+        requests: [request(leadSource: nil)], jobs: [], customers: [blankMatch],
+        settings: settings, makeCustomerID: idFactory("c_dup"), nowISO: { fixedNow })
+    expect(defaultFill.customers[0].leadSource == "booking_link", "an untagged booking fills a blank source with the booking link")
+
+    // Matched customer with a source: first touch wins, nothing is published for it.
+    let sourced = decodeCustomer("""
+    {"id":"c1","name":"Dana Rivers","email":"dana@example.com","phone":"555-0142",
+     "address":"12 Elm St","notes":"","leadSource":"referral"}
+    """)
+    let kept = NativeBookingIntake.plan(
+        requests: [request(leadSource: "nextdoor")], jobs: [], customers: [sourced],
+        settings: settings, makeCustomerID: idFactory("c_dup"), nowISO: { fixedNow })
+    expect(kept.customers[0].leadSource == "referral", "a matched customer's source is never replaced")
+    expect(!kept.customersChanged && !kept.drafts.contains { $0.table == "customers" },
+           "an unchanged matched customer is not published")
+
+    // Portal: an existing customer is linked unchanged; a dangling id creates
+    // a customer with no source.
+    let portalLinked = NativeBookingIntake.plan(
+        requests: [request(leadSource: nil, extra: #","source":"portal","sourceCustomerId":"c1""#)],
+        jobs: [], customers: [blankMatch],
+        settings: settings, makeCustomerID: idFactory("c_dup"), nowISO: { fixedNow })
+    expect(portalLinked.customers[0].leadSource == nil && !portalLinked.customersChanged,
+           "a portal request leaves its customer's source alone")
+    let portalDangling = NativeBookingIntake.plan(
+        requests: [request(leadSource: nil, extra: #","source":"portal","sourceCustomerId":"c_gone""#)],
+        jobs: [], customers: [],
+        settings: settings, makeCustomerID: idFactory("c_portal"), nowISO: { fixedNow })
+    expect(portalDangling.createdCustomerIDs == ["c_portal"] && portalDangling.customers[0].leadSource == nil,
+           "a portal follow-up with a dangling id creates a customer without a source")
+    let portalBlankMatch = NativeBookingIntake.plan(
+        requests: [request(leadSource: nil, extra: #","source":"portal","sourceCustomerId":"c_gone""#)],
+        jobs: [], customers: [blankMatch],
+        settings: settings, makeCustomerID: idFactory("c_dup"), nowISO: { fixedNow })
+    expect(portalBlankMatch.customers[0].leadSource == nil && !portalBlankMatch.customersChanged,
+           "a portal fallback match never fills a blank source")
+
+    // upsertCustomer's default keeps pre-Phase-27 callers source-free.
+    let bare = NativeBookingIntake.upsertCustomer(
+        in: [], name: "Bare", email: "", phone: "", address: "",
+        makeCustomerID: { "c_bare" }, nowISO: { fixedNow })
+    expect(bare.customer?.leadSource == nil && encoded(bare.customer!)["leadSource"] == nil,
+           "upsert without a source writes no key")
+}
+
 if failures == 0 { print("PASS: native booking intake tests") }
 else { print("\(failures) booking intake test(s) failed"); exit(1) }

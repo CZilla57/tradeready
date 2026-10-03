@@ -123,9 +123,36 @@ enum NativeCoachPrompt {
                     "You may cite these as set-aside guidance only — for filing, deduction elections, " +
                     "eligibility, or business-entity questions, decline and refer the user to a tax professional."
             }
+
+            // Phase 27 (spec §6): after the tax block, so the tax fixtures
+            // keep their exact suffix whenever this block is absent.
+            if let leadSources = snapshot.leadSources, !leadSources.rows.isEmpty {
+                prompt += "\n" + leadSourcesBlock(leadSources)
+            }
         }
 
         return prompt
+    }
+
+    static let leadSourcesGuardrail = "These lead-source figures are computed from the owner's records. " +
+        "Cite them exactly; never estimate figures for a source that isn't listed."
+
+    /// "LEAD SOURCES (year to date, …): Google: $4200 collected, 3 of 5
+    /// estimates won (60% close rate); Unknown: $300 collected, no estimates
+    /// sent. These lead-source figures …" — whole dollars and whole percents.
+    static func leadSourcesBlock(_ block: NativeLeadSourceSnapshotBlock) -> String {
+        let rows = block.rows.map { row -> String in
+            let estimates: String
+            if let rate = row.closeRate {
+                let noun = row.sent == 1 ? "estimate" : "estimates"
+                estimates = "\(row.won) of \(row.sent) \(noun) won (\(toFixed0(rate * 100))% close rate)"
+            } else {
+                estimates = "no estimates sent"
+            }
+            return "\(row.name): $\(toFixed0(row.collected)) collected, \(estimates)"
+        }
+        return "LEAD SOURCES (year to date, credited to each customer's first source): " +
+            rows.joined(separator: "; ") + ". " + leadSourcesGuardrail
     }
 
     // MARK: Number formatting

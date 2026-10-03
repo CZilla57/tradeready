@@ -335,6 +335,9 @@ struct CustomerDetailView: View {
                         LabeledContent("Invoices", value: "\(invoices.count)")
                         LabeledContent("Collected", value: customer.totalSpent.currency)
                         LabeledContent("Outstanding", value: customer.totalOwed.currency)
+                        if let leadSource = storedCustomer?.leadSource, NativeLeadSource.normalize(leadSource) != nil {
+                            LabeledContent("Found you via", value: NativeLeadSource.displayName(leadSource))
+                        }
                     }
 
                     if !customer.phone.isEmpty || !customer.email.isEmpty || !(storedCustomer?.address ?? "").isEmpty {
@@ -606,6 +609,8 @@ struct CustomerEditor: View {
     let mode: NativeCustomerEditorMode
     @State private var saveIssue: NativeCustomerEditorSaveIssue?
     @StateObject private var addressLookup = NativeAddressLookupModel()
+    /// True while "Other…" is chosen, so an empty custom field stays open.
+    @State private var isEnteringOtherLeadSource = false
 
     var body: some View {
         NavigationStack {
@@ -669,6 +674,7 @@ struct CustomerEditor: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                leadSourceSection
                 Section("Notes") {
                     TextField("Access details, preferences…", text: $customer.notes, axis: .vertical)
                         .lineLimit(3...8)
@@ -722,6 +728,78 @@ struct CustomerEditor: View {
             }
         }
         .nativeAnalyticsScreen(.customerEditor)
+    }
+
+    // MARK: Lead source (Phase 27, spec 2026-10-02-lead-source-design.md §3)
+
+    /// Picker tag for "Other…". Normalization strips control characters, so
+    /// no stored label can collide with it.
+    private static let otherLeadSourceTag = "\u{1}other"
+
+    /// Custom labels already in use (D2: no settings list). The saved value
+    /// of the customer being edited goes first so its own spelling is the
+    /// one offered and selected.
+    private var customLeadSourceLabels: [String] {
+        let saved = store.customers.first { $0.id == customer.id }?.leadSource
+        return NativeLeadSource.customLabels(in: [saved] + store.customers.map(\.leadSource))
+    }
+
+    /// The picker row for the current value: "" (Not set), a preset key, a
+    /// listed custom label, or "Other…" (also for a stored label that is not
+    /// listed, so the text field shows it instead of losing it).
+    private var leadSourceSelection: String {
+        if isEnteringOtherLeadSource { return Self.otherLeadSourceTag }
+        guard let value = NativeLeadSource.normalize(customer.leadSource) else { return "" }
+        if NativeLeadSource.preset(key: value) != nil { return value }
+        return customLeadSourceLabels.first { $0.caseInsensitiveCompare(value) == .orderedSame }
+            ?? Self.otherLeadSourceTag
+    }
+
+    private var leadSourceSection: some View {
+        let selection = Binding<String>(
+            get: { leadSourceSelection },
+            set: { tag in
+                if tag == Self.otherLeadSourceTag {
+                    if !isEnteringOtherLeadSource { customer.leadSource = nil }
+                    isEnteringOtherLeadSource = true
+                } else {
+                    isEnteringOtherLeadSource = false
+                    customer.leadSource = tag.isEmpty ? nil : tag
+                }
+            }
+        )
+        let showsOtherField = leadSourceSelection == Self.otherLeadSourceTag
+        return Section {
+            Picker("Lead source", selection: selection) {
+                Text("Not set").tag("")
+                ForEach(NativeLeadSource.presets, id: \.key) { preset in
+                    Text(preset.displayName).tag(preset.key)
+                }
+                ForEach(customLeadSourceLabels, id: \.self) { label in
+                    Text(label).tag(label)
+                }
+                Text("Other…").tag(Self.otherLeadSourceTag)
+            }
+            .pickerStyle(.menu)
+            if showsOtherField {
+                TextField("Home show, radio ad…", text: Binding(
+                    get: { customer.leadSource ?? "" },
+                    set: {
+                        // Typing keeps the field open even when it is cleared.
+                        isEnteringOtherLeadSource = true
+                        customer.leadSource = $0
+                    }
+                ))
+                .textInputAutocapitalization(.words)
+                .accessibilityLabel("Other lead source")
+            }
+        } header: {
+            Text("How they found you")
+        } footer: {
+            if showsOtherField {
+                Text("Up to \(NativeLeadSource.customLabelMaxLength) characters. You can pick it again for other customers.")
+            }
+        }
     }
 }
 

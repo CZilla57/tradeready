@@ -110,6 +110,22 @@ private func testBuilders() {
     expect(customersCsv[1].hasPrefix("Acme,"), "customers sorted by name")
     expect(customersCsv[2].hasPrefix("Zed,"), "second customer")
 
+    // Phase 27 (spec §7): a trailing `Lead source` column — the display name,
+    // custom labels verbatim, empty when unknown.
+    let sourced = [
+        customer(#"{"id":"c1","name":"Acme","email":"","phone":"","address":"","notes":"","createdAt":"2026-01-01","leadSource":"thumbtack_angi"}"#),
+        customer(#"{"id":"c2","name":"Bree","email":"","phone":"","address":"","notes":"","leadSource":"Home  show, spring"}"#),
+        customer(#"{"id":"c3","name":"Cole","email":"","phone":"","address":"","notes":"","archivedAt":"2026-02-01","leadSource":"  "}"#),
+        customer(#"{"id":"c4","name":"Dot","email":"","phone":"","address":"","notes":""}"#),
+    ]
+    let sourcedCsv = NativeAccountingPackage.buildCustomersCsv(sourced).components(separatedBy: "\r\n")
+    expectEqual(sourcedCsv[0], "Name,Email,Phone,Address,Notes,Created,Archived,Lead source", "customers header gains a trailing Lead source")
+    expectEqual(sourcedCsv[1], "Acme,,,,,2026-01-01,,Thumbtack / Angi", "preset key exports its display name")
+    expectEqual(sourcedCsv[2], "Bree,,,,,,,\"Home show, spring\"", "custom label verbatim (normalized, CSV-escaped)")
+    expectEqual(sourcedCsv[3], "Cole,,,,,,2026-02-01,", "a blank source exports empty")
+    expectEqual(sourcedCsv[4], "Dot,,,,,,,", "no source exports empty")
+    expectEqual(sourcedCsv.count, 6, "header + 4 rows + trailing CRLF")
+
     let mapping = NativeAccountingPackage.buildCategoryMappingCsv().components(separatedBy: "\r\n")
     expectEqual(mapping.count, 10, "category mapping: header + 8 + trailing")
     expectEqual(mapping[1], "materials,Materials", "first category row")
@@ -194,14 +210,20 @@ private func testSummaryAndPackage() {
     let second = NativeAccountingPackage.buildAccountingPackage(sampleInput(), start: jan1, end: dec31)
     expectEqual(first.filename, "TradeReady-Accounting_2026-01-01_2026-12-31.zip", "assembled filename")
     expectEqual(first.bytes, second.bytes, "package is byte-deterministic")
-    // Byte-identical to the React Native export for this input: same length and
-    // same CRC-32 over the whole archive, captured from the live oracle.
-    expectEqual(first.bytes.count, 3931, "package byte length matches the RN oracle")
-    expectEqual(NativeZipArchive.crc32(first.bytes), 555_132_606, "package CRC-32 matches the RN oracle")
+    // The React Native export for this input is 3931 bytes (CRC-32 555_132_606)
+    // and the empty one 3626 (117_099_229), captured from the live oracle.
+    // Phase 27 (lead source, spec §7) deliberately appends a `Lead source`
+    // column to customers.csv and nothing else: `,Lead source` on the header
+    // (12 bytes) plus one empty field per customer row (1 byte each). The
+    // stored ZIP's headers are fixed-width, so the archive grows by exactly
+    // that; the CRC-32 is re-pinned to the native bytes.
+    let leadSourceHeaderBytes = ",Lead source".utf8.count
+    expectEqual(first.bytes.count, 3931 + leadSourceHeaderBytes + 1, "package byte length is the RN oracle plus the lead-source column")
+    expectEqual(NativeZipArchive.crc32(first.bytes), 2_615_559_630, "package CRC-32 (RN oracle + lead-source column)")
 
     let emptyPackage = NativeAccountingPackage.buildAccountingPackage(NativePackageInput(), start: jan1, end: dec31)
-    expectEqual(emptyPackage.bytes.count, 3626, "empty package byte length matches the RN oracle")
-    expectEqual(NativeZipArchive.crc32(emptyPackage.bytes), 117_099_229, "empty package CRC-32 matches the RN oracle")
+    expectEqual(emptyPackage.bytes.count, 3626 + leadSourceHeaderBytes, "empty package byte length is the RN oracle plus the lead-source header")
+    expectEqual(NativeZipArchive.crc32(emptyPackage.bytes), 3_621_479_273, "empty package CRC-32 (RN oracle + lead-source header)")
 
     let expectedOrder = [
         "invoices.csv", "invoice-line-items.csv", "active-payments.csv", "payment-activity.csv",

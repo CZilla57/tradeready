@@ -64,6 +64,9 @@ struct Customer: Identifiable, Codable, Hashable {
     /// Presence hides the record from active customer lists without rewriting
     /// invoices, jobs, or historical totals. Keep the canonical string intact.
     var archivedAt: String?
+    /// Phase 27: the stored lead source (preset key or custom label), first
+    /// touch. `nil` is Unknown.
+    var leadSource: String?
 }
 
 struct Job: Identifiable, Codable, Hashable {

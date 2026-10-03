@@ -245,6 +245,29 @@ describe("reserveCore", () => {
     expect(calls.pushPosts[0].data).toEqual({ type: "booking_request" });
   });
 
+  test("leadSource from the booking page lands in the stored request blob", async () => {
+    const calls = mockBackend({ settingsRows: settingsRow(enabledSettings()) });
+    const r = await runReserve(reserveBody({ leadSource: "  nextdoor " }));
+    expect(r.status).toBe(200);
+    expect(calls.requestPosts).toHaveLength(1);
+    expect(calls.requestPosts[0].data).toMatchObject({
+      id: `bk${NOW_MS}_${RAND}`,
+      kind: "booked",
+      name: "Dana Fox",
+      leadSource: "nextdoor",
+    });
+  });
+
+  test("a missing or unusable leadSource leaves no key on the stored request and never fails the booking", async () => {
+    const calls = mockBackend({ settingsRows: settingsRow(enabledSettings()) });
+    expect((await runReserve(reserveBody())).status).toBe(200);
+    expect((await runReserve(reserveBody({ leadSource: { src: "nextdoor" } }))).status).toBe(200);
+    expect(calls.requestPosts).toHaveLength(2);
+    for (const post of calls.requestPosts) {
+      expect(post.data).not.toHaveProperty("leadSource");
+    }
+  });
+
   test("unique-index conflict (racing customer) → 409 slot_taken, no request row", async () => {
     const calls = mockBackend({
       settingsRows: settingsRow(enabledSettings()),

@@ -6,6 +6,7 @@ ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 swiftc \
   -module-cache-path "${TMPDIR:-/tmp}/tradeready-pricebook-module-cache" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/CanonicalModels.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeLeadSource.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/FinancialDomain.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeCashBasis.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeCSVExport.swift" \

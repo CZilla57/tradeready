@@ -2835,6 +2835,92 @@ struct StoreIntegrationTests {
             expect(!store.undoImport(batchID: report.batchID), "9.08 undoing an unknown batch reports false")
         } catch { expect(false, "9.08 import block aborted: \(error)") }
 
+        // Phase 27 push-gap fix (spec 2026-10-02-lead-source-design.md §3,
+        // D5): an import that fills a MATCHED customer's blank fields (lead
+        // source, email, phone) publishes that customer too; a matched
+        // customer the import leaves unchanged is still not published.
+        do {
+            let fillURL = phase9Directory.appendingPathComponent("ImportFill/store.json")
+            let blankJSON = """
+            {"id":"c-blank","name":"Ada Electric","email":"","phone":"","address":"","notes":"",
+             "createdAt":"2026-01-01"}
+            """
+            let sourcedJSON = """
+            {"id":"c-sourced","name":"Bob Plumbing","email":"bob@example.com","phone":"","address":"",
+             "notes":"","createdAt":"2026-01-01","leadSource":"referral"}
+            """
+            let seeded = Canonical.Snapshot(payload: .init(customers: [
+                try canonicalRecord(blankJSON), try canonicalRecord(sourcedJSON),
+            ]))
+            try Canonical.SnapshotRepository(primaryURL: fillURL).save(seeded)
+            let store = AppStore(fileURL: fillURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
+            guard let report = succeed(
+                store.commitImport(
+                    entity: .customers,
+                    rows: [
+                        ["Ada Electric", "ada@example.com", "Nextdoor"],
+                        ["Bob Plumbing", "bob@other.com", "Yelp"],
+                        ["New Co", "new@example.com", "Home Show"],
+                    ],
+                    mapping: ["name", "email", "leadSource"], dateFormat: nil, fileHash: "hash-fill"
+                ),
+                "27 a customer import with a lead source column commits"
+            ) else { throw StoreTestError.missingFixture }
+            expect(report.counts.created == 1 && report.counts.matched == 2,
+                   "27 the import matches both seeded customers and creates one")
+            let imported = try snapshot9(fillURL)
+            let filled = imported.payload.customers!.first { $0.id == "c-blank" }!
+            let kept = imported.payload.customers!.first { $0.id == "c-sourced" }!
+            let created = imported.payload.customers!.first { $0.name == "New Co" }!
+            expect(filled.email == "ada@example.com" && filled.leadSource == "nextdoor" && filled.importBatchId == nil,
+                   "27 the matched blank customer is filled (normalized source) without batch provenance")
+            expect(kept.email == "bob@example.com" && kept.leadSource == "referral",
+                   "27 the matched sourced customer keeps its email and first-touch source")
+            expect(created.leadSource == "Home Show", "27 the created customer takes its custom source")
+            let queue = pendingMutations(fillURL).filter { $0.table == "customers" }
+            expect(Set(queue.map(\.recordId)) == [created.id, "c-blank"] && queue.allSatisfy { $0.op == .upsert },
+                   "27 the created and the filled customer are published; the unchanged match is not")
+            guard case let .object(payload)? = queue.first(where: { $0.recordId == "c-blank" })?.payload else {
+                throw StoreTestError.missingFixture
+            }
+            expect(payload["email"] == .string("ada@example.com") && payload["leadSource"] == .string("nextdoor"),
+                   "27 the filled customer's upsert carries the filled fields")
+            expect(store.undoImport(batchID: report.batchID), "27 the fill import can be undone")
+            let undone = try snapshot9(fillURL)
+            expect(undone.payload.customers!.contains { $0.id == "c-blank" && $0.leadSource == "nextdoor" },
+                   "27 undo strips only created records (a matched fill stays, as for email before)")
+
+            // Invoice imports fill a matched customer's blank phone: published too.
+            let invoiceURL = phase9Directory.appendingPathComponent("ImportFillInvoices/store.json")
+            try Canonical.SnapshotRepository(primaryURL: invoiceURL).save(seeded)
+            let invoiceStore = AppStore(fileURL: invoiceURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
+            guard succeed(
+                invoiceStore.commitImport(
+                    entity: .invoices,
+                    rows: [["Ada Electric", "100", "555-0100"], ["Bob Plumbing", "200", ""]],
+                    mapping: ["customer", "amount", "phone"], dateFormat: nil, fileHash: "hash-fill-inv"
+                ),
+                "27 an invoice import that fills a phone commits"
+            ) != nil else { throw StoreTestError.missingFixture }
+            let invoiceQueue = pendingMutations(invoiceURL).filter { $0.table == "customers" }
+            expect(invoiceQueue.map(\.recordId) == ["c-blank"],
+                   "27 an invoice import publishes the customer whose blank phone it filled, and no other")
+
+            // Job imports join by name only, so a match never changes: nothing is published.
+            let jobURL = phase9Directory.appendingPathComponent("ImportFillJobs/store.json")
+            try Canonical.SnapshotRepository(primaryURL: jobURL).save(seeded)
+            let jobStore = AppStore(fileURL: jobURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
+            guard succeed(
+                jobStore.commitImport(
+                    entity: .jobs, rows: [["Panel swap", "Ada Electric"]],
+                    mapping: ["title", "customerName"], dateFormat: nil, fileHash: "hash-fill-job"
+                ),
+                "27 a job import against a seeded customer commits"
+            ) != nil else { throw StoreTestError.missingFixture }
+            expect(pendingMutations(jobURL).filter { $0.table == "customers" }.isEmpty,
+                   "27 a job import that only joins a customer publishes no customer")
+        } catch { expect(false, "27 import fill block aborted: \(error)") }
+
         // Invoice import joins the current customers; undo is per entity.
         do {
             let editURL = phase9Directory.appendingPathComponent("ImportEdit/store.json")

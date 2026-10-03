@@ -251,6 +251,43 @@ run("nil mutation semantics") {
     expect(afterKeepingAbsent["photos"] == nil, "setting an absent optional to nil keeps it absent")
 }
 
+// Phase 27 (spec 2026-10-02-lead-source-design.md §2-§3): the customer's
+// first-touch source and a booking link's `?src=` tag are typed fields.
+run("lead source is typed on customers and booking requests") {
+    let customer: Canonical.Customer = try field("customer", from: rich)
+    let encoded = try object(customer)
+    expect(customer.leadSource == "referral", "rich customer lead source decodes")
+    expect(customer.preservation.unknownFields["leadSource"] == nil, "lead source is typed, not an unknown field")
+    expect(encoded["leadSource"] == .string("referral"), "rich customer lead source encodes")
+
+    var cleared = customer
+    cleared.leadSource = nil
+    let clearedFields = try object(cleared)
+    expect(clearedFields["leadSource"] == nil, "clearing the lead source removes the key")
+    var custom = customer
+    custom.leadSource = "Home Show"
+    let customFields = try object(custom)
+    expect(customFields["leadSource"] == .string("Home Show"), "a custom label is written verbatim")
+
+    let legacyCustomer: Canonical.Customer = try field("customer", from: legacy)
+    let legacyFields = try object(legacyCustomer)
+    expect(legacyCustomer.leadSource == nil && legacyFields["leadSource"] == nil,
+           "a customer without a source stays without the key")
+
+    guard case var .object(requestFields)? = rich["bookingRequest"] else {
+        throw NSError(domain: "CanonicalTests", code: 13, userInfo: [NSLocalizedDescriptionKey: "Missing booking request"])
+    }
+    let plain: Canonical.BookingRequest = try field("bookingRequest", from: rich)
+    let plainFields = try object(plain)
+    expect(plain.leadSource == nil && plainFields["leadSource"] == nil, "a request without a tag stays without the key")
+    requestFields["leadSource"] = .string("nextdoor")
+    let tagged = try decoder.decode(Canonical.BookingRequest.self, from: encoder.encode(Canonical.JSONValue.object(requestFields)))
+    let taggedJSON = try json(tagged)
+    expect(tagged.leadSource == "nextdoor" && tagged.preservation.unknownFields["leadSource"] == nil,
+           "a booking request's lead source decodes as a typed field")
+    expect(taggedJSON == .object(requestFields), "a tagged booking request round-trips exactly")
+}
+
 run("versioned envelope") {
     let job: Canonical.Job = try field("job", from: rich)
     var envelope = Canonical.Envelope(schemaVersion: 7, payload: job)

@@ -589,6 +589,46 @@ struct NativeMoneyCustomerMixCardView: View {
     }
 }
 
+// MARK: - Lead sources (Phase 27)
+
+/// One row per lead-source bucket for the chip's window. Each row is a single
+/// VoiceOver element that speaks its own summary; the name and amount stack at
+/// accessibility text sizes instead of truncating.
+struct NativeMoneyLeadSourceCardView: View {
+    let card: NativeMoneyLeadSourceCard
+
+    var body: some View {
+        NativeMoneyCard(title: NativeMoneyLeadSourceCard.title) {
+            ForEach(card.rows, id: \.bucketKey) { row in
+                VStack(alignment: .leading, spacing: 4) {
+                    NativeAccessibilityAdaptiveRow(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(row.name)
+                            .font(.subheadline)
+                            .foregroundStyle(row.isUnknown ? Color.secondary : Color.primary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(row.collectedText)
+                            .font(.subheadline.monospacedDigit())
+                            .foregroundStyle(Color.tradeSuccessText)
+                            .layoutPriority(1)
+                    }
+                    Text(row.detailText)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    NativeMoneyTrack(fraction: row.fraction, tone: row.isUnknown ? .muted : .success, height: 5)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(row.accessibilityLabel)
+            }
+            if card.showsSetupHint {
+                Text(NativeMoneyLeadSourceCard.setupHint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
 // MARK: - Days to pay
 
 struct NativeMoneyInvoiceAgingCardView: View {

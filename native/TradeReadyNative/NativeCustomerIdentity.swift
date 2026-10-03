@@ -152,6 +152,9 @@ enum NativeCustomerIdentity {
         prepared.email = candidate.email.trimmingCharacters(in: .whitespacesAndNewlines)
         prepared.address = candidate.address.trimmingCharacters(in: .whitespacesAndNewlines)
         prepared.notes = candidate.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Phase 27: "google ads" typed into Other… is stored as `google`;
+        // blank is nil (Unknown).
+        prepared.leadSource = NativeLeadSource.normalize(candidate.leadSource)
 
         guard !prepared.name.isEmpty else {
             return .init(customer: prepared, issue: .nameRequired)
@@ -335,6 +338,11 @@ enum NativeCustomerIdentity {
         }
         if isBlank(winnerAfter.address), !isBlank(loserBefore.address) {
             winnerAfter.address = loserBefore.address
+        }
+        // Phase 27 first touch: the winner keeps its lead source and takes
+        // the loser's only when its own is blank.
+        if isBlank(winnerAfter.leadSource ?? ""), !isBlank(loserBefore.leadSource ?? "") {
+            winnerAfter.leadSource = loserBefore.leadSource
         }
         let winnerNotes = winnerBefore.notes.trimmingCharacters(in: .whitespacesAndNewlines)
         let loserNotes = loserBefore.notes.trimmingCharacters(in: .whitespacesAndNewlines)
