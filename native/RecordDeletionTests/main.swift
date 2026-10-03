@@ -117,6 +117,46 @@ struct RecordDeletionTests {
             expect(false, "missing job deletion must fail closed")
         } catch NativeRecordDeletionError.recordNotFound {}
 
+        // Phase 20: a form (instance or template) deletes and restores exactly,
+        // and deleting a job never touches its forms (no cascade).
+        let richForm: Canonical.Form = try field("form")
+        let richTemplate: Canonical.Form = try field("formTemplate")
+        var withForms = original
+        withForms.payload.forms = [richTemplate, richForm]
+        let deletedForm = try NativeRecordDeletion.deleteForm(snapshot: withForms, recordID: richForm.id)
+        expect(deletedForm.snapshot.payload.forms?.map(\.id) == [richTemplate.id],
+               "form deletion removes only the exact form")
+        expect(deletedForm.mutation.table == "forms" && deletedForm.mutation.op == .delete
+               && deletedForm.mutation.recordId == richForm.id && deletedForm.mutation.payload == nil,
+               "form deletion plans one forms tombstone")
+        expect(deletedForm.undo.kind == .form && deletedForm.undo.bannerMessage == "Deleted form Electrical safety inspection",
+               "form deletion offers the shared undo with the form title")
+        let restoredForm = try NativeRecordDeletion.undo(snapshot: deletedForm.snapshot, token: deletedForm.undo)
+        expect(restoredForm.snapshot.payload.forms == withForms.payload.forms,
+               "form undo restores the exact form, answers and unknown keys, in place")
+        expect(restoredForm.mutation.table == "forms" && restoredForm.mutation.op == .upsert
+               && restoredForm.mutation.payload == deletedForm.undo.preservedRecord,
+               "form undo plans the exact preserved forms upsert")
+        var recreatedForm = deletedForm.snapshot
+        recreatedForm.payload.forms?.append(richForm)
+        do {
+            _ = try NativeRecordDeletion.undo(snapshot: recreatedForm, token: deletedForm.undo)
+            expect(false, "form undo must reject a form recreated after deletion")
+        } catch NativeRecordDeletionError.undoConflict {}
+        let jobWithForms = try NativeRecordDeletion.deleteJob(snapshot: withForms, recordID: richJob.id)
+        expect(jobWithForms.snapshot.payload.forms == withForms.payload.forms,
+               "deleting a job leaves its forms stored (hidden, no cascade)")
+        var untitled = richForm
+        untitled.title = "  "
+        var untitledSnapshot = original
+        untitledSnapshot.payload.forms = [untitled]
+        let untitledDeletion = try NativeRecordDeletion.deleteForm(snapshot: untitledSnapshot, recordID: untitled.id)
+        expect(untitledDeletion.undo.displayName == "Untitled form", "a blank form title falls back")
+        do {
+            _ = try NativeRecordDeletion.deleteForm(snapshot: original, recordID: richForm.id)
+            expect(false, "deleting a form from a snapshot without forms must fail closed")
+        } catch NativeRecordDeletionError.recordNotFound {}
+
         if failures == 0 { print("PASS: native record deletion and undo tests") }
         else { fatalError("\(failures) record deletion test(s) failed") }
     }

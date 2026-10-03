@@ -16,6 +16,10 @@
 #
 # Phase 12 (12.00b.2-L): `NativeBookingOwnerResponses.swift` extends AppStore
 # (the owner-response outcomes and their notices), so it follows AppStore.swift.
+#
+# Phase 20 (job forms): AppStore.swift uses `Domain/NativeJobForms.swift` (photo
+# capture from a form item), and `NativeJobFormsStore.swift` extends AppStore
+# with the forms API, so it follows AppStore.swift too.
 APPSTORE_TEST_SOURCES="
 $ROOT_DIR/native/HostTestSupport/HostInMemoryKeychain.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/FinancialDomain.swift
@@ -33,6 +37,7 @@ $ROOT_DIR/native/TradeReadyNative/Domain/NativeAppRatingPrompt.swift
 $ROOT_DIR/native/TradeReadyNative/NativeStripeConnect.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/UIModelAdapters.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeQuoteOptions.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeJobForms.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeRecurringJobs.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeRecurringInvoices.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeSchedule.swift
@@ -146,4 +151,5 @@ $ROOT_DIR/native/TradeReadyNative/NativeSupportDiagnostics.swift
 $ROOT_DIR/native/TradeReadyNative/NativeRunMarker.swift
 $ROOT_DIR/native/TradeReadyNative/AppStore.swift
 $ROOT_DIR/native/TradeReadyNative/NativeBookingOwnerResponses.swift
+$ROOT_DIR/native/TradeReadyNative/NativeJobFormsStore.swift
 "

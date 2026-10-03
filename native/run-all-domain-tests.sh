@@ -52,6 +52,8 @@ sh "$ROOT_DIR/native/run-estimate-approval-link-tests.sh"
 # Phase 25: good/better/best quote options (shared selection vectors with the Worker).
 sh "$ROOT_DIR/native/run-quote-options-tests.sh"
 sh "$ROOT_DIR/native/run-quote-options-store-tests.sh"
+# Phase 20: custom job / inspection forms (pure domain; store wiring is in store-integration).
+sh "$ROOT_DIR/native/run-job-forms-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-pdf-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-delivery-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-message-draft-tests.sh"

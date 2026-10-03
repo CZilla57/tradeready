@@ -133,6 +133,13 @@ struct InitialSyncTests {
                 return (200, try JSONEncoder().encode([row(
                     id: "bk-1", value: rich["bookingRequest"]!
                 )]))
+            case "forms":
+                // Phase 20: an instance, a template, and a tombstone.
+                return (200, try JSONEncoder().encode([
+                    row(id: "fm1759420800000_k3x9", value: rich["form"]!),
+                    row(id: "fm1759420700000_z0", value: rich["formTemplate"]!),
+                    row(id: "fm1_gone", value: .object(["id": .string("fm1_gone")]), deleted: true)
+                ]))
             case "settings":
                 return (200, try JSONEncoder().encode([Canonical.JSONValue.object([
                     "user_id": .string(subject),
@@ -199,8 +206,14 @@ struct InitialSyncTests {
         let collectionRequests = loader.requests.filter {
             !["settings", "customer_notes"].contains(tableName($0))
         }
-        expect(Set(collectionRequests.map(tableName)).count == 10,
-               "all ten production collection tables are pulled")
+        expect(Set(collectionRequests.map(tableName)).count == 11,
+               "all eleven production collection tables are pulled")
+        expect(Set(collectionRequests.map(tableName)).contains("forms"), "Phase 20: the forms table is pulled")
+        expect(pulled.payload.forms?.map(\.id) == ["fm1759420800000_k3x9", "fm1759420700000_z0"],
+               "forms rows (instance and template) land in the snapshot; a tombstone adds nothing")
+        expect(pulled.payload.forms?.first?.preservation.unknownFields["futureFormField"] != nil
+               && pulled.payload.forms?.first?.items[4].kind == "signature",
+               "a pulled form keeps unknown keys and an unknown item kind")
         expect(loader.requests.allSatisfy {
             $0.httpMethod == "GET"
                 && $0.value(forHTTPHeaderField: "apikey") == "publishable-key"

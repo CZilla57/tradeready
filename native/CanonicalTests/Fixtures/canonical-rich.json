@@ -40,5 +40,27 @@
       "decision": "approved", "consentAt": "2026-10-02T10:30:00.000Z", "signerName": "Ada", "ip": "203.0.113.9", "userAgent": "fixture",
       "selection": { "tierId": "qt_standard", "tierName": "Standard unit", "addOnIds": ["qa_haul"], "addOns": [{ "id": "qa_haul", "label": "Haul away old unit", "amount": 150 }],
         "lineItems": [{ "label": "Labor (6 hrs @ $95/hr)", "amount": 570 }, { "label": "Materials (1 item)", "amount": 875.25 }, { "label": "City permit", "amount": 120 }, { "label": "Overhead & operating costs", "amount": 770.8 }, { "label": "Haul away old unit", "amount": 150 }], "total": 2486.05 } }
+  },
+  "form": {
+    "id": "fm1759420800000_k3x9", "kind": "instance", "jobId": "j_20260812_precision", "templateId": "builtin:electrical-safety",
+    "title": "Electrical safety inspection", "completedAt": null, "createdAt": "2026-10-02T16:00:00.000Z", "futureFormField": { "kept": [1, "two"] },
+    "items": [
+      { "id": "fi_1", "kind": "section", "label": "Panel" },
+      { "id": "fi_2", "kind": "check", "label": "Panel photo with the cover off", "required": true, "photoRequired": true, "checked": true, "photoIds": ["p1759420900000_abc"], "note": "Cover off at 9:05" },
+      { "id": "fi_3", "kind": "passFail", "label": "Breakers and fuses are labelled", "required": true, "result": "fail", "note": "Two unlabelled breakers", "futureItemField": "retain-me" },
+      { "id": "fi_4", "kind": "text", "label": "Issues found", "required": false, "photoRequired": null, "text": "Scorch mark at slot 14" },
+      { "id": "fi_5", "kind": "signature", "label": "Customer signature", "futureSignature": { "strokes": 3 } }
+    ]
+  },
+  "formTemplate": {
+    "id": "fm1759420700000_z0", "kind": "template", "title": "Annual walk-through", "createdAt": "2026-10-02T15:58:20.000Z", "archivedAt": "2026-10-02T17:00:00.000Z",
+    "items": [
+      { "id": "fi_1", "kind": "check", "label": "Gutters clear", "required": true },
+      { "id": "fi_2", "kind": "passFail", "label": "Roof flashing", "photoRequired": true }
+    ]
+  },
+  "formPhoto": {
+    "id": "p1759420900000_abc", "jobId": "j_20260812_precision", "createdAt": "2026-10-02T16:01:40.000Z", "customerVisible": false,
+    "formId": "fm1759420800000_k3x9", "formItemId": "fi_2"
   }
 }

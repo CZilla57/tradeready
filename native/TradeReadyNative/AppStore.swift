@@ -4233,15 +4233,42 @@ final class AppStore: ObservableObject {
     /// `Canonical.JobPhoto` (fail-closed `customerVisible: false`) before
     /// publishing and enqueuing the `jobPhotos` upsert. Returns the committed
     /// record, or nil when validation or persistence fails.
+    ///
+    /// Phase 20: with `formID` and `formItemID` (both or neither) the photo is
+    /// captured from a form item. The form must be an in-progress instance of
+    /// this job and the item answerable with room for another photo; that is
+    /// checked before any bytes are written. The photo is stamped with
+    /// `formId`/`formItemId` (so it also shows in the job's Photos section)
+    /// and its id is appended to the item's `photoIds`, both records in one
+    /// durable commit and one queue batch (`jobPhotos` then `forms`).
     @discardableResult
     func createJobPhoto(
         jobID: String,
         sourceData: Data,
         width: Int? = nil,
         height: Int? = nil,
+        formID: String? = nil,
+        formItemID: String? = nil,
         on date: Date = .now
     ) -> Canonical.JobPhoto? {
         guard ensurePersistenceWritable() else { return nil }
+        let formTarget: (formID: String, itemID: String)?
+        switch (formID, formItemID) {
+        case (nil, nil):
+            formTarget = nil
+        case let (formID?, itemID?):
+            guard let form = formRecords.first(where: { $0.id == formID }),
+                  form.jobId == jobID,
+                  (try? NativeJobForms.canAttachPhoto(form, itemID: itemID)) != nil
+            else {
+                migrationMessage = Self.formPhotoRefusedMessage
+                return nil
+            }
+            formTarget = (formID, itemID)
+        default:
+            migrationMessage = Self.formPhotoRefusedMessage
+            return nil
+        }
         let mediaRoot = repository.liveMediaDirectoryURL
         let existingIDs = Set((snapshot.payload.jobPhotos ?? []).map(\.id))
         let captured: NativeJobPhotoImport.CapturedPhoto
@@ -4266,17 +4293,33 @@ final class AppStore: ObservableObject {
                 migrationMessage = "The photo could not be saved. Nothing was changed."
                 return nil
             }
-            let effect = try NativeJobPhotoMutations.create(snapshot: snapshot, photo: captured.photo)
-            try repository.save(effect.snapshot)
-            try apply(effect.snapshot)
+            var photo = captured.photo
+            photo.formId = formTarget?.formID
+            photo.formItemId = formTarget?.itemID
+            let effect = try NativeJobPhotoMutations.create(snapshot: snapshot, photo: photo)
+            var committed = effect.snapshot
+            var drafts = [effect.draft]
+            if let formTarget {
+                var forms = committed.payload.forms ?? []
+                guard let index = forms.firstIndex(where: { $0.id == formTarget.formID }) else {
+                    throw NativeJobForms.FormError.notFound
+                }
+                let form = try NativeJobForms.addPhoto(forms[index], itemID: formTarget.itemID, photoID: photo.id)
+                try NativeJobForms.validate(form)
+                forms[index] = form
+                committed.payload.forms = forms
+                drafts.append(.init(table: "forms", op: .upsert, recordId: form.id, payload: try Self.mutationPayload(form)))
+            }
+            try repository.save(committed)
+            try apply(committed)
             do {
-                try mutationQueue.enqueueBatch([effect.draft])
+                try mutationQueue.enqueueBatch(drafts)
                 scheduleSyncAfterLocalChange()
             } catch {
                 print("TradeReadyMutationQueue stage=enqueue table=jobPhotos")
                 recordLocalSyncFailure("queue/enqueue-job-photos")
             }
-            return captured.photo
+            return photo
         } catch {
             migrationMessage = "The photo could not be saved. Nothing was changed."
             return nil
@@ -4349,6 +4392,86 @@ final class AppStore: ObservableObject {
     func isJobPhotoCustomerVisible(photoID: String) -> Bool {
         guard let photo = snapshot.payload.jobPhotos?.first(where: { $0.id == photoID }) else { return false }
         return NativeJobPhotoImport.isCustomerVisible(photo)
+    }
+
+    // MARK: - Job forms (Phase 20) primitives
+    //
+    // The forms API lives in `NativeJobFormsStore.swift`. Only the pieces that
+    // need this file's private state (the snapshot, the repository, the queue
+    // and the deletion undo) live here.
+
+    private static let formPhotoRefusedMessage =
+        "The photo could not be added to this form item. Nothing was changed."
+
+    /// Every stored `forms` row: custom templates and job instances.
+    var formRecords: [Canonical.Form] { snapshot.payload.forms ?? [] }
+
+    /// Whether the canonical job is on this device. A deleted job's form
+    /// instances stay stored but hidden (spec §8, no cascade).
+    func canonicalJobExists(id: String) -> Bool {
+        snapshot.payload.jobs?.contains { $0.id == id } ?? false
+    }
+
+    enum FormCommitMode {
+        /// A new row: refused when the id is already stored.
+        case insert
+        /// A changed row: refused when a pull has removed it meanwhile, so a
+        /// stale screen never resurrects a deleted form.
+        case replace
+    }
+
+    /// Durably commits one `forms` row and enqueues its upsert: durable save,
+    /// then publish, then the queue (a queue failure never rolls back the
+    /// save). A row that fails `NativeJobForms.validate` (the spec §2 caps) is
+    /// refused before anything is written.
+    func commitFormRecord(
+        _ form: Canonical.Form,
+        mode: FormCommitMode
+    ) -> Result<Canonical.Form, NativeJobForms.FormError> {
+        do { try NativeJobForms.validate(form) } catch {
+            return .failure((error as? NativeJobForms.FormError) ?? .notSaved)
+        }
+        guard ensurePersistenceWritable() else { return .failure(.notSaved) }
+        var updated = snapshot
+        var records = updated.payload.forms ?? []
+        let index = records.firstIndex { $0.id == form.id }
+        switch (mode, index) {
+        case (.insert, nil): records.append(form)
+        case let (.replace, index?): records[index] = form
+        case (.insert, _?): return .failure(.duplicateFormID)
+        case (.replace, nil): return .failure(.notFound)
+        }
+        updated.payload.forms = records
+        do {
+            try repository.save(updated)
+            try apply(updated)
+        } catch {
+            migrationMessage = "The form could not be saved. Nothing was changed."
+            return .failure(.notSaved)
+        }
+        enqueueUpsert(table: "forms", recordId: form.id, record: form)
+        return .success(form)
+    }
+
+    /// Soft-deletes one form (an instance or a custom template) through the
+    /// normal `forms` delete, with the same 8 s undo as jobs, invoices and
+    /// customers. Photos captured from it stay in the job's Photos section.
+    @discardableResult
+    func deleteForm(id: String) -> Bool {
+        guard ensurePersistenceWritable() else { return false }
+        do {
+            let result = try NativeRecordDeletion.deleteForm(snapshot: snapshot, recordID: id)
+            try commitRecordDeletion(result)
+            pendingCustomerMergeUndo = nil
+            pendingRecordDeleteUndo = result.undo
+            scheduleRecordDeleteUndoExpiration(id: result.undo.id)
+            return true
+        } catch NativeRecordDeletionError.recordNotFound {
+            return false
+        } catch {
+            migrationMessage = "The form could not be deleted safely. Nothing was changed."
+            return false
+        }
     }
 
     /// Applies only the direct, one-step lifecycle actions whose dependent
@@ -9183,6 +9306,7 @@ final class AppStore: ObservableObject {
         if let v = try rebase("trips", \Canonical.Trip.id, b.trips, p.trips, l.trips) { result.payload.trips = v }
         if let v = try rebase("bookingRequests", \Canonical.BookingRequest.id, b.bookingRequests, p.bookingRequests, l.bookingRequests) { result.payload.bookingRequests = v }
         if let v = try rebase("jobPhotos", \Canonical.JobPhoto.id, b.jobPhotos, p.jobPhotos, l.jobPhotos) { result.payload.jobPhotos = v }
+        if let v = try rebase("forms", \Canonical.Form.id, b.forms, p.forms, l.forms) { result.payload.forms = v }
 
         // Settings and customer notes have no cursor: every pass refetches them.
         if try protectedKeys.contains("settings/\(settingsMutationRecordID)") || !sameEncoding(l.settings, b.settings) {
@@ -9292,6 +9416,7 @@ final class AppStore: ObservableObject {
             + (payload.pricebook?.count ?? 0)
             + (payload.bookingRequests?.count ?? 0)
             + (payload.jobPhotos?.count ?? 0)
+            + (payload.forms?.count ?? 0)
     }
 
     private static func performanceOutcome(_ result: NativeSyncPullResult) -> NativePerformanceOutcome {
@@ -9723,7 +9848,10 @@ final class AppStore: ObservableObject {
         "payload", "schemaVersion", "legacySnapshot",
         "invoices", "jobs", "customers", "settings", "expenses",
         "customerNotes", "recurringJobs", "recurringInvoices", "trips",
-        "pricebook", "bookingRequests", "jobPhotos",
+        "pricebook", "bookingRequests", "jobPhotos", "forms",
+        // Phase 20: form and form-item keys (key names only, never values).
+        "kind", "jobId", "templateId", "items", "label", "required", "photoRequired",
+        "checked", "result", "text", "photoIds", "completedAt", "archivedAt", "formId", "formItemId",
         "id", "name", "email", "phone", "address", "notes", "createdAt",
         "customerId", "customerName", "customer", "title", "description",
         "status", "scheduledAt", "scheduledEnd", "estimateTotal", "laborHours",

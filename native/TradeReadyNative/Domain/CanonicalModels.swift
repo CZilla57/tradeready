@@ -1013,18 +1013,153 @@ public extension Canonical {
         public var uploadedAt: String?
         public var customerVisible: Bool?
         public var width, height: Decimal?
+        /// Phase 20: the form and form item a photo was captured from
+        /// (additive back-references; the item's `photoIds` is the source of
+        /// truth for what the form shows).
+        public var formId, formItemId: String?
         public var preservation: Preservation
         public init(from decoder: Decoder) throws {
             var o = try ObjectReader(decoder)
             id = try o.required("id"); jobId = try o.required("jobId"); createdAt = try o.required("createdAt")
             uploadedAt = try o.optional("uploadedAt"); customerVisible = try o.optional("customerVisible")
-            width = try o.optional("width"); height = try o.optional("height"); preservation = o.finish()
+            width = try o.optional("width"); height = try o.optional("height")
+            formId = try o.optional("formId"); formItemId = try o.optional("formItemId"); preservation = o.finish()
         }
         public func encode(to encoder: Encoder) throws {
             var o = ObjectWriter(preservation)
             try o.put(id, for: "id"); try o.put(jobId, for: "jobId"); try o.put(createdAt, for: "createdAt")
             try o.putOptional(uploadedAt, for: "uploadedAt"); try o.putOptional(customerVisible, for: "customerVisible")
-            try o.putOptional(width, for: "width"); try o.putOptional(height, for: "height"); try o.encode(to: encoder)
+            try o.putOptional(width, for: "width"); try o.putOptional(height, for: "height")
+            try o.putOptional(formId, for: "formId"); try o.putOptional(formItemId, for: "formItemId")
+            try o.encode(to: encoder)
+        }
+    }
+
+    /// Phase 20: one row of a form (spec
+    /// `docs/superpowers/specs/2026-10-02-job-forms-design.md` §2). `kind` and
+    /// `result` stay raw strings so a kind or result written by a newer client
+    /// decodes and round-trips here: a decode failure would fail the whole
+    /// `forms` pull. `NativeJobForms` reads them through typed accessors.
+    struct FormItem: Codable, Equatable {
+        public var id: String
+        /// `section`, `check`, `passFail` or `text`.
+        public var kind: String
+        public var label: String
+        /// Ignored for `section`.
+        public var required, photoRequired: Bool?
+        // Responses (instances only; absent = unanswered).
+        public var checked: Bool?
+        /// `pass`, `fail` or `na`.
+        public var result: String?
+        public var text, note: String?
+        public var photoIds: [String]?
+        public var preservation: Preservation
+        public init(
+            id: String,
+            kind: String,
+            label: String,
+            required: Bool? = nil,
+            photoRequired: Bool? = nil,
+            checked: Bool? = nil,
+            result: String? = nil,
+            text: String? = nil,
+            note: String? = nil,
+            photoIds: [String]? = nil,
+            preservation: Preservation = .init()
+        ) {
+            self.id = id
+            self.kind = kind
+            self.label = label
+            self.required = required
+            self.photoRequired = photoRequired
+            self.checked = checked
+            self.result = result
+            self.text = text
+            self.note = note
+            self.photoIds = photoIds
+            self.preservation = preservation
+        }
+        public init(from decoder: Decoder) throws {
+            var o = try ObjectReader(decoder)
+            id = try o.required("id"); kind = try o.required("kind"); label = try o.required("label")
+            required = try o.optional("required"); photoRequired = try o.optional("photoRequired")
+            checked = try o.optional("checked"); result = try o.optional("result")
+            text = try o.optional("text"); note = try o.optional("note"); photoIds = try o.optional("photoIds")
+            preservation = o.finish()
+        }
+        public func encode(to encoder: Encoder) throws {
+            var o = ObjectWriter(preservation)
+            try o.put(id, for: "id"); try o.put(kind, for: "kind"); try o.put(label, for: "label")
+            try o.putOptional(required, for: "required"); try o.putOptional(photoRequired, for: "photoRequired")
+            try o.putOptional(checked, for: "checked"); try o.putOptional(result, for: "result")
+            try o.putOptional(text, for: "text"); try o.putOptional(note, for: "note")
+            try o.putOptional(photoIds, for: "photoIds"); try o.encode(to: encoder)
+        }
+    }
+
+    /// Phase 20: a row of the synced `forms` collection. One table holds the
+    /// owner's custom templates (`kind: "template"`) and filled job checklists
+    /// (`kind: "instance"`), kept out of the job blob so a checkbox tap never
+    /// races a server-written estimate decision (spec §1).
+    struct Form: Codable, Equatable {
+        public static let kindTemplate = "template"
+        public static let kindInstance = "instance"
+
+        /// `fm<ms>_<base36 random>`: the table's primary key is global across
+        /// accounts, so every id is randomized.
+        public var id: String
+        /// `template` or `instance`.
+        public var kind: String
+        /// Instance only.
+        public var jobId: String?
+        /// Instance only: `builtin:<key>` or a custom template id.
+        public var templateId: String?
+        public var title: String
+        public var items: [FormItem]
+        /// Instance only: absent means in progress.
+        public var completedAt: DateString?
+        public var createdAt: DateString
+        /// Template only: hidden from the picker.
+        public var archivedAt: DateString?
+        public var preservation: Preservation
+        public init(
+            id: String,
+            kind: String,
+            jobId: String? = nil,
+            templateId: String? = nil,
+            title: String,
+            items: [FormItem],
+            completedAt: DateString? = nil,
+            createdAt: DateString,
+            archivedAt: DateString? = nil,
+            preservation: Preservation = .init()
+        ) {
+            self.id = id
+            self.kind = kind
+            self.jobId = jobId
+            self.templateId = templateId
+            self.title = title
+            self.items = items
+            self.completedAt = completedAt
+            self.createdAt = createdAt
+            self.archivedAt = archivedAt
+            self.preservation = preservation
+        }
+        public init(from decoder: Decoder) throws {
+            var o = try ObjectReader(decoder)
+            id = try o.required("id"); kind = try o.required("kind")
+            jobId = try o.optional("jobId"); templateId = try o.optional("templateId")
+            title = try o.required("title"); items = try o.required("items")
+            completedAt = try o.optional("completedAt"); createdAt = try o.required("createdAt")
+            archivedAt = try o.optional("archivedAt"); preservation = o.finish()
+        }
+        public func encode(to encoder: Encoder) throws {
+            var o = ObjectWriter(preservation)
+            try o.put(id, for: "id"); try o.put(kind, for: "kind")
+            try o.putOptional(jobId, for: "jobId"); try o.putOptional(templateId, for: "templateId")
+            try o.put(title, for: "title"); try o.put(items, for: "items")
+            try o.putOptional(completedAt, for: "completedAt"); try o.put(createdAt, for: "createdAt")
+            try o.putOptional(archivedAt, for: "archivedAt"); try o.encode(to: encoder)
         }
     }
 

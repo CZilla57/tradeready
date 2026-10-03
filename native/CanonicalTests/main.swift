@@ -81,6 +81,52 @@ run("rich record families") {
     try roundTrip(Canonical.CustomerNotes.self, field: "customerNotes", fixture: rich)
     // Phase 25: quote options, snapshot.options and approval.selection.
     try roundTrip(Canonical.Job.self, field: "quoteOptionsJob", fixture: rich)
+    // Phase 20: forms (an instance and a custom template) and a photo
+    // captured from a form item.
+    try roundTrip(Canonical.Form.self, field: "form", fixture: rich)
+    try roundTrip(Canonical.Form.self, field: "formTemplate", fixture: rich)
+    try roundTrip(Canonical.JobPhoto.self, field: "formPhoto", fixture: rich)
+}
+
+run("forms decode as typed fields and keep unknown data at both levels") {
+    let form: Canonical.Form = try field("form", from: rich)
+    expect(form.kind == "instance" && form.jobId == "j_20260812_precision"
+           && form.templateId == "builtin:electrical-safety" && form.completedAt == nil,
+           "form header decodes")
+    expect(form.preservation.unknownFields["futureFormField"] != nil, "form unknown field retained")
+    expect(form.items.map(\.kind) == ["section", "check", "passFail", "text", "signature"],
+           "item kinds decode as raw strings, including one this version does not know")
+    expect(form.items[1].checked == true && form.items[1].photoIds == ["p1759420900000_abc"]
+           && form.items[1].required == true && form.items[1].photoRequired == true,
+           "check responses and flags decode")
+    expect(form.items[2].result == "fail" && form.items[2].note == "Two unlabelled breakers"
+           && form.items[2].preservation.unknownFields["futureItemField"] == .string("retain-me"),
+           "pass/fail result, note and an item unknown field decode")
+    expect(form.items[4].preservation.unknownFields["futureSignature"] != nil, "an unknown item kind keeps its data")
+
+    var edited = form
+    edited.items[2].result = "pass"
+    edited.title = "Panel inspection"
+    let encoded = try object(edited)
+    guard case let .array(items)? = encoded["items"], items.count == 5,
+          case let .object(failItem) = items[2], case let .object(textItem) = items[3]
+    else { throw NSError(domain: "CanonicalTests", code: 13) }
+    expect(encoded["completedAt"] == .null && encoded["futureFormField"] != nil,
+           "editing a form keeps its explicit null and unknown field")
+    expect(failItem["futureItemField"] == .string("retain-me") && failItem["result"] == .string("pass"),
+           "editing an item keeps its unknown field")
+    expect(textItem["photoRequired"] == .null && textItem["required"] == .bool(false),
+           "explicit item null and false survive an edit elsewhere")
+
+    let template: Canonical.Form = try field("formTemplate", from: rich)
+    expect(template.kind == "template" && template.jobId == nil && template.archivedAt == "2026-10-02T17:00:00.000Z",
+           "template decodes without job fields")
+    let photo: Canonical.JobPhoto = try field("formPhoto", from: rich)
+    expect(photo.formId == "fm1759420800000_k3x9" && photo.formItemId == "fi_2", "a form photo carries its back-references")
+    let plainPhoto: Canonical.JobPhoto = try field("jobPhoto", from: rich)
+    let plainEncoded = try object(plainPhoto)
+    expect(plainPhoto.formId == nil && plainEncoded["formId"] == nil && plainEncoded["formItemId"] == nil,
+           "a photo without a form stays without the keys")
 }
 
 run("quote options decode as typed fields") {

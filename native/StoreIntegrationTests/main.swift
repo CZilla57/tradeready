@@ -1640,6 +1640,187 @@ struct StoreIntegrationTests {
         expect(pendingMutations(queueURL).allSatisfy { $0.recordId != "never-existed" },
                "deleting a record that never existed enqueues nothing")
 
+        // MARK: - Phase 20: job forms through AppStore (add, answer, complete, delete + undo)
+
+        do {
+            func queuedForm(_ id: String) -> Canonical.MutationItem? {
+                pendingMutations(queueURL).last { $0.table == "forms" && $0.recordId == id }
+            }
+            func queuedFormValue(_ id: String) -> Canonical.Form? {
+                guard let payload = queuedForm(id)?.payload, let data = try? JSONEncoder().encode(payload) else { return nil }
+                return try? JSONDecoder().decode(Canonical.Form.self, from: data)
+            }
+            let formsJob = Job(customerId: queuedCustomer.id, customerName: queuedCustomer.name, title: "Panel inspection")
+            expect(queueStore.upsert(formsJob), "forms: the job saves")
+            let jpeg = Data([0xFF, 0xD8, 0x01, 0x02, 0xFF, 0xD9])
+
+            expect(queueStore.addForm(jobID: "no-such-job", templateRef: .builtin("site-safety")) == .failure(.jobNotFound),
+                   "forms: a form needs a job on this device")
+            expect(queueStore.addForm(jobID: formsJob.id, templateRef: .builtin("nope")) == .failure(.unknownTemplate("builtin:nope")),
+                   "forms: an unknown built-in is refused")
+            guard case let .success(added) = queueStore.addForm(jobID: formsJob.id, templateRef: .builtin("electrical-safety")) else {
+                expect(false, "forms: a built-in form is added")
+                throw StoreTestError.missingFixture
+            }
+            let formID = added.id
+            expect(NativeJobForms.isValidFormID(formID) && added.templateId == "builtin:electrical-safety" && added.jobId == formsJob.id,
+                   "forms: the instance has a random id, its job and its template")
+            expect(queueStore.forms(forJob: formsJob.id).map(\.id) == [formID], "forms: the job lists its form")
+            expect(queuedForm(formID)?.op == .upsert && queuedFormValue(formID)?.title == "Electrical safety inspection",
+                   "forms: adding enqueues one forms upsert")
+            expect(queueStore.formProgress(added).label == "0/10", "forms: progress starts at 0/10")
+
+            // Answers: each change is one forms upsert; the queue keeps the latest.
+            _ = queueStore.setFormItemChecked(formID: formID, itemID: "fi_2", true)
+            _ = queueStore.setFormItemResult(formID: formID, itemID: "fi_3", .pass)
+            _ = queueStore.setFormItemResult(formID: formID, itemID: "fi_4", .fail)
+            _ = queueStore.setFormItemNote(formID: formID, itemID: "fi_4", "Scorch mark at slot 14")
+            let textResult = queueStore.setFormItemText(formID: formID, itemID: "fi_12", "Two unlabelled breakers")
+            expect((try? textResult.get())?.items[11].text == "Two unlabelled breakers", "forms: a text answer commits")
+            expect(queueStore.setFormItemChecked(formID: formID, itemID: "fi_3", true) == .failure(.wrongItemKind("fi_3")),
+                   "forms: a wrong-kind answer is refused")
+            expect(pendingMutations(queueURL).filter { $0.table == "forms" && $0.recordId == formID }.count == 1,
+                   "forms: repeated edits collapse to one queued forms upsert")
+            expect(queuedFormValue(formID)?.items[3].note == "Scorch mark at slot 14"
+                   && queuedFormValue(formID)?.items[11].text == "Two unlabelled breakers",
+                   "forms: the queued row carries the latest answers")
+            expect(queueStore.formProgress(queueStore.form(id: formID)!).label == "4/10", "forms: progress counts answers")
+
+            // Completion is refused with typed reasons.
+            guard case let .incomplete(missing) = queueStore.completeForm(id: formID) else {
+                expect(false, "forms: completion is refused while items are missing")
+                throw StoreTestError.missingFixture
+            }
+            expect(missing.map(\.itemID) == ["fi_2", "fi_7"] && missing.map(\.reasons) == [[.noPhoto], [.noResult]],
+                   "forms: the refusal lists the missing photo and the unanswered item")
+            expect(queueStore.form(id: formID)?.completedAt == nil, "forms: a refused completion changes nothing")
+
+            // A photo captured from the item is stamped and attached in one commit.
+            expect(queueStore.createJobPhoto(jobID: formsJob.id, sourceData: jpeg, formID: formID, formItemID: "fi_1") == nil,
+                   "forms: a photo cannot attach to a section")
+            expect(queueStore.createJobPhoto(jobID: formsJob.id, sourceData: jpeg, formID: formID) == nil,
+                   "forms: a form photo needs both the form and the item")
+            expect(queueStore.createJobPhoto(jobID: "other-job", sourceData: jpeg, formID: formID, formItemID: "fi_2") == nil,
+                   "forms: a form photo must belong to the form's job")
+            expect(queueStore.jobPhotos(for: formsJob.id).isEmpty, "forms: refused captures write no photo")
+            queueStore.migrationMessage = nil
+            guard let photo = queueStore.createJobPhoto(jobID: formsJob.id, sourceData: jpeg, formID: formID, formItemID: "fi_2") else {
+                expect(false, "forms: a photo is captured from a form item")
+                throw StoreTestError.missingFixture
+            }
+            expect(photo.formId == formID && photo.formItemId == "fi_2", "forms: the photo carries its form back-references")
+            expect(queueStore.jobPhotos(for: formsJob.id).map(\.id) == [photo.id], "forms: the photo is in the job's Photos")
+            expect(queueStore.form(id: formID)?.items[1].photoIds == [photo.id], "forms: the photo id is appended to the item")
+            expect(queueStore.formItemPhotos(formID: formID, itemID: "fi_2").map(\.id) == [photo.id], "forms: the item resolves its photo")
+            let photoQueue = pendingMutations(queueURL)
+            expect(photoQueue.contains { $0.table == "jobPhotos" && $0.recordId == photo.id && $0.op == .upsert }
+                   && queuedFormValue(formID)?.items[1].photoIds == [photo.id],
+                   "forms: the photo and the form are both queued")
+
+            _ = queueStore.setFormItemResult(formID: formID, itemID: "fi_7", .na)
+            guard case let .completed(completed) = queueStore.completeForm(id: formID, on: Date(timeIntervalSince1970: 1_759_420_800)) else {
+                expect(false, "forms: a fully answered form completes")
+                throw StoreTestError.missingFixture
+            }
+            expect(completed.completedAt == "2025-10-02T16:00:00.000Z" && queuedFormValue(formID)?.completedAt == completed.completedAt,
+                   "forms: completion is stamped and queued")
+            expect(queueStore.completeForm(id: formID) == .completed(completed), "forms: completing twice writes nothing new")
+            expect(queueStore.setFormItemNote(formID: formID, itemID: "fi_3", "late") == .failure(.readOnlyCompleted),
+                   "forms: a completed form is read-only")
+            expect(queueStore.renameForm(id: formID, title: "Renamed") == .failure(.readOnlyCompleted),
+                   "forms: a completed form cannot be renamed")
+            expect(queueStore.createJobPhoto(jobID: formsJob.id, sourceData: jpeg, formID: formID, formItemID: "fi_2") == nil
+                   && queueStore.jobPhotos(for: formsJob.id).count == 1,
+                   "forms: no photo is captured into a completed form")
+            guard case let .success(reopened) = queueStore.reopenForm(id: formID) else {
+                expect(false, "forms: a completed form reopens")
+                throw StoreTestError.missingFixture
+            }
+            expect(reopened.completedAt == nil && reopened.items == completed.items, "forms: reopening keeps the answers")
+            expect(queueStore.reopenForm(id: formID) == .failure(.notCompleted), "forms: reopening twice is refused")
+
+            // A deleted photo leaves a dangling id that no longer satisfies the item.
+            expect(queueStore.deleteJobPhoto(photoID: photo.id), "forms: the job photo deletes")
+            expect(queueStore.form(id: formID)?.items[1].photoIds == [photo.id], "forms: the item keeps the dangling id")
+            expect(queueStore.formItemPhotos(formID: formID, itemID: "fi_2").isEmpty, "forms: a dangling id resolves to nothing")
+            expect(queueStore.formMissingItems(queueStore.form(id: formID)!).map(\.reasons) == [[.photoUnavailable]],
+                   "forms: a dangling photo id blocks completion")
+
+            // Edits.
+            guard case let .success(edit) = queueStore.addFormItem(formID: formID, kind: .check, label: " Bonding checked ", required: true) else {
+                expect(false, "forms: an item is added")
+                throw StoreTestError.missingFixture
+            }
+            expect(edit.itemID == "fi_14" && edit.form.items.last?.label == "Bonding checked", "forms: the new item is added last")
+            expect(queueStore.renameForm(id: formID, title: "  Panel inspection  ").map(\.title) == .success("Panel inspection"),
+                   "forms: rename commits")
+            expect(queueStore.renameForm(id: formID, title: " ") == .failure(.invalidTitle), "forms: a blank title is refused")
+            expect(queueStore.deleteFormItem(formID: formID, itemID: "fi_14").map(\.items.count) == .success(13),
+                   "forms: an item is deleted")
+            expect(queueStore.moveFormItems(formID: formID, fromOffsets: [12], toOffset: 0).map { $0.items.first?.id } == .success("fi_13"),
+                   "forms: items reorder")
+
+            // Save as template, instantiate it, archive it.
+            guard case let .success(template) = queueStore.saveFormAsTemplate(id: formID, title: "My panel check") else {
+                expect(false, "forms: save as template")
+                throw StoreTestError.missingFixture
+            }
+            expect(template.isTemplate && template.items.allSatisfy { $0.checked == nil && $0.result == nil && $0.photoIds == nil && $0.note == nil },
+                   "forms: the template carries no responses")
+            expect(queueStore.customFormTemplates.map(\.id) == [template.id] && queuedForm(template.id)?.op == .upsert,
+                   "forms: the template is listed and queued")
+            queueStore.settings.trade = "Electrical"
+            let picker = queueStore.formPickerSections(showAll: false)
+            expect(picker.map(\.group) == [.custom, .trade("electrical"), .general]
+                   && picker.first?.entries.map(\.ref) == [.custom(template.id)],
+                   "forms: the picker shows the owner's templates, then the Settings trade, then General")
+            guard case let .success(fromTemplate) = queueStore.addForm(jobID: formsJob.id, templateRef: .custom(template.id)) else {
+                expect(false, "forms: a custom template instantiates")
+                throw StoreTestError.missingFixture
+            }
+            expect(fromTemplate.templateId == template.id && fromTemplate.title == "My panel check"
+                   && queueStore.forms(forJob: formsJob.id).count == 2,
+                   "forms: the job has two forms")
+            expect(queueStore.archiveFormTemplate(id: template.id).map(\.isArchived) == .success(true)
+                   && queueStore.customFormTemplates.isEmpty
+                   && queueStore.formPickerSections(showAll: true).allSatisfy { $0.group != .custom },
+                   "forms: an archived template leaves the picker")
+            expect(queueStore.addForm(jobID: formsJob.id, templateRef: .custom(template.id)) == .failure(.templateArchived),
+                   "forms: an archived template is not instantiated")
+            expect(queueStore.form(id: fromTemplate.id) != nil, "forms: archiving keeps existing instances")
+
+            // Delete + undo through the shared exact-record undo.
+            let beforeDelete = queueStore.form(id: formID)
+            expect(queueStore.deleteForm(id: formID), "forms: the form deletes")
+            expect(queueStore.form(id: formID) == nil && queueStore.forms(forJob: formsJob.id).map(\.id) == [fromTemplate.id],
+                   "forms: the deleted form is gone")
+            expect(queuedForm(formID)?.op == .delete, "forms: the delete replaces the queued upsert with a tombstone")
+            expect(queueStore.pendingRecordDeleteUndo?.kind == .form
+                   && queueStore.pendingRecordDeleteUndo?.bannerMessage == "Deleted form Panel inspection",
+                   "forms: the delete offers the shared undo")
+            queueStore.undoRecordDeletion()
+            expect(queueStore.form(id: formID) == beforeDelete, "forms: undo restores the exact form with its answers")
+            expect(queuedForm(formID)?.op == .upsert, "forms: undo replaces the tombstone with an upsert")
+            expect(!queueStore.deleteForm(id: "fm1_never"), "forms: deleting a missing form fails closed")
+
+            // A deleted job's forms stay stored but hidden (no cascade).
+            expect(queueStore.deleteJob(id: formsJob.id), "forms: the job deletes")
+            expect(queueStore.forms(forJob: formsJob.id).isEmpty && queueStore.formRecords.contains { $0.id == formID },
+                   "forms: a deleted job hides its forms without deleting them")
+            expect(!pendingMutations(queueURL).contains { $0.table == "forms" && $0.op == .delete },
+                   "forms: deleting a job queues no form delete")
+            expect(queueStore.setFormItemNote(formID: formID, itemID: "fi_3", "x") == .failure(.jobNotFound),
+                   "forms: a hidden form is not edited")
+            queueStore.undoRecordDeletion()
+            expect(queueStore.forms(forJob: formsJob.id).count == 2, "forms: restoring the job shows its forms again")
+
+            // Durable: a relaunch reads the forms from disk.
+            let relaunched = AppStore(fileURL: queueURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
+            expect(relaunched.form(id: formID) == queueStore.form(id: formID) && relaunched.customFormTemplates.isEmpty
+                   && relaunched.formRecords.count == 3,
+                   "forms: every form row survives a relaunch")
+        }
+
 
         // MARK: - Phase 8 task 8.08 canonical integration (S3, S4, B2-B4, P1, P3)
 
