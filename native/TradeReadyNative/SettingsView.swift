@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 enum SettingsDestination: Hashable {
-    case business, schedule, pricing, numbering, importData, forms
+    case business, schedule, calendarSync, pricing, numbering, importData, forms
     case payments, booking, appearance, ai, notifications, reviews
     case sync, subscription, account
 }
@@ -45,6 +45,7 @@ struct SettingsView: View {
                     settingsGroup("YOUR BUSINESS", rows: [
                         (.business, "building.2.fill", "Business profile", "Name, trade, contact details, logo"),
                         (.schedule, "clock.fill", "Schedule", "Working hours, job length, time off"),
+                        (.calendarSync, "calendar", "Calendar sync", store.calendarSyncHubSubtitle),
                         (.pricing, "tag.fill", "Pricing defaults", "Labor, markup, overhead, and margin"),
                         (.numbering, "number.square.fill", "Invoice numbering", "Prefix and starting number"),
                         (.forms, "checklist", "Forms & checklists", formsSubtitle),
@@ -135,6 +136,7 @@ struct SettingsView: View {
         switch destination {
         case .business: BusinessProfileSettings()
         case .schedule: NativeScheduleSettingsView()
+        case .calendarSync: NativeCalendarSyncSettingsView()
         case .pricing: PricingSettings()
         case .numbering: InvoiceNumberSettings()
         case .importData: ImportSettings()

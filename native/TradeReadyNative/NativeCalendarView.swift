@@ -39,6 +39,12 @@ struct NativeCalendarView: View {
         store.calendarResolvedSchedule()
     }
 
+    /// Phase 26: personal calendar busy time (no titles), when calendar
+    /// checks are on. The same gate the booking page uses.
+    private var personalBusy: [NativeCalendar.PersonalBusyBlock] {
+        store.calendarPersonalBusy()
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -144,7 +150,7 @@ struct NativeCalendarView: View {
 
     private var dayView: some View {
         let day: NativeCalendar.CalendarDay<Canonical.Job> = NativeCalendar.buildCalendarDay(
-            jobs: rows, date: selectedDate, schedule: schedule)
+            jobs: rows, date: selectedDate, schedule: schedule, personalBusy: personalBusy)
         return List {
             syncBanner
                 .listRowSeparator(.hidden)
@@ -154,13 +160,16 @@ struct NativeCalendarView: View {
                 gapSuggestionRow(date: selectedDate)
             }
 
-            if !day.timed.isEmpty {
+            if !day.timed.isEmpty || !day.personalBusy.isEmpty {
                 Section(header: Text("Schedule")) {
                     NativeCalendarTimeline(day: day, schedule: schedule)
                         .listRowInsets(EdgeInsets())
                         .accessibilityHidden(true)
                     ForEach(day.timed, id: \.job.id) { block in
                         blockRow(block, date: selectedDate)
+                    }
+                    ForEach(day.personalBusy, id: \.startMinutes) { busy in
+                        personalBusyRow(busy)
                     }
                 }
             } else {
@@ -208,7 +217,9 @@ struct NativeCalendarView: View {
     /// guaranteed reservable or fitting appointment.
     private func gapSuggestionRow(date: String) -> some View {
         Group {
-            if let gap = NativeSchedule.largestFreeGap(jobs: rows, date: date),
+            if let gap = NativeSchedule.largestFreeGap(
+                jobs: rows, date: date,
+                extraBusy: NativeCalendar.personalBusy(on: date, from: personalBusy).map { ($0.startMinutes, $0.endMinutes) }),
                gap.minutes >= 30 {
                 Label("Gap suggestion: \(gap.start) (\(gap.minutes) min) — advisory, not a guaranteed slot.",
                       systemImage: "lightbulb")
@@ -238,6 +249,10 @@ struct NativeCalendarView: View {
                     if block.inConflict {
                         conflictLabel(for: job, date: date)
                     }
+                    if block.overlapsPersonalBusy {
+                        Label("Overlaps a personal event", systemImage: "person.crop.circle.badge.exclamationmark")
+                            .font(.caption).foregroundStyle(Color.tradeWarningText)
+                    }
                 }
                 Spacer()
                 Button { editorJobID = job.id } label: {
@@ -252,6 +267,22 @@ struct NativeCalendarView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(Self.blockAccessibilityLabel(block))
         .accessibilityHint("Opens the job. Use Reschedule to change its time.")
+    }
+
+    /// Phase 26: an untitled "Busy (personal)" row; the timeline above draws
+    /// the same block grey and hatched, never by color alone.
+    private func personalBusyRow(_ busy: NativeCalendar.PersonalBusyBlock) -> some View {
+        let time = "\(Self.minutesLabel(busy.startMinutes))–\(Self.minutesLabel(busy.endMinutes))"
+        return Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Busy (personal)").fontWeight(.semibold)
+                Text(time).font(.subheadline).foregroundStyle(.secondary)
+            }
+        } icon: {
+            Image(systemName: "person.crop.circle.badge.clock").foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Busy, personal calendar, \(Self.minutesLabel(busy.startMinutes)) to \(Self.minutesLabel(busy.endMinutes))")
     }
 
     private func untimedRow(_ job: Canonical.Job) -> some View {
@@ -297,7 +328,8 @@ struct NativeCalendarView: View {
 
     private var weekView: some View {
         let days: [NativeCalendar.CalendarDay<Canonical.Job>] =
-            NativeCalendar.buildCalendarWeek(jobs: rows, anchorDate: anchorDate, schedule: schedule) ?? []
+            NativeCalendar.buildCalendarWeek(jobs: rows, anchorDate: anchorDate, schedule: schedule,
+                                             personalBusy: personalBusy) ?? []
         return List {
             syncBanner
                 .listRowSeparator(.hidden)
@@ -346,6 +378,7 @@ struct NativeCalendarView: View {
         var parts: [String] = []
         if !day.timed.isEmpty { parts.append("\(day.timed.count) timed") }
         if !day.untimed.isEmpty { parts.append("\(day.untimed.count) untimed") }
+        if !day.personalBusy.isEmpty { parts.append("personal busy time") }
         return parts.isEmpty ? "Nothing scheduled" : parts.joined(separator: " · ")
     }
 
@@ -430,6 +463,7 @@ struct NativeCalendarView: View {
         var label = "\(minutesLabel(block.startMinutes)) to \(minutesLabel(block.endMinutes)), \(block.job.title) for \(block.job.customerName)"
         if block.isTerminal { label += ", \(terminalLabel(block.job.status))" }
         if block.inConflict { label += ", has a schedule conflict" }
+        if block.overlapsPersonalBusy { label += ", overlaps a personal event" }
         if block.laneCount > 1 { label += ", lane \(block.lane + 1) of \(block.laneCount)" }
         return label
     }
@@ -463,6 +497,10 @@ private struct NativeCalendarTimeline<Job: ScheduleJobLike>: View {
                         }
                         .offset(y: yOffset(for: minutes, axis: axis))
                     }
+                    ForEach(day.personalBusy.filter { $0.endMinutes > axis.startMinutes && $0.startMinutes < axis.endMinutes },
+                            id: \.startMinutes) { busy in
+                        personalBusyBlock(busy, width: width, axis: axis)
+                    }
                     ForEach(day.timed, id: \.job.scheduleJobId) { block in
                         timelineBlock(block, width: width, axis: axis)
                     }
@@ -482,6 +520,26 @@ private struct NativeCalendarTimeline<Job: ScheduleJobLike>: View {
             .frame(width: laneWidth - 4, height: height)
             .offset(x: 52 + CGFloat(block.lane) * laneWidth,
                     y: yOffset(for: block.startMinutes, axis: axis))
+    }
+
+    /// Phase 26: personal busy time, grey with a dashed edge and a "Busy"
+    /// label (a text and pattern cue, not color alone), behind job blocks.
+    private func personalBusyBlock(_ busy: NativeCalendar.PersonalBusyBlock, width: CGFloat,
+                                   axis: (startMinutes: Int, endMinutes: Int)) -> some View {
+        let start = max(busy.startMinutes, axis.startMinutes)
+        let end = min(busy.endMinutes, axis.endMinutes)
+        let height: CGFloat = max(CGFloat(end - start) / 60 * pointsPerHour - 2, 14)
+        return RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(Color.secondary.opacity(0.12))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(Color.secondary, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+            }
+            .overlay(alignment: .topLeading) {
+                Text("Busy").font(.caption2).foregroundStyle(.secondary).padding(4)
+            }
+            .frame(width: width - 56, height: height)
+            .offset(x: 52, y: yOffset(for: start, axis: axis))
     }
 
     private func yOffset(for minutes: Int, axis: (startMinutes: Int, endMinutes: Int)) -> CGFloat {

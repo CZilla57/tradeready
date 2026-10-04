@@ -62,6 +62,16 @@ struct NativeScheduleEditorView: View {
         ).map(\.title)
     }
 
+    /// Phase 26: the draft window overlaps personal calendar busy time
+    /// (warning-only, like conflicts).
+    private var overlapsPersonalBusy: Bool {
+        guard let job = currentJob, !dateText.isEmpty, !startText.isEmpty else { return false }
+        return NativeCalendar.overlapsPersonalBusy(
+            date: dateText, start: startText, end: endText.isEmpty ? nil : endText,
+            laborHours: (job.laborHours as NSDecimalNumber).doubleValue,
+            personalBusy: store.calendarPersonalBusy())
+    }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -169,12 +179,20 @@ struct NativeScheduleEditorView: View {
                 }
             }
 
-            if !conflictTitles.isEmpty {
+            if !conflictTitles.isEmpty || overlapsPersonalBusy {
                 Section(header: Text("Conflicts (warning only)")) {
-                    Label("Overlaps \(conflictTitles.joined(separator: ", ")). Saving is still allowed.",
-                          systemImage: "exclamationmark.triangle.fill")
-                        .font(.footnote).foregroundStyle(Color.tradeWarningText)
-                        .accessibilityLabel("Warning: overlaps \(conflictTitles.joined(separator: ", ")). Saving is still allowed.")
+                    if !conflictTitles.isEmpty {
+                        Label("Overlaps \(conflictTitles.joined(separator: ", ")). Saving is still allowed.",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .font(.footnote).foregroundStyle(Color.tradeWarningText)
+                            .accessibilityLabel("Warning: overlaps \(conflictTitles.joined(separator: ", ")). Saving is still allowed.")
+                    }
+                    if overlapsPersonalBusy {
+                        Label("Overlaps a personal event. Saving is still allowed.",
+                              systemImage: "person.crop.circle.badge.exclamationmark")
+                            .font(.footnote).foregroundStyle(Color.tradeWarningText)
+                            .accessibilityLabel("Warning: overlaps a personal event. Saving is still allowed.")
+                    }
                 }
             }
         }

@@ -50,7 +50,8 @@ private func validate10(
 
 @main
 struct ScheduleBookingSettingsTests {
-    static func main() {
+    @MainActor
+    static func main() async {
         var failures = 0
         func expect(_ actual: Bool, _ label: String) {
             if actual { return }
@@ -194,6 +195,61 @@ struct ScheduleBookingSettingsTests {
             }
         }
 
+        // MARK: - F. Phase 26: enabling slots awaits the calendar push (§4.4)
+
+        do {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tradeready-26-save-\(UUID().uuidString)", isDirectory: true)
+            let url = dir.appendingPathComponent("store.json")
+            let start = ISO8601DateFormatter().date(from: "2026-10-05T13:00:00Z")!
+            let settings = settings10(schedule: "{\"timeZone\":\"America/Chicago\",\"bookableSlotsEnabled\":false,\"slotWindowDays\":14}")
+            try! Canonical.SnapshotRepository(primaryURL: url).save(Canonical.Snapshot(payload: Canonical.SnapshotPayload(settings: settings)))
+            let suite = "com.tradeready.phase26.tests.\(UUID().uuidString)"
+            let store = AppStore(fileURL: url, seedIfMissing: false,
+                                 appGroupAccountScrubber: NativeAppGroupAccountScrubber(
+                                     suiteName: suite, defaults: UserDefaults(suiteName: suite) ?? .standard,
+                                     lockFile: dir.appendingPathComponent("app-group.lock")),
+                                 secureSettingsStore: hostTestSecureSettingsStore())
+            store.scheduleBookingTestSeedSignedInOwner(subject: "user-26", binding: "bind-26")
+            store.scheduleBookingSessionOverride = Data("{\"access_token\":\"t\"}".utf8)
+            let access = SaveOrderFakeAccess()
+            let transport = SaveOrderFakeTransport()
+            store.installCalendarSync(access: access, transport: transport, stateBacking: NativeCalendarSyncMemoryBacking(),
+                                      now: { start })
+            func queued() -> Int {
+                Canonical.NativeMutationQueue(fileURL: dir.appendingPathComponent("mutation-queue.json")).load().count
+            }
+            _ = await store.calendarSync.enableChecks()
+            expectEqual(transport.snapshots, [nil], "F1 with slots off the device registers with a null snapshot")
+            var queuedAtPush: Int?
+            transport.onPut = { queuedAtPush = queued() }
+            let before = queued()
+            let draft = NativeScheduleBookingPolicy.ScheduleSettingsDraft(
+                baselineSchedule: store.scheduleSettingsBaseline(), timeZone: .some("America/Chicago"), bookableSlotsEnabled: true)
+            let outcome = await store.commitScheduleSettingsAwaitingCalendar(draft)
+            expectEqual(outcome, .saved, "F2 the slots-on save commits")
+            expect(transport.snapshots.count == 2 && transport.snapshots[1]?.contains("2026-10-06T15:00:00Z") == true,
+                   "F3 turning slots on pushes the busy snapshot for the new schedule")
+            expectEqual(queuedAtPush, .some(before), "F4 the push completes before the settings change is queued")
+            expectEqual(queued(), before + 1, "F5 the settings change is queued after the push")
+
+            // A save that does not turn slots on never waits on the calendar.
+            transport.onPut = nil
+            let pushes = transport.snapshots.count
+            let quiet = NativeScheduleBookingPolicy.ScheduleSettingsDraft(baselineSchedule: store.scheduleSettingsBaseline(), bufferMinutes: 15)
+            expectEqual(await store.commitScheduleSettingsAwaitingCalendar(quiet), .saved, "F6 an ordinary save commits")
+            expectEqual(transport.snapshots.count, pushes, "F7 an ordinary save does not push before committing")
+
+            // The view's Save goes through the awaiting path, never the bare commit.
+            let viewURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("TradeReadyNative/NativeScheduleSettingsView.swift")
+            let viewSource = (try? String(contentsOf: viewURL, encoding: .utf8)) ?? ""
+            expect(viewSource.contains("await store.commitScheduleSettingsAwaitingCalendar(draft)")
+                       && !viewSource.contains("store.commitScheduleSettings(draft)"),
+                   "F8 the schedule settings Save awaits the calendar push path")
+            try? FileManager.default.removeItem(at: dir)
+        }
+
         if failures == 0 {
             print("ScheduleBookingSettingsTests: all checks passed")
         } else {
@@ -201,4 +257,42 @@ struct ScheduleBookingSettingsTests {
             exit(1)
         }
     }
+}
+
+// MARK: - Phase 26 fakes (no EventKit, no network)
+
+@MainActor
+private final class SaveOrderFakeAccess: NativeCalendarAccess {
+    var authorization: NativeCalendarAuthorization { .fullAccess }
+    func requestFullAccess() async -> NativeCalendarAuthorization { .fullAccess }
+    func calendars() -> [NativeCalendarInfo] {
+        [NativeCalendarInfo(id: "cal-1", title: "Home", accountTitle: "iCloud", kind: .standard, allowsModifications: true)]
+    }
+    func samples(start: Date, end: Date) -> [NativeCalendarBusy.Sample] {
+        [NativeCalendarBusy.Sample(start: ISO8601DateFormatter().date(from: "2026-10-06T15:00:00Z")!,
+                                   end: ISO8601DateFormatter().date(from: "2026-10-06T16:00:00Z")!, calendarID: "cal-1")]
+    }
+    func findMirrorCalendar(storedID: String?) -> NativeMirrorCalendarLookup { .missing }
+    func createMirrorCalendar() throws -> NativeMirrorCalendarLookup { .missing }
+    func mirrorEvents(calendarID: String, start: Date, end: Date) -> [NativeCalendarMirror.Existing] { [] }
+    func apply(_ operations: [NativeCalendarMirror.Operation], calendarID: String) throws {}
+    func removeMirrorCalendar(calendarID: String) throws {}
+    func startObservingChanges(_ handler: @escaping @MainActor () -> Void) {}
+    func stopObservingChanges() {}
+}
+
+@MainActor
+private final class SaveOrderFakeTransport: NativeCalendarSyncTransporting {
+    var snapshots: [String?] = []
+    var onPut: (() -> Void)?
+    func put(sourceID: String, snapshotJSON: String?, takeOver: Bool,
+             credentials: NativeCalendarSyncCredentials) async -> NativeCalendarSyncOutcome<NativeCalendarPutResult> {
+        snapshots.append(snapshotJSON)
+        onPut?()
+        return .ok(.init(receivedAt: nil, created: false))
+    }
+    func status(sourceID: String?, credentials: NativeCalendarSyncCredentials) async -> NativeCalendarSyncOutcome<NativeCalendarBusy.ServerStatus> {
+        .offline
+    }
+    func disable(credentials: NativeCalendarSyncCredentials) async -> NativeCalendarSyncOutcome<Bool> { .ok(true) }
 }

@@ -484,6 +484,29 @@ public enum NativeTodayBriefing {
         }
     }
 
+    // MARK: - Calendar checks attention row (Phase 26, calendar sync spec §4.5)
+
+    /// The one Today attention row for calendar checks: shown only while
+    /// bookable slots are on and the server says checks are enabled but not
+    /// fresh, so the booking page is taking requests only. It cannot be
+    /// muted; tapping it opens Settings › Calendar sync. The date is the last
+    /// time checks ran, in the device calendar.
+    public static func calendarChecksStaleMessage(
+        slotsOn: Bool,
+        checksEnabled: Bool,
+        fresh: Bool,
+        lastRunAt: Date?,
+        calendar: Calendar = .current
+    ) -> String? {
+        guard slotsOn, checksEnabled, !fresh else { return nil }
+        guard let lastRunAt else {
+            return "Online booking is request-only: calendar checks haven't run yet"
+        }
+        let parts = calendar.dateComponents([.month, .day], from: lastRunAt)
+        let month = monthNamesShort[max(0, min(11, (parts.month ?? 1) - 1))]
+        return "Online booking is request-only: calendar checks haven't run since \(month) \(parts.day ?? 1)"
+    }
+
     // MARK: - Private formatting tables
 
     private static let weekdayNamesLong = [

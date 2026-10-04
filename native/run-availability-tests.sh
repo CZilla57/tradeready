@@ -10,6 +10,8 @@ swiftc \
   "$ROOT_DIR/native/TradeReadyNative/Domain/CanonicalModels.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeSchedule.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeAvailability.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeCalendarBusy.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeCalendarMirror.swift" \
   "$ROOT_DIR/native/AvailabilityTests/main.swift" \
   -o "$OUTPUT_PATH"
 

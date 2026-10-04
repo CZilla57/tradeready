@@ -7,7 +7,7 @@
    "testSources": [
     {
      "path": "native/AccessibilityAuditTests",
-     "sha256": "b5cd3ed6a0de69e8899237e330e71b55c58fee10c5a73c4b92e698f377624c97"
+     "sha256": "3c856d77bb3142c0bf2b33182b9f7812eb064e25eadb06ccd62cda58786e656d"
     }
    ],
    "fixtures": []
@@ -193,22 +193,22 @@
   },
   "availability": {
    "script": "native/run-availability-tests.sh",
-   "scriptSha256": "6421b2f4a835658270fa7e3cab82c476b5a69a2d2077e9f39188297d6038e5c1",
+   "scriptSha256": "ea6519700f5e81aa2a14152d8bc5c215cb875be232078b450b844d2bcfc2079f",
    "testSources": [
     {
      "path": "native/AvailabilityTests",
-     "sha256": "a3491d5b323746f957003333c05eb27d980dddf470f5ac9c3e95004f99ff1861"
+     "sha256": "d6b3e7b27cb22cb3b74d0c19613c6188cb6e9c5b375e56641c80ea1cdd5d91cd"
     },
     {
      "path": "native/ScheduleTests",
-     "sha256": "90dc5fc4ea61d7a4c342de3c8b86f779bd165f49e35ccb03cec6d27135e3e398"
+     "sha256": "1422f7f0d59f5e8d32eb8c1e01b1407b3fb8fc53c809f123be70981468f24659"
     }
    ],
    "fixtures": [
     {
      "path": "native/ScheduleTests/Fixtures/scheduleVectors.json",
-     "sha256": "81619d6da59e70a483d54461c243506557833e119d4bee40cf8b5612dcbb16f5",
-     "bytes": 1693
+     "sha256": "27af20b1507c854a613794be4b3f75061b0b995bf6395d76be8e7da5e43a25a3",
+     "bytes": 21547
     }
    ]
   },
@@ -347,13 +347,24 @@
     }
    ]
   },
+  "calendar-sync": {
+   "script": "native/run-calendar-sync-tests.sh",
+   "scriptSha256": "22f8013f6fb60f197c5d5980333f69e497df473678c588a060d29c68539b08ef",
+   "testSources": [
+    {
+     "path": "native/CalendarSyncTests",
+     "sha256": "a16b5397c8381fb4b2bcc7a08319f3a8d691102c9b1bbf123b9bd9a9d7cde9df"
+    }
+   ],
+   "fixtures": []
+  },
   "calendar": {
    "script": "native/run-calendar-tests.sh",
    "scriptSha256": "c567ec999fd1e263a5e5f82f1c0d9161f9e9c6353076e4b529bc3b6dbf53c33f",
    "testSources": [
     {
      "path": "native/CalendarTests",
-     "sha256": "bf6d9ac27e4fe2e5e76ab02f1108070d01b703acc5ed3ef650ee2f26c0e13b16"
+     "sha256": "fa29a04eefbecc96ce96d58872781dff88980fbaa4614b96f8a7d76787feba58"
     }
    ],
    "fixtures": []
@@ -589,7 +600,7 @@
    "testSources": [
     {
      "path": "native/ErrorRedactionTests",
-     "sha256": "3e3fc4091390b58e2135c3fb7db50dae0731e8ce585f256d5b4ef621100d57e5"
+     "sha256": "01cd72c2361008a865120931178884405f01bd6fcacd35411b438f117cea2919"
     }
    ],
    "fixtures": []
@@ -942,7 +953,7 @@
    "testSources": [
     {
      "path": "native/LayoutMetricsTests",
-     "sha256": "f74317a4c411056c091f52cfc816247a97596ea1b8bdc965d805d6ee13e6e366"
+     "sha256": "14f64f110858957e0802a49aa2454a3e33800774c3d33294a63bbf79db3b4878"
     }
    ],
    "fixtures": []
@@ -1511,7 +1522,7 @@
    "testSources": [
     {
      "path": "native/ScheduleBookingSettingsTests",
-     "sha256": "4d8331805ae2a8cb6d12460761a7bba7d9cf02b29d9b3d490b0152b4cf4dc243"
+     "sha256": "22eeefd263e416e762b36cb15941fe229b453a2f960007ca50583f481d65ed56"
     },
     {
      "path": "native/CanonicalTests",
@@ -1547,7 +1558,7 @@
    "testSources": [
     {
      "path": "native/ScheduleTests",
-     "sha256": "90dc5fc4ea61d7a4c342de3c8b86f779bd165f49e35ccb03cec6d27135e3e398"
+     "sha256": "1422f7f0d59f5e8d32eb8c1e01b1407b3fb8fc53c809f123be70981468f24659"
     }
    ],
    "fixtures": []
@@ -1615,7 +1626,7 @@
    "testSources": [
     {
      "path": "native/StoreIntegrationTests",
-     "sha256": "97df3f502fe3c9c824d834a241cdf8ce0c8165ba54cc8466f3dee7df426cfe42"
+     "sha256": "e159a1368a0e10f5af17dfa76ddfd25153d4047aacf6f00b75cb7ae8baa8e064"
     },
     {
      "path": "native/CanonicalTests",
@@ -1764,7 +1775,7 @@
    "testSources": [
     {
      "path": "native/TodayBriefingTests",
-     "sha256": "fc76db1313b69e2745c023392b1dbb95c5a47d84083b2ee278365f5983834dc7"
+     "sha256": "d551be4b75214e2a38647e08439f3e494bea5366ea77b8c404f3f21b92f4c302"
     }
    ],
    "fixtures": []
@@ -2045,6 +2056,10 @@
    "path": "__tests__/bookingAvailability.test.js",
    "sha256": "61d9feee49fdb4bb7eb5c84f73582b0fc3dec8b559afb0a0585b254fd26a698d"
   },
+  "bookingCalendarBusyWorkers": {
+   "path": "__tests__/bookingCalendarBusyWorkers.test.js",
+   "sha256": "2d18709876b397d466fed364a0e9ef2351656adfe5bad379ba3d5b67bf76c139"
+  },
   "bookingConfig": {
    "path": "__tests__/bookingConfig.test.js",
    "sha256": "29b4750430cd27215596509d6104b303480758559511dfb573ff87a9d5946a4e"
@@ -2120,6 +2135,14 @@
   "calendar": {
    "path": "__tests__/calendar.test.ts",
    "sha256": "e6e3a46768f6161b8a13da582f78517675d2fd0f929dcf4f617ea8bb77ff9b81"
+  },
+  "calendarBusyParity": {
+   "path": "__tests__/calendarBusyParity.test.js",
+   "sha256": "ab149e260a7fa1744b636cdffb0ab118276873e0b232c7d138912c05d72d8770"
+  },
+  "calendarBusyWorkers": {
+   "path": "__tests__/calendarBusyWorkers.test.js",
+   "sha256": "560440bc790b121a9c853f4ddf1c51cabc7a7ce75d03f59af252a64b2ce6010d"
   },
   "calendarScreen": {
    "path": "__tests__/calendarScreen.test.tsx",
@@ -2898,7 +2921,8 @@
     "calendar",
     "calendar-editor",
     "availability",
-    "schedule"
+    "schedule",
+    "calendar-sync"
    ],
    "oracles": [
     "calendar",
@@ -2906,7 +2930,10 @@
     "availability",
     "availabilityParity",
     "scheduleConfig",
-    "scheduleSmarts"
+    "scheduleSmarts",
+    "calendarBusyParity",
+    "calendarBusyWorkers",
+    "bookingCalendarBusyWorkers"
    ]
   },
   "Route": {

@@ -48,6 +48,7 @@ import { portalRequestHandler } from './routes/estimate/portalRequest.js';
 import { portalManageHandler } from './routes/estimate/portalManage.js';
 import { changeViewHandler } from './routes/estimate/changeView.js';
 import { changeRespondHandler } from './routes/estimate/changeRespond.js';
+import { calendarBusyHandler } from './routes/calendar/busy.js';
 import { connectStatusHandler } from './routes/stripe/connectStatus.js';
 import { createConnectAccountHandler } from './routes/stripe/createConnectAccount.js';
 import { disconnectHandler } from './routes/stripe/disconnect.js';
@@ -88,6 +89,10 @@ app.all('/api/estimate/portal-manage', portalManageHandler);
 app.all('/api/estimate/change-view', changeViewHandler);
 app.all('/api/estimate/change-respond', changeRespondHandler);
 app.all('/api/estimate/:action', (c) => c.json({ error: 'Not found' }, 404));
+
+// Phase 26: the owner's calendar busy times (on-device EventKit path).
+app.all('/api/calendar/busy', calendarBusyHandler);
+app.all('/api/calendar/:action', (c) => c.json({ error: 'Not found' }, 404));
 
 app.all('/api/stripe/connect-status', connectStatusHandler);
 app.all('/api/stripe/create-connect-account', createConnectAccountHandler);

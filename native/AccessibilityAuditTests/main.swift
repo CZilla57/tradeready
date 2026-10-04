@@ -863,6 +863,16 @@ let viewFileInventory: Set<String> = [
     // Archive template, the item sheet's label field carries the Done bar,
     // and the Settings template list labels its swipe Archive.
     "N/NativeJobFormEditorView.swift",
+    // Phase 26 (calendar sync), reviewed: both toggles are labelled controls
+    // with hints that say what happens next; the status row is text with a
+    // distinct symbol per state (never color alone) and reads as one element;
+    // each calendar row combines title and account with a "Checked"/"Not
+    // checked" value and visible text; denied or restricted access is
+    // explained in text with an Open Settings button; turning checks or the
+    // mirror off, and "Use this device", confirm through titled dialogs;
+    // refusals are text alerts; the explainer sheet's points wrap at every
+    // Dynamic Type size; the Today row is a labelled button.
+    "N/NativeCalendarSyncSettingsView.swift",
     "N/NativeAuthView.swift", "N/NativeBookingRequestsView.swift",
     "N/NativeBookingSettingsView.swift", "N/NativeCalendarView.swift", "N/NativeChangeOrdersView.swift",
     "N/NativeCoachComponents.swift", "N/NativeConfirmation.swift", "N/NativeCreateInvoiceFromJobView.swift",
@@ -1641,7 +1651,8 @@ func testSemanticColors(root: URL, sources: [SourceFile]) {
     // `NativeRejectedChangesView`. 14: the Remove logo button on Business Profile.
     // 16: Phase 25's Delete option and Remove options rows.
     // 18: Phase 20's Delete form and Archive template rows.
-    expectEqual(inRowDestructive, 18, "in-row destructive buttons audited")
+    // 19: Phase 26's "Turn off calendar checks" for checks on another device.
+    expectEqual(inRowDestructive, 19, "in-row destructive buttons audited")
     if let views = file(sources, "NativeAccessibilityViews.swift") {
         let raw = String(views.raw)
         expect(raw.contains("func nativeDestructiveText() -> some View {\n        modifier(NativeDestructiveText())"),

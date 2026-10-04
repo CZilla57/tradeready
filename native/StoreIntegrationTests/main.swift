@@ -5272,6 +5272,266 @@ struct StoreIntegrationTests {
             }
         }
 
+
+        // MARK: - Phase 26: calendar sync through AppStore (fake EventKit + fake Worker)
+
+        do {
+            let chicago: Calendar = {
+                var cal = Calendar(identifier: .gregorian)
+                cal.timeZone = TimeZone(identifier: "America/Chicago")!
+                return cal
+            }()
+            let iso = ISO8601DateFormatter()
+            func at(_ value: String) -> Date { iso.date(from: value)! }
+            final class Clock { var now: Date; init(_ now: Date) { self.now = now } }
+            let slotsOn = "{\"timeZone\":\"America/Chicago\",\"bookableSlotsEnabled\":true,\"slotWindowDays\":14,\"slotLeadHours\":0}"
+            let slotsOff = "{\"timeZone\":\"America/Chicago\",\"bookableSlotsEnabled\":false,\"slotWindowDays\":14}"
+            // Mon Oct 5 08:00 CDT.
+            let start = at("2026-10-05T13:00:00Z")
+            let dentist = NativeCalendarBusy.Sample(start: at("2026-10-06T15:00:00Z"), end: at("2026-10-06T16:30:00Z"), calendarID: "cal-home")
+
+            func calendarStore(schedule: String, jobs: [Canonical.Job] = [], tag: String)
+                throws -> (store: AppStore, dir: URL, access: CalendarSyncFakeAccess, transport: CalendarSyncFakeTransport,
+                           backing: NativeCalendarSyncMemoryBacking, clock: Clock) {
+                let (store, dir) = try seed08Store(jobs: jobs, settings: settings08(schedule: schedule), tag: "cal26-\(tag)")
+                seed08Owner(store, subject: "user-cal", binding: "bind-cal")
+                let access = CalendarSyncFakeAccess()
+                access.samplesValue = [dentist]
+                let transport = CalendarSyncFakeTransport()
+                let backing = NativeCalendarSyncMemoryBacking()
+                let clock = Clock(start)
+                store.installCalendarSync(access: access, transport: transport, stateBacking: backing,
+                                          now: { clock.now }, deviceCalendar: { chicago })
+                store.calendarSync.mirrorDebounceNanoseconds = 1_000_000
+                store.calendarSync.changeDebounceNanoseconds = 1_000_000
+                return (store, dir, access, transport, backing, clock)
+            }
+
+            // Foreground push, the digest skip, the heartbeat and a changed calendar.
+            do {
+                let (store, _, access, transport, backing, clock) = try calendarStore(schedule: slotsOn, tag: "push")
+                let enabled = await store.calendarSync.enableChecks()
+                expect(enabled == .enabled, "26: enabling checks with full access succeeds")
+                expect(transport.puts.count == 1, "26: enabling pushes once")
+                let body = transport.puts.first?.snapshotJSON ?? ""
+                expect(body.contains("[\"2026-10-06T15:00:00Z\",\"2026-10-06T16:30:00Z\"]")
+                           && body.contains("\"windowStart\":\"2026-10-05T05:00:00Z\"")
+                           && body.contains("\"windowEnd\":\"2026-10-19T05:00:00Z\""),
+                       "26: the push carries the busy instants in the owner's 14-day window")
+                expect(!body.contains("cal-home") && !body.lowercased().contains("dentist"),
+                       "26: no calendar ids or titles leave the device")
+                expect(NativeCalendarSyncTransport.isSourceID(transport.puts.first?.sourceID ?? ""),
+                       "26: the install id is a lowercase UUID")
+                expect(backing.data(forKey: NativeCalendarSyncStateStore.key) != nil, "26: state lives in defaults")
+                await store.calendarSync.run(.foreground)
+                expect(transport.puts.count == 1, "26: an unchanged calendar inside 30 minutes is not pushed again (digest skip)")
+                clock.now = start.addingTimeInterval(31 * 60)
+                await store.calendarSync.run(.foreground)
+                expect(transport.puts.count == 2, "26: the 30-minute heartbeat pushes a quiet calendar")
+                access.samplesValue.append(NativeCalendarBusy.Sample(start: at("2026-10-07T15:00:00Z"), end: at("2026-10-07T16:00:00Z"), calendarID: "cal-work"))
+                await store.calendarSync.run(.background)
+                expect(transport.puts.count == 3, "26: a changed calendar pushes on the next trigger (BG refresh)")
+                if case let .shared(_, days)? = store.calendarSync.statusLine {
+                    expect(days == 14, "26: the status row names the shared horizon")
+                } else {
+                    expect(false, "26: the status row says the booking page was updated")
+                }
+                expect(store.calendarSyncHubSubtitle == "Busy times shared", "26: hub subtitle when shared")
+                expect(store.calendarPersonalBusy().contains(NativeCalendar.PersonalBusyBlock(date: "2026-10-06", startMinutes: 600, endMinutes: 690)),
+                       "26: the in-app overlay shows the personal busy block (10:00–11:30 CDT)")
+                expect(store.calendarChecksStaleMessage == nil, "26: fresh checks show no Today row")
+                // Excluding the calendar removes its block from the next push.
+                await store.calendarSync.setCalendar("cal-home", included: false)
+                expect(transport.puts.count == 4 && !(transport.puts.last?.snapshotJSON ?? "").contains("2026-10-06T15:00:00Z"),
+                       "26: an excluded calendar's events are not shared")
+                expect(access.observing, "26: calendar changes are observed while checks are on")
+                // No readable calendar (protected data unavailable): nothing is shared.
+                let before = transport.puts.count
+                access.calendarsValue = []
+                access.samplesValue = []
+                clock.now = start.addingTimeInterval(3 * 3600)
+                await store.calendarSync.run(.background)
+                expect(transport.puts.count == before, "26: unreadable calendars never push an empty (all-free) snapshot")
+            }
+
+            // A null snapshot while slots are off; push-before-enable ordering.
+            do {
+                let (store, dir, _, transport, _, _) = try calendarStore(schedule: slotsOff, tag: "null")
+                _ = await store.calendarSync.enableChecks()
+                expect(transport.puts.count == 1 && transport.puts[0].snapshotJSON == nil,
+                       "26: with slots off the device registers with snapshot: null (nothing shared)")
+                await store.calendarSync.run(.foreground)
+                expect(transport.puts.count == 1, "26: the null put is sent once, on the transition")
+                expect(store.calendarSync.statusLine == .notShared, "26: status says busy times are not shared while slots are off")
+                let queuedBefore = queueCount08(dir)
+                var queuedAtPut: Int?
+                transport.onPut = { queuedAtPut = queueCount08(dir) }
+                let baseline = store.scheduleSettingsBaseline()
+                let outcome = await store.commitScheduleSettingsAwaitingCalendar(NativeScheduleBookingPolicy.ScheduleSettingsDraft(
+                    baselineSchedule: baseline, timeZone: .some("America/Chicago"), bookableSlotsEnabled: true))
+                expect(outcome == .saved, "26: the slots-on save commits")
+                expect(transport.puts.count == 2 && transport.puts[1].snapshotJSON != nil,
+                       "26: turning slots on pushes the busy snapshot")
+                expect(queuedAtPut == queuedBefore && queueCount08(dir) == queuedBefore + 1,
+                       "26: the push lands before the settings change is queued")
+            }
+
+            // source_mismatch → stop pushing → "Use this device" takes over.
+            do {
+                let (store, _, _, transport, _, clock) = try calendarStore(schedule: slotsOn, tag: "takeover")
+                transport.putResult = { put in put.takeOver ? .ok(.init(receivedAt: nil, created: false)) : .sourceMismatch(receivedAt: start.addingTimeInterval(-3 * 3600)) }
+                _ = await store.calendarSync.enableChecks()
+                expect(store.calendarSync.otherDeviceActive, "26: a source mismatch marks another device as the source")
+                if case .otherDevice? = store.calendarSync.statusLine {} else { expect(false, "26: status says checks run on another device") }
+                clock.now = start.addingTimeInterval(45 * 60)
+                await store.calendarSync.run(.foreground)
+                expect(transport.puts.count == 1, "26: the device stops pushing while another device is the source")
+                let tookOver = await store.calendarSync.useThisDevice()
+                expect(tookOver, "26: Use this device succeeds")
+                expect(transport.puts.last?.takeOver == true && transport.puts.last?.snapshotJSON != nil,
+                       "26: the takeover put carries takeOver: true and the snapshot")
+                expect(!store.calendarSync.otherDeviceActive, "26: after the takeover this device is the source")
+            }
+
+            // Turning checks off calls disable; 503 shows "not available yet".
+            do {
+                let (store, _, _, transport, backing, _) = try calendarStore(schedule: slotsOn, tag: "disable")
+                _ = await store.calendarSync.enableChecks()
+                let turnedOff = await store.calendarSync.disableChecks()
+                expect(turnedOff, "26: turning checks off succeeds")
+                expect(transport.disables == 1 && !store.calendarSync.checksEnabled, "26: turning checks off deletes the server row")
+                let reloaded = NativeCalendarSyncStateStore(backing: backing).load(binding: "bind-cal")
+                expect(!reloaded.checksEnabled && reloaded.lastPush == nil, "26: the off state is persisted")
+                expect(store.calendarPersonalBusy().isEmpty, "26: no overlay while checks are off")
+                expect(store.calendarSyncHubSubtitle == "Off", "26: hub subtitle when off")
+
+                transport.disableResult = .offline
+                _ = await store.calendarSync.enableChecks()
+                let offlineOff = await store.calendarSync.disableChecks()
+                expect(!offlineOff && store.calendarSync.checksEnabled
+                           && store.calendarSync.errorMessage != nil,
+                       "26: an offline turn-off keeps checks on and explains it")
+                store.calendarSync.clearError()
+            }
+            do {
+                let (store, _, _, transport, _, _) = try calendarStore(schedule: slotsOn, tag: "503")
+                transport.putResult = { _ in .unavailable }
+                _ = await store.calendarSync.enableChecks()
+                expect(store.calendarSync.statusLine == .unavailable, "26: a 503 shows that calendar checks aren't available yet")
+                expect(store.calendarSyncHubSubtitle == "Not available yet", "26: hub subtitle when unavailable")
+            }
+
+            // Checks turned off on another device: the next put recreates the
+            // row (`created`), so this device deletes it and turns itself off.
+            do {
+                let (store, _, _, transport, _, clock) = try calendarStore(schedule: slotsOn, tag: "remote-off")
+                _ = await store.calendarSync.enableChecks()
+                transport.putResult = { _ in .ok(.init(receivedAt: nil, created: true)) }
+                clock.now = start.addingTimeInterval(31 * 60)
+                await store.calendarSync.run(.foreground)
+                expect(!store.calendarSync.checksEnabled && transport.disables == 1
+                           && store.calendarSync.notice == .checksTurnedOffElsewhere,
+                       "26: checks turned off elsewhere are honored here, with a notice")
+            }
+
+            // Denied access: nothing is enabled or pushed.
+            do {
+                let (store, _, access, transport, _, _) = try calendarStore(schedule: slotsOn, tag: "denied")
+                access.authorizationValue = .notDetermined
+                access.grantOnRequest = .denied
+                let deniedOutcome = await store.calendarSync.enableChecks()
+                expect(deniedOutcome == .denied, "26: a denied prompt does not enable checks")
+                expect(transport.puts.isEmpty && !store.calendarSync.checksEnabled, "26: nothing is pushed without access")
+            }
+
+            // Today: stale status with slots on shows the row; slots off hides it.
+            do {
+                let (store, _, _, transport, _, _) = try calendarStore(schedule: slotsOn, tag: "today")
+                transport.statusResult = .ok(.init(enabled: true, thisDevice: false, shared: true, fresh: false,
+                                                   computedAt: at("2026-10-02T12:00:00Z"), receivedAt: at("2026-10-02T12:01:00Z")))
+                await store.calendarSync.run(.foreground)
+                expect(transport.statuses == 1, "26: a signed-in device reads the status on foreground while slots are on")
+                expect(store.calendarChecksStaleMessage == "Online booking is request-only: calendar checks haven't run since Oct 2",
+                       "26: Today shows the request-only row when checks are stale")
+                await store.calendarSync.run(.foreground)
+                expect(transport.statuses == 1, "26: status is read at most once per 30 minutes")
+            }
+
+            // Sign-out and an account switch wipe the device-local keys.
+            do {
+                let (store, _, _, _, backing, _) = try calendarStore(schedule: slotsOn, tag: "signout")
+                _ = await store.calendarSync.enableChecks()
+                expect(backing.data(forKey: NativeCalendarSyncStateStore.key) != nil, "26: sanity: state stored before sign-out")
+                do { try await store.signOut(revokeRemote: false) } catch { expect(false, "26: sign-out threw \(error)") }
+                expect(backing.data(forKey: NativeCalendarSyncStateStore.key) == nil, "26: sign-out wipes the calendar sync keys")
+                expect(!store.calendarSync.checksEnabled && store.calendarPersonalBusy().isEmpty, "26: nothing survives sign-out in memory")
+            }
+            do {
+                let (store, _, _, _, backing, _) = try calendarStore(schedule: slotsOn, tag: "switch")
+                store.scheduleBookingTestSeedIdentityActivator()
+                _ = await store.calendarSync.enableChecks()
+                await store.useAnotherAccount {}
+                expect(backing.data(forKey: NativeCalendarSyncStateStore.key) == nil, "26: an account switch wipes the calendar sync keys")
+            }
+            do {
+                // Another owner on the same defaults reads nothing (owner-tagged).
+                let backing = NativeCalendarSyncMemoryBacking()
+                let stateStore = NativeCalendarSyncStateStore(backing: backing)
+                var state = NativeCalendarSyncLocalState()
+                state.checksEnabled = true
+                stateStore.save(state, binding: "bind-a")
+                expect(stateStore.load(binding: "bind-a").checksEnabled, "26: the owner reads its state")
+                expect(!stateStore.load(binding: "bind-b").checksEnabled, "26: another owner reads defaults")
+                expect(!String(decoding: backing.data(forKey: NativeCalendarSyncStateStore.key) ?? Data(), as: UTF8.self).contains("bind-a"),
+                       "26: the stored document holds a one-way tag, never the binding")
+            }
+
+            // Stage B: the mirror creates events, survives a pass, turns off when its calendar is gone.
+            do {
+                let jobs = [job08(id: "j-mirror", status: "scheduled", date: "2026-10-07", start: "09:00", end: "10:00")]
+                let (store, _, access, _, _, _) = try calendarStore(schedule: slotsOn, jobs: jobs, tag: "mirror")
+                guard case let .enabled(account) = await store.calendarSync.enableMirror() else {
+                    expect(false, "26: the mirror enables")
+                    throw StoreTestError.missingFixture
+                }
+                expect(account == "iCloud" && access.mirrorCalendarID != nil, "26: the TradeReady calendar is created in iCloud")
+                guard case let .create(created)? = access.applied.first?.first else {
+                    expect(false, "26: the first pass creates the job's event")
+                    throw StoreTestError.missingFixture
+                }
+                expect(created.fields.title == "Panel swap — Nora" && created.fields.location == "1 Main"
+                           && created.fields.notes.contains("tradeready-job:\(NativeCalendarMirror.ownerTag16(subject: "user-cal")):j-mirror"),
+                       "26: the event carries the job, customer, address and this account's marker")
+                await store.calendarSync.run(.foreground)
+                expect(access.applied.count == 1, "26: an unchanged mirror writes nothing")
+                access.mirrorCalendarID = nil
+                await store.calendarSync.run(.foreground)
+                expect(!store.calendarSync.mirrorEnabled && store.calendarSync.notice == .mirrorCalendarDeleted,
+                       "26: a calendar deleted outside the app turns the mirror off with a notice")
+                expect(access.created == 1, "26: the deleted calendar is never silently recreated")
+            }
+            do {
+                let jobs = [job08(id: "j-del", status: "scheduled", date: "2026-10-07")]
+                let (store, _, access, _, _, _) = try calendarStore(schedule: slotsOn, jobs: jobs, tag: "mirror-delete")
+                _ = await store.calendarSync.enableMirror()
+                let id = access.mirrorCalendarID
+                do { try await store.testFinishAccountDeletionLocally() } catch { expect(false, "26: the deletion scrub threw \(error)") }
+                expect(id != nil && access.removedCalendars == [id!], "26: account deletion removes the TradeReady calendar when the mirror was on")
+            }
+            do {
+                let (store, _, access, _, _, _) = try calendarStore(schedule: slotsOn, tag: "mirror-off")
+                _ = await store.calendarSync.enableMirror()
+                let kept = await store.calendarSync.disableMirror(removeCalendar: false)
+                expect(kept && access.removedCalendars.isEmpty,
+                       "26: Keep calendar leaves it in place")
+                _ = await store.calendarSync.enableMirror()
+                expect(access.created == 1, "26: turning the mirror back on reuses the kept calendar")
+                let removed = await store.calendarSync.disableMirror(removeCalendar: true)
+                expect(removed && access.removedCalendars.count == 1,
+                       "26: Remove calendar deletes it")
+            }
+        }
+
         if failures == 0 { print("PASS: canonical AppStore integration tests") }
         else { print("FAILED: \(failures) canonical AppStore integration test(s)"); exit(1) }
     }
@@ -5333,5 +5593,118 @@ private final class ScheduleBookingTestLoader: NativeBookingResponseHTTPDataLoad
         let (data, status) = handler?(request) ?? (Data(), 500)
         return (data, HTTPURLResponse(url: request.url!, statusCode: status,
                                       httpVersion: nil, headerFields: nil)!)
+    }
+}
+
+// MARK: - Phase 26 calendar sync fakes (no EventKit, no network)
+
+@MainActor
+final class CalendarSyncFakeAccess: NativeCalendarAccess {
+    var authorizationValue: NativeCalendarAuthorization = .fullAccess
+    var grantOnRequest: NativeCalendarAuthorization = .fullAccess
+    var calendarsValue: [NativeCalendarInfo] = [
+        NativeCalendarInfo(id: "cal-home", title: "Home", accountTitle: "iCloud", kind: .standard, allowsModifications: true),
+        NativeCalendarInfo(id: "cal-work", title: "Work", accountTitle: "Gmail", kind: .standard, allowsModifications: true),
+        NativeCalendarInfo(id: "cal-birthdays", title: "Birthdays", accountTitle: "Other", kind: .birthday, allowsModifications: false),
+    ]
+    var samplesValue: [NativeCalendarBusy.Sample] = []
+    var mirrorCalendarID: String?
+    var events: [NativeCalendarMirror.Existing] = []
+    var applied: [[NativeCalendarMirror.Operation]] = []
+    var removedCalendars: [String] = []
+    var created = 0
+    var observing = false
+    private var nextEvent = 0
+
+    var authorization: NativeCalendarAuthorization { authorizationValue }
+
+    func requestFullAccess() async -> NativeCalendarAuthorization {
+        if authorizationValue == .notDetermined { authorizationValue = grantOnRequest }
+        return authorizationValue
+    }
+
+    func calendars() -> [NativeCalendarInfo] { calendarsValue }
+
+    func samples(start: Date, end: Date) -> [NativeCalendarBusy.Sample] {
+        samplesValue.filter { $0.start < end && $0.end > start }
+    }
+
+    func findMirrorCalendar(storedID: String?) -> NativeMirrorCalendarLookup {
+        mirrorCalendarID.map { .found(id: $0, accountTitle: "iCloud") } ?? .missing
+    }
+
+    func createMirrorCalendar() throws -> NativeMirrorCalendarLookup {
+        created += 1
+        mirrorCalendarID = "cal-tradeready-\(created)"
+        return .found(id: mirrorCalendarID!, accountTitle: "iCloud")
+    }
+
+    func mirrorEvents(calendarID: String, start: Date, end: Date) -> [NativeCalendarMirror.Existing] {
+        calendarID == mirrorCalendarID ? events : []
+    }
+
+    func apply(_ operations: [NativeCalendarMirror.Operation], calendarID: String) throws {
+        applied.append(operations)
+        for operation in operations {
+            switch operation {
+            case let .create(desired):
+                nextEvent += 1
+                events.append(.init(eventID: "ev-\(nextEvent)", externalID: "ext-\(nextEvent)", creationDate: nil,
+                                    notes: desired.fields.notes, fields: desired.fields))
+            case let .update(eventID, desired):
+                if let i = events.firstIndex(where: { $0.eventID == eventID }) {
+                    events[i].fields = desired.fields
+                    events[i].notes = desired.fields.notes
+                }
+            case let .delete(eventID):
+                events.removeAll { $0.eventID == eventID }
+            }
+        }
+    }
+
+    func removeMirrorCalendar(calendarID: String) throws {
+        removedCalendars.append(calendarID)
+        if mirrorCalendarID == calendarID { mirrorCalendarID = nil }
+        events = []
+    }
+
+    func startObservingChanges(_ handler: @escaping @MainActor () -> Void) { observing = true }
+    func stopObservingChanges() { observing = false }
+}
+
+@MainActor
+final class CalendarSyncFakeTransport: NativeCalendarSyncTransporting {
+    struct Put: Equatable {
+        let sourceID: String
+        let snapshotJSON: String?
+        let takeOver: Bool
+    }
+
+    var puts: [Put] = []
+    var disables = 0
+    var statuses = 0
+    var onPut: (() -> Void)?
+    var putResult: (Put) -> NativeCalendarSyncOutcome<NativeCalendarPutResult> = { _ in
+        .ok(.init(receivedAt: nil, created: false))
+    }
+    var statusResult: NativeCalendarSyncOutcome<NativeCalendarBusy.ServerStatus> = .offline
+    var disableResult: NativeCalendarSyncOutcome<Bool> = .ok(true)
+
+    func put(sourceID: String, snapshotJSON: String?, takeOver: Bool,
+             credentials: NativeCalendarSyncCredentials) async -> NativeCalendarSyncOutcome<NativeCalendarPutResult> {
+        let put = Put(sourceID: sourceID, snapshotJSON: snapshotJSON, takeOver: takeOver)
+        puts.append(put)
+        onPut?()
+        return putResult(put)
+    }
+
+    func status(sourceID: String?, credentials: NativeCalendarSyncCredentials) async -> NativeCalendarSyncOutcome<NativeCalendarBusy.ServerStatus> {
+        statuses += 1
+        return statusResult
+    }
+
+    func disable(credentials: NativeCalendarSyncCredentials) async -> NativeCalendarSyncOutcome<Bool> {
+        disables += 1
+        return disableResult
     }
 }

@@ -8,17 +8,14 @@
 // business display name, the IANA zone, and the offered slots. Unknown
 // token, disabled link, and slot-booking-off are indistinguishable 404s.
 
-const {
-  resolveSchedule,
-  computeCandidateSlots,
-  resolveSlotsUtc,
-  nowInZone,
-} = require('./availability.js');
+const { resolveSchedule } = require('./availability.js');
 const {
   lookupUserByBookingToken,
   fetchJobsData,
   fetchActiveReservations,
 } = require('./store.js');
+const { fetchCalendarBusy } = require('../calendar/busyStore.js');
+const { offerableSlots } = require('./offerable.js');
 
 async function slotsCore(env, { token, nowMs }) {
   if (!token || typeof token !== 'string') {
@@ -39,38 +36,33 @@ async function slotsCore(env, { token, nowMs }) {
     return { status: 404, body: { error: 'This link is invalid.' } };
   }
 
-  let jobs, reservations;
+  // Phase 26: the owner's calendar busy times ride the same parallel read.
+  // A missing row or table is `off` (today's offers, byte for byte).
+  let jobs, reservations, calendarRow;
   try {
-    [jobs, reservations] = await Promise.all([
+    [jobs, reservations, calendarRow] = await Promise.all([
       fetchJobsData(env, row.user_id),
       fetchActiveReservations(env, row.user_id),
+      fetchCalendarBusy(env, row.user_id),
     ]);
   } catch (err) {
     console.error('[booking/slots] data fetch failed:', err.message);
     return { status: 500, body: { error: 'Database error' } };
   }
 
-  const now = nowInZone(schedule.timeZone, nowMs);
-  const extraBusy = reservations.map((r) => ({
-    date: r.slot_date,
-    start: r.slot_start,
-    end: r.slot_end,
-  }));
-  const slots = computeCandidateSlots({
-    schedule,
-    jobs,
-    extraBusy,
-    fromDate: now.date,
-    days: schedule.slotWindowDays,
-    now,
-  });
+  // A stale snapshot offers nothing, which looks exactly like "fully
+  // booked" (no oracle); book.html then shows the request form.
+  const { state, slots } = offerableSlots({ schedule, jobs, reservations, calendarRow, nowMs });
+  if (state === 'stale') {
+    console.warn(`[booking/slots] calendar_stale user=${String(row.user_id).slice(0, 8)}`);
+  }
 
   return {
     status: 200,
     body: {
       businessName: String(row.data?.businessName || '').slice(0, 120),
       timeZone: schedule.timeZone,
-      slots: resolveSlotsUtc(slots, schedule.timeZone),
+      slots,
     },
   };
 }

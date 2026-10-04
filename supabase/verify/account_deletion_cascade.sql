@@ -18,6 +18,7 @@ begin
       ('auto_reminder_log'),
       ('bookingRequests'),
       ('booking_reservations'),
+      ('calendar_busy'),
       ('customer_notes'),
       ('customers'),
       ('expenses'),

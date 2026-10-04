@@ -308,6 +308,16 @@ final class AppStore: ObservableObject {
     /// Task 10.12 (D4/D5): owner-bound setup-checklist store (10.03's
     /// `NativeSetupChecklistStore`).
     private let setupChecklistStore: NativeSetupChecklistStore
+    /// Phase 26 (calendar sync): device-local state, never in the canonical
+    /// snapshot. Inert (no calendar access, no transport, in-memory state)
+    /// until `installCalendarSync`: the production convenience init installs
+    /// EventKit, the Worker transport and standard defaults; host tests
+    /// install fakes. The API lives in `NativeCalendarSyncStore.swift`.
+    private(set) lazy var calendarSync: NativeCalendarSyncCoordinator = {
+        let coordinator = NativeCalendarSyncCoordinator()
+        coordinator.host = self
+        return coordinator
+    }()
     /// Phase 12 (12.00b.1, I2): the owner-scoped, bounded, file-protected
     /// store of refused changes (`NativeRejectedChangeStore`).
     private let rejectedChangeStore: NativeRejectedChangeStore
@@ -424,6 +434,8 @@ final class AppStore: ObservableObject {
             // Coalesced to one write per main-actor turn, after the save has
             // run.
             scheduleWidgetMirrorRefresh()
+            // Phase 26: the TradeReady calendar mirror (debounced 2 s).
+            calendarSync.snapshotDidChange()
         }
     }
     private var isApplyingProjection = false
@@ -637,6 +649,7 @@ final class AppStore: ObservableObject {
             crashReporting: crashReporting,
             recordsNativeRun: true
         )
+        installLiveCalendarSync()
     }
 
     /// Injectable persistence location for integration tests and previews.
@@ -5188,6 +5201,8 @@ final class AppStore: ObservableObject {
         wipeAIProviderKeysForAccountBoundary()
         // Phase 12 (12.00b.1): the refused changes belong to the old owner.
         scrubRejectedChangesForAccountBoundary()
+        // Phase 26 (§4.7): so does the device-local calendar sync state.
+        calendarSync.scrubForAccountBoundary()
         guard let activator = authenticatedIdentityActivator else {
             authenticationGateState = .signedOut
             return
@@ -5666,6 +5681,9 @@ final class AppStore: ObservableObject {
         // scrub, the RevenueCat logout await or any later event can run. The
         // teardown's own boundary below is then a no-op.
         applyAnalyticsIdentityBoundary()
+        // Phase 26 (§4.7): the server row cascades; the TradeReady calendar is
+        // removed too when the mirror was on (best effort, before the scrub).
+        calendarSync.removeMirrorCalendarForAccountDeletion()
         // Task 11.01: see `signOut` — suspend the mirror across the wipe.
         widgetMirrorSuspendedForAccountBoundary = true
         do {
@@ -5858,6 +5876,7 @@ final class AppStore: ObservableObject {
         // sign-out and a retried scrub all end here — reset first.
         applyAnalyticsIdentityBoundary()
         syncCoordinator?.reset()
+        calendarSync.resetForAccountBoundary()
         // Task 10.09 (B1): account boundary — clear the owner-scoped cached
         // snapshot only; observer registrations survive (the 11.01 widget
         // mirror registers once at launch and must keep receiving the next
@@ -6073,6 +6092,9 @@ final class AppStore: ObservableObject {
         // reschedule proofs) belongs to the scrubbed account and can never be
         // inherited by the next one.
         try pendingScheduleBookingWorkStore().removeAll()
+        // Phase 26 (§4.7): device-local calendar sync state (install id,
+        // checks, exclusions, mirror). The server row stays and goes stale.
+        calendarSync.scrubForAccountBoundary()
     }
 
     private func performLocalAccountScrub(
@@ -8424,6 +8446,7 @@ final class AppStore: ObservableObject {
     /// see this period's mark. Called by `TradeReadyNativeApp` on
     /// `.background`.
     func sceneDidEnterBackground() {
+        calendarSync.appDidEnterBackground()
         pullMarkPeriod &+= 1
         scheduleBookingRecoveryPullMark = nil
         bookingIntakePullMark = nil
@@ -8473,6 +8496,9 @@ final class AppStore: ObservableObject {
         // refresh's pull did not commit (offline, or a failed settings or
         // customers table), mirrors are not read and wait for a later pass.
         await recoverScheduleBookingPendingWorkIfPossible()
+        // Phase 26: calendar busy times and the TradeReady calendar, on every
+        // foreground (offline too: the push then waits for the next trigger).
+        await calendarSync.run(.foreground)
         guard synced else { return }
         let photos = await performJobPhotoTransfer()
         if photos.uploadedCount > 0 {
@@ -8842,6 +8868,9 @@ final class AppStore: ObservableObject {
         if photos.uploadedCount > 0 {
             guard await syncNowAndWait(trigger: .periodic) != nil else { return .failed }
         }
+
+        // Phase 26: keep the booking page's busy times fresh (48 h TTL).
+        await calendarSync.run(.background)
 
         // Match the React Native task order: cloud sync first, then safely
         // commit/acknowledge any exact-owner widget or Siri actions. Offline
@@ -10158,6 +10187,31 @@ extension AppStore {
     /// for axis, nonworking-day and time-off rendering.
     func calendarResolvedSchedule() -> NativeSchedule.ResolvedSchedule {
         NativeSchedule.resolveSchedule(snapshot.payload.settings?.schedule)
+    }
+
+    // MARK: Phase 26 calendar sync primitives
+    //
+    // The calendar sync API lives in `NativeCalendarSyncStore.swift`; only
+    // the reads that need this file's private state live here.
+
+    /// The owner calendar sync may act for: the exact signed-in workspace,
+    /// writable, with a verified binding and server subject. Nil otherwise
+    /// (signed out, an account boundary, or writes blocked).
+    func calendarSyncOwner() -> NativeCalendarSyncOwner? {
+        guard hasExactSignedInWorkspace, !persistenceWritesBlocked,
+              let binding = verifiedAccountBinding, !binding.isEmpty,
+              let subject = authenticatedUserSubject, !subject.isEmpty
+        else { return nil }
+        return NativeCalendarSyncOwner(binding: binding, subject: subject)
+    }
+
+    /// The current Supabase session for `POST /api/calendar/busy`, with the
+    /// booking transports' one-refresh hook.
+    func calendarSyncCredentials() -> NativeCalendarSyncCredentials? {
+        guard let bytes = scheduleBookingSessionBytes(explicit: nil) else { return nil }
+        return NativeCalendarSyncCredentials(sessionBytes: bytes, refresh: { [weak self] in
+            await self?.scheduleBookingRefreshedSession(excluding: bytes)
+        })
     }
 
     /// Builds a schedule-only draft pinned to the CURRENT canonical record,

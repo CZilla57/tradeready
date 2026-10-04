@@ -443,6 +443,9 @@ let scrollRootInventory: [String: Int] = [
     "NativeJobFormEditorView.swift|NativeFormItemsEditor|List": 1,
     "NativeJobFormEditorView.swift|NativeFormItemSheet|Form": 1,
     "NativeJobFormEditorView.swift|NativeFormTemplatesView|List": 1,
+    // Phase 26: Settings › Calendar sync and its first-enable explainer sheet.
+    "NativeCalendarSyncSettingsView.swift|NativeCalendarSyncSettingsView|Form": 1,
+    "NativeCalendarSyncSettingsView.swift|NativeCalendarChecksExplainer|ScrollView": 1,
     "NativeRecurringInvoicesView.swift|NativeRecurringInvoicesView|List": 1,
     "NativeRecurringInvoicesView.swift|NativeRecurringInvoiceEditor|Form": 1,
     "NativeRecurringJobsView.swift|NativeRecurringJobsView|List": 1,

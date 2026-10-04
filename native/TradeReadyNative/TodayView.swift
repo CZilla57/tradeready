@@ -75,6 +75,15 @@ struct TodayView: View {
                         NativeTodayBookingAttentionRow(row: row) { bookingAlertRow = row }
                     }
 
+                    // Phase 26: online booking is request-only while calendar
+                    // checks are stale. Not mutable; opens Calendar sync.
+                    if let message = store.calendarChecksStaleMessage {
+                        NativeTodayCalendarChecksRow(message: message) {
+                            settingsDestination = .calendarSync
+                            showingSettings = true
+                        }
+                    }
+
                     overdueSection
                     awaitingEstimatesRow
                     followUpSection

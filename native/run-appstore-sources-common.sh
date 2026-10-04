@@ -20,6 +20,11 @@
 # Phase 20 (job forms): AppStore.swift uses `Domain/NativeJobForms.swift` (photo
 # capture from a form item), and `NativeJobFormsStore.swift` extends AppStore
 # with the forms API, so it follows AppStore.swift too.
+#
+# Phase 26 (calendar sync): AppStore.swift owns the calendar sync coordinator,
+# which needs the pure busy/mirror domain, the calendar access seam (its
+# EventKit adapter compiles on the host but host tests inject a fake) and the
+# Worker transport; `NativeCalendarSyncStore.swift` extends AppStore.
 APPSTORE_TEST_SOURCES="
 $ROOT_DIR/native/HostTestSupport/HostInMemoryKeychain.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/FinancialDomain.swift
@@ -45,9 +50,14 @@ $ROOT_DIR/native/TradeReadyNative/Domain/NativeRecurringInvoices.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeSchedule.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeCalendar.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeAvailability.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeCalendarBusy.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeCalendarMirror.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeBookingIntake.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeBookingAttention.swift
 $ROOT_DIR/native/TradeReadyNative/NativeBookingAdministration.swift
+$ROOT_DIR/native/TradeReadyNative/NativeEventKitBridge.swift
+$ROOT_DIR/native/TradeReadyNative/NativeCalendarSyncTransport.swift
+$ROOT_DIR/native/TradeReadyNative/NativeCalendarSyncCoordinator.swift
 $ROOT_DIR/native/TradeReadyNative/NativeBookingResponse.swift
 $ROOT_DIR/native/TradeReadyNative/NativePortalAdministration.swift
 $ROOT_DIR/native/TradeReadyNative/NativeScheduleBookingStore.swift
@@ -154,4 +164,5 @@ $ROOT_DIR/native/TradeReadyNative/NativeRunMarker.swift
 $ROOT_DIR/native/TradeReadyNative/AppStore.swift
 $ROOT_DIR/native/TradeReadyNative/NativeBookingOwnerResponses.swift
 $ROOT_DIR/native/TradeReadyNative/NativeJobFormsStore.swift
+$ROOT_DIR/native/TradeReadyNative/NativeCalendarSyncStore.swift
 "

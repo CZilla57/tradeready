@@ -140,6 +140,8 @@ sh "$ROOT_DIR/native/run-booking-attention-tests.sh"
 sh "$ROOT_DIR/native/run-booking-intake-tests.sh"
 sh "$ROOT_DIR/native/run-booking-response-tests.sh"
 sh "$ROOT_DIR/native/run-calendar-tests.sh"
+# Phase 26 (calendar sync): busy rules, the wire snapshot and the mirror planner.
+sh "$ROOT_DIR/native/run-calendar-sync-tests.sh"
 sh "$ROOT_DIR/native/run-csv-export-tests.sh"
 sh "$ROOT_DIR/native/run-csv-import-tests.sh"
 sh "$ROOT_DIR/native/run-import-engine-tests.sh"
