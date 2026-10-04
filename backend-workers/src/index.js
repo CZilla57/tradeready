@@ -20,6 +20,7 @@
 import { Hono } from 'hono';
 import { runReminders } from '../lib/sendReminders.js';
 import { runInvoiceEmails } from '../lib/sendInvoiceEmails.js';
+import { pruneApiLogs } from '../lib/api/retention.js';
 
 import { aiChatHandler } from './routes/aiChat.js';
 import { pricebookSuggestHandler } from './routes/pricebookSuggest.js';
@@ -55,6 +56,8 @@ import { disconnectHandler } from './routes/stripe/disconnect.js';
 import { connectReturnHandler } from './routes/stripe/connectReturn.js';
 import { stripeWebhookHandler } from './routes/stripe/webhook.js';
 import { cronSendRemindersHandler, cronSendInvoiceEmailsHandler } from './routes/cron.js';
+import { apiV1Handler } from './routes/api/v1.js';
+import { apiKeysManageHandler } from './routes/api/keysManage.js';
 
 const app = new Hono();
 
@@ -103,6 +106,14 @@ app.all('/api/stripe/webhook', stripeWebhookHandler);
 app.all('/api/cron/send-reminders', cronSendRemindersHandler);
 app.all('/api/cron/send-invoice-emails', cronSendInvoiceEmailsHandler);
 
+// Phase 23 read-only open API. One handler owns every /v1 path (routing,
+// GET-only, key auth, scopes, limits and its own JSON 404) — see
+// src/routes/api/v1.js. No CORS on purpose: keys are server-to-server only.
+app.all('/v1', apiV1Handler);
+app.all('/v1/*', apiV1Handler);
+// Owner key management for Settings → API access (JWT + appCors).
+app.all('/api/api-keys/manage', apiKeysManageHandler);
+
 // Anything else under this Worker: JSON 404 (Vercel served its own 404 page).
 app.notFound((c) => c.json({ error: 'Not found' }, 404));
 
@@ -126,6 +137,12 @@ export default {
     ctx.waitUntil(
       runReminders(env).catch((err) =>
         console.error('[send-reminders] scheduled run failed:', err.message)
+      )
+    );
+    // Phase 23 retention: access log 90 days, usage counters 2 days.
+    ctx.waitUntil(
+      pruneApiLogs(env).catch((err) =>
+        console.error('[api-retention] scheduled run failed:', err.message)
       )
     );
   },

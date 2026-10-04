@@ -2456,6 +2456,10 @@
    "path": "__tests__/oneShotAI.test.js",
    "sha256": "ddbee46dd5ae6c6d5a17a81bafe8855b8547032257a003585ada5a47d8a42d13"
   },
+  "openApiWorkers": {
+   "path": "__tests__/openApiWorkers.test.js",
+   "sha256": "7dd394537d8b5f9ca91d2987ff76ccb65703a7dd9d1f93eaf20f571fa76e0ad7"
+  },
   "paymentLink": {
    "path": "__tests__/paymentLink.test.js",
    "sha256": "04f2b413b3ac9e865beac02173825856734e94e8ab018fd57520369a5deeb3c9"
