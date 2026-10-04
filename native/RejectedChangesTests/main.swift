@@ -260,7 +260,7 @@ func testDisplay() {
     let labels = [
         "jobs": "Job", "invoices": "Invoice", "customers": "Customer", "expenses": "Expense",
         "pricebook": "Price book item", "recurringJobs": "Recurring job", "recurringInvoices": "Recurring invoice",
-        "trips": "Trip", "bookingRequests": "Booking request", "jobPhotos": "Job photo",
+        "trips": "Trip", "bookingRequests": "Booking request", "jobPhotos": "Job photo", "forms": "Form",
         "settings": "Business settings", "customer_notes": "Customer note", "unknown": "Record",
     ]
     for (table, label) in labels {
@@ -278,6 +278,7 @@ func testDisplay() {
     expectEqual(NativeRejectedChangeDisplay.name(table: "recurringInvoices", payload: object(["customerName": "Ada"])), "Ada", "display: recurring invoice customer")
     expectEqual(NativeRejectedChangeDisplay.name(table: "jobs", payload: nil), nil, "display: no payload has no name")
     expectEqual(NativeRejectedChangeDisplay.name(table: "jobPhotos", payload: object(["id": "p1"])), nil, "display: a photo has no name")
+    expectEqual(NativeRejectedChangeDisplay.name(table: "forms", payload: object(["id": "fm1_a", "title": " Panel check "])), "Panel check", "display: form title")
 }
 
 

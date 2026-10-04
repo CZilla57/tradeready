@@ -91,9 +91,11 @@ struct NativeSupabaseMutationPushService {
     /// Tables whose primary key is the record `id` and whose row wraps the blob
     /// in a `data` column. Everything else (`settings`, `customer_notes`) has a
     /// bespoke row shape handled explicitly below.
+    /// Phase 20 adds `forms` (custom form templates and job form instances).
     private static let collectionTables: Set<String> = [
         "jobs", "invoices", "customers", "expenses", "pricebook",
-        "recurringJobs", "recurringInvoices", "trips", "bookingRequests", "jobPhotos"
+        "recurringJobs", "recurringInvoices", "trips", "bookingRequests", "jobPhotos",
+        "forms"
     ]
 
     private struct StoredSession: Decodable {

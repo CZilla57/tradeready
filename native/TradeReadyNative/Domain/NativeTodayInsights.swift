@@ -22,11 +22,22 @@ public enum NativeInsightKind: String, Equatable, Hashable, Codable, CaseIterabl
     case openSlot = "open_slot"
     case unscheduledApproved = "unscheduled_approved"
     case maintenanceDue = "maintenance_due"
+    /// Phase 21 (spec §4): one piece of equipment's warranty ends soon.
+    case warrantyExpiring = "warranty_expiring"
     case expenseAnomaly = "expense_anomaly"
+    /// Phase 34 (referrals, spec §5.7): thank a referrer after the referred
+    /// customer's first payment.
+    case referralThanks = "referral_thanks"
     /// Phase 32: a sent estimate reaches its valid-until date within 3 days.
     case quoteExpiring = "quote_expiring"
     /// Phase 32: a sent estimate passed its valid-until date in the last 14 days.
     case quoteExpired = "quote_expired"
+
+    /// Whether the §9.5 analytics catalog's `InsightKind` enum lists this
+    /// kind. Phase 34's native-only `referral_thanks` stays out of the insight
+    /// events (the catalog is not extended for it); Phases 21 and 32 added
+    /// `warranty_expiring`, `quote_expiring` and `quote_expired` to the catalog.
+    public var isInAnalyticsCatalog: Bool { self != .referralThanks }
 }
 
 /// Mirrors `InsightTarget` — the routing contract 10.04 maps onto
@@ -123,7 +134,7 @@ public enum NativeTodayInsights {
 
     // MARK: - Entry point
 
-    /// Concatenates all ten selectors, in the documented priority order.
+    /// Concatenates all eleven selectors, in the documented priority order.
     /// Phase 32 (spec 2026-10-03 §6.8): `quote_expiring` runs right after
     /// `due_soon`; `quote_expired` after the schedule rules and before
     /// `maintenance_due`.
@@ -150,8 +161,12 @@ public enum NativeTodayInsights {
         // Long-horizon, so it rides last — it must never crowd out today's-money
         // rows given the card's top-3 cap.
         out.append(contentsOf: selectMaintenanceDue(jobs: jobs, customers: customers, recurringJobs: recurringJobs, now: now))
+        // Phase 21 (spec §4): right after maintenance due, at most one row.
+        out.append(contentsOf: selectWarrantyExpiring(customers: customers, now: now))
         // Business-level spend trend — lowest priority.
         out.append(contentsOf: selectExpenseAnomaly(expenses: expenses, now: now))
+        // Phase 34: runs last (spec §5.7).
+        out.append(contentsOf: selectReferralThanks(customers: customers, invoices: invoices, now: now))
         return out
     }
 
@@ -589,6 +604,42 @@ public enum NativeTodayInsights {
         )]
     }
 
+    // MARK: - 7b. warranty_expiring (Phase 21)
+
+    /// Spec §4: the soonest active warranty ending within the next
+    /// `NativePropertiesEquipment.warrantyWindowDays` local days, today
+    /// included (ties: customer name, then equipment id). Today is
+    /// `NativeCashBasis.ymd(now)`, so the day boundary is the local one, and
+    /// the day count is civil-day arithmetic on the two dates (FA-039). The
+    /// id carries the expiry date, so a corrected date resurfaces after a
+    /// dismissal.
+    static func selectWarrantyExpiring(customers: [Canonical.Customer], now: Date) -> [NativeTodayInsight] {
+        let today = NativeCashBasis.ymd(now)
+        guard let hit = NativePropertiesEquipment.expiringWarranties(customers: customers, today: today).first
+        else { return [] }
+        let customer = hit.customer
+        let name = customer.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let firstName = name.split(separator: " ", omittingEmptySubsequences: true).first.map(String.init) ?? customer.name
+        let type = NativePropertiesEquipment.typeSentenceName(hit.equipment.type)
+        let date = NativePropertiesEquipment.displayDate(hit.expires)
+        let place = hit.property.isPrimary ? "" : " at \(hit.property.displayName)"
+        let when = hit.days == 0 ? "today" : hit.days == 1 ? "tomorrow" : "in \(hit.days) days"
+        let model = [hit.equipment.make, hit.equipment.model].compactMap { NativePropertiesEquipment.singleLine($0) }
+            .joined(separator: " ")
+        return [NativeTodayInsight(
+            kind: .warrantyExpiring,
+            id: "warranty_expiring:\(hit.equipment.id):\(hit.expires)",
+            title: "\(name)'s \(type) warranty ends \(date)",
+            detail: "A good time to offer a maintenance plan.",
+            target: .customer(customerId: customer.id),
+            reason: "The warranty on \(name)'s \(type)\(model.isEmpty ? "" : " (\(model))")\(place) ends " +
+                "\(hit.expires), \(when) (window: \(NativePropertiesEquipment.warrantyWindowDays) days). " +
+                "Only the soonest expiry is shown. Snoozing hides this for 14 days.",
+            coachPrompt: "\(firstName)'s \(type) warranty ends \(date). Draft a short, friendly text offering " +
+                "a maintenance plan before it runs out."
+        )]
+    }
+
     // MARK: - 8. expense_anomaly
 
     /// The `YYYY-MM` string `offset` whole months before another — pure
@@ -659,6 +710,74 @@ public enum NativeTodayInsights {
                 "(\(priorYMs[0]), \(priorYMs[1]), \(priorYMs[2])) — \(pct)% higher. Biggest driver: " +
                 "\(catLabel) (\(formatMoney(topMtd)) vs \(formatMoney(topAvg)) average). " +
                 "Dismissing hides this for the rest of the month."
+        )]
+    }
+
+    // MARK: - 9. referral_thanks (Phase 34, spec 2026-10-03-referral-program-design.md §5.7, D8)
+
+    private struct ReferralThanksHit {
+        let referred: Canonical.Customer
+        let referrer: Canonical.Customer
+        let firstPaymentDay: String
+        let paidSoFar: Decimal
+    }
+
+    /// Referred customers with a live referrer (R1, not dangling) and no
+    /// reward record, whose first non-voided payment (all their invoices,
+    /// attributed id first then by unique name) falls on a local day from
+    /// `thanksWindowDays` days ago through today. At most one row: the most
+    /// recent first payment, ties by name then id. Prompting at booking would
+    /// thank people for leads that never turn into work.
+    static func selectReferralThanks(
+        customers: [Canonical.Customer],
+        invoices: [Canonical.Invoice],
+        now: Date
+    ) -> [NativeTodayInsight] {
+        let today = NativeCashBasis.ymd(now)
+        guard let cutoff = NativeSchedule.shiftDate(today, days: -NativeReferrals.thanksWindowDays) else { return [] }
+        let byID = Dictionary(customers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let resolver = NativeReferrals.CustomerResolver(customers: customers)
+        var firstDay: [String: String] = [:]
+        var paid: [String: Decimal] = [:]
+        for invoice in invoices {
+            guard let owner = resolver.customerID(customerId: invoice.customerId, name: invoice.customer) else { continue }
+            for payment in PaymentLedger.materializeLegacyLedger(NativeCashBasis.ledgerInvoice(invoice))
+            where payment.voidedAt == nil {
+                guard let date = NativeCashBasis.parseLocalDate(payment.date) else { continue }
+                let day = NativeCashBasis.ymd(date)
+                paid[owner, default: 0] += payment.amount
+                if firstDay[owner].map({ day < $0 }) ?? true { firstDay[owner] = day }
+            }
+        }
+        var hits: [ReferralThanksHit] = []
+        for customer in customers where customer.referralReward == nil {
+            guard let referrerID = NativeReferrals.validReferrerID(of: customer),
+                  let referrer = byID[referrerID],
+                  let day = firstDay[customer.id], day >= cutoff, day <= today
+            else { continue }
+            hits.append(ReferralThanksHit(
+                referred: customer, referrer: referrer, firstPaymentDay: day, paidSoFar: paid[customer.id] ?? 0
+            ))
+        }
+        hits.sort { lhs, rhs in
+            if lhs.firstPaymentDay != rhs.firstPaymentDay { return lhs.firstPaymentDay > rhs.firstPaymentDay }
+            let byName = lhs.referred.name.localizedCaseInsensitiveCompare(rhs.referred.name)
+            if byName != .orderedSame { return byName == .orderedAscending }
+            return lhs.referred.id < rhs.referred.id
+        }
+        guard let hit = hits.first else { return [] }
+        let referrerName = NativeReferrals.firstName(hit.referrer.name)
+        let referredName = NativeReferrals.firstName(hit.referred.name)
+        let dayLabel = NativeReferrals.shortDate(hit.firstPaymentDay) ?? hit.firstPaymentDay
+        return [NativeTodayInsight(
+            kind: .referralThanks,
+            id: "referral_thanks:\(hit.referred.id)",
+            title: "Thank \(referrerName) for referring \(referredName)",
+            detail: "\(referredName) has paid \(NativeReferrals.money(hit.paidSoFar)) so far.",
+            target: .customer(customerId: hit.referrer.id),
+            reason: "\(referredName) was referred by \(referrerName) and paid for the first time on \(dayLabel). " +
+                "No thank-you is recorded yet.",
+            coachPrompt: "Help me write a short thank-you text to \(referrerName) for referring \(referredName)."
         )]
     }
 

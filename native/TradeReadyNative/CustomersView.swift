@@ -347,6 +347,10 @@ struct CustomerDetailView: View {
                             if let address = storedCustomer?.address, !address.isEmpty { Text(address) }
                         }
                     }
+                    if let storedCustomer { NativeCustomerPropertiesSection(customerID: storedCustomer.id) } // Phase 21
+
+                    // Phase 34: referrals (renders nothing for an unsaved customer).
+                    NativeCustomerReferralsSection(customerID: storedCustomer?.id ?? customer.id, customerName: customer.name)
 
                     // Customer Portal section
                     Section("Customer Portal") {
@@ -781,6 +785,10 @@ struct CustomerEditor: View {
                 Text("Other…").tag(Self.otherLeadSourceTag)
             }
             .pickerStyle(.menu)
+            // Phase 34 (§5.4): who referred them, while the source is Referral.
+            if NativeLeadSource.normalize(customer.leadSource) == "referral" {
+                NativeReferredByRow(customerID: customer.id, referredByCustomerId: $customer.referredByCustomerId)
+            }
             if showsOtherField {
                 TextField("Home show, radio ad…", text: Binding(
                     get: { customer.leadSource ?? "" },

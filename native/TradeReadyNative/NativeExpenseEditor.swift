@@ -57,11 +57,22 @@ struct NativeExpenseEditor: View {
     @State private var alert: NativeExpenseAlert?
     @State private var showingDeleteConfirmation = false
 
-    init(target: NativeExpenseEditorTarget, opened: Expense? = nil, defaultJobId: String? = nil) {
+    /// `prefill` (Phase 34, "Log as a Marketing expense") seeds a NEW expense's
+    /// description, amount, category and notes; it is ignored when `opened`
+    /// is set, and nothing is saved until the owner taps Save.
+    init(target: NativeExpenseEditorTarget, opened: Expense? = nil, defaultJobId: String? = nil, prefill: Expense? = nil) {
         self.target = target
         self.opened = opened
         self.defaultJobId = defaultJobId
-        if let opened {
+        if opened == nil, let prefill {
+            var draft = NativeExpenseEditorDraft.newExpense()
+            draft.merchant = prefill.merchant
+            draft.amountText = prefill.amount > 0 ? NativeExpenseComposer.amountText(Decimal(string: String(prefill.amount)) ?? 0) : ""
+            draft.categoryID = prefill.category.rawValue
+            draft.notes = prefill.notes
+            draft.jobId = defaultJobId
+            _draft = State(initialValue: draft)
+        } else if let opened {
             var draft = NativeExpenseEditorDraft()
             draft.merchant = opened.merchant
             draft.amountText = NativeExpenseComposer.amountText(Decimal(opened.amount))

@@ -532,6 +532,53 @@ struct MutationPushTests {
         expect(notesGuard.requests.isEmpty && notesGuardOutcome.discarded.count == 2,
                "P12-017: a guard outside the collection tables, or on a blob whose id disagrees, is never sent")
 
+        // Phase 20: `forms` is a blob collection like `jobPhotos`: an upsert
+        // POSTs the id/data/deleted row with merge-duplicates and a delete is
+        // the owner-scoped soft delete. A table outside the set is discarded
+        // unsent, so this proves the classification, not just the transport.
+        let formBlob: Canonical.JSONValue = .object([
+            "id": .string("fm1759420800000_k3x9"), "kind": .string("instance"), "jobId": .string("j1"),
+            "title": .string("Electrical safety inspection"), "createdAt": .string("2026-10-02T16:00:00.000Z"),
+            "items": .array([.object(["id": .string("fi_1"), "kind": .string("check"), "label": .string("Panel photo"),
+                                      "checked": .bool(true), "__nativeDraft": .bool(true)])]),
+        ])
+        let formsLoader = PushLoader { _ in 201 }
+        let formsOutcome = try await NativeSupabaseMutationPushService(
+            supabaseURL: url, publishableKey: "publishable-key", allowsWrites: true, loader: formsLoader
+        ).push(sessionBytes: session, expectedUserSubject: subject, items: [
+            item("forms", .upsert, "fm1759420800000_k3x9", formBlob),
+            item("forms", .delete, "fm1_gone", nil),
+            item("formsV2", .upsert, "fm2_x", .object(["id": .string("fm2_x")])),
+        ])
+        expect(formsLoader.requests.count == 2 && formsOutcome.pushedCount == 2,
+               "Phase 20: a forms upsert and delete are sent")
+        expect(formsOutcome.discarded.map(\.table) == ["formsV2"], "Phase 20: a table outside the collections is never sent")
+        let formUpsert = formsLoader.requests[0]
+        let formFields = fields(body(formUpsert))
+        expect(formUpsert.httpMethod == "POST" && table(formUpsert) == "forms"
+               && formUpsert.value(forHTTPHeaderField: "Prefer") == "resolution=merge-duplicates,return=minimal",
+               "Phase 20: a forms upsert is an idempotent merge-duplicates POST to forms")
+        expect(formFields?["id"] == .string("fm1759420800000_k3x9") && formFields?["user_id"] == .string(subject)
+               && formFields?["deleted"] == .bool(false) && formFields?["updated_at"] == nil,
+               "Phase 20: the forms row wraps the blob with its owner")
+        guard case let .array(sentItems)? = fields(formFields?["data"])?["items"],
+              case let .object(sentItem)? = sentItems.first
+        else { expect(false, "Phase 20: the form blob is sent under data"); return }
+        expect(sentItem["checked"] == .bool(true) && sentItem["__nativeDraft"] == nil,
+               "Phase 20: the form blob is sent without native-private keys")
+        let formDelete = formsLoader.requests[1]
+        expect(formDelete.httpMethod == "PATCH" && table(formDelete) == "forms"
+               && queryValue(formDelete, "id") == "eq.fm1_gone" && queryValue(formDelete, "user_id") == "eq.\(subject)"
+               && fields(body(formDelete)) == ["deleted": .bool(true)],
+               "Phase 20: a forms delete is the owner-scoped soft delete")
+        let formGuard = BodyLoader { _ in (200, #"[{"id":"fm1759420800000_k3x9"}]"#) }
+        let formGuardOutcome = try await NativeSupabaseMutationPushService(
+            supabaseURL: url, publishableKey: "publishable-key", allowsWrites: true, loader: formGuard
+        ).push(sessionBytes: session, expectedUserSubject: subject,
+               items: [guarded("forms", "fm1759420800000_k3x9", formBlob)])
+        expect(formGuard.requests.first?.httpMethod == "PATCH" && formGuardOutcome.pushedCount == 1,
+               "Phase 20: forms accepts a guarded upsert like every collection")
+
         if failures == 0 { print("PASS: native mutation push tests") }
         else { exit(1) }
     }

@@ -124,6 +124,10 @@ struct NativeEstimateReviewDraft: Identifiable {
     let businessAddress: String
     let businessLogoReference: String?
     let jobDescription: String
+    /// Phase 21 (spec §3): the job address when it differs from the
+    /// customer's, printed as "Service address" under the customer block;
+    /// empty otherwise (`NativePropertiesEquipment.serviceAddressLine`).
+    var serviceAddress: String = ""
 
     var id: String { jobID }
 }
@@ -154,6 +158,14 @@ struct NativeInvoiceFromJobDraft: Identifiable {
     /// The job's current billable total, shown in the "pre-filled from job
     /// estimate" banner (create/requestDeposit only; 0 hides the banner).
     let prefillReferenceAmount: Decimal
+    /// Phase 34 (spec §5.6): the referral credit owed to this job's customer
+    /// when the sheet opened (create/finalize only, and only when the job
+    /// produced a line); 0 hides the "Referral credit" section.
+    var referralCreditAvailable: Decimal = 0
+    /// The credit the owner turned on: 0 or exactly `referralCreditAvailable`
+    /// (partial application is not in v1). `amount` already has it
+    /// subtracted; commit adds the matching negative line.
+    var referralCreditToApply: Decimal = 0
 
     var id: String { jobID }
 }
@@ -170,6 +182,7 @@ enum CanonicalUIAdapters {
         ]
         if let archivedAt = value.archivedAt { fields["archivedAt"] = .string(archivedAt) }
         if let leadSource = value.leadSource { fields["leadSource"] = .string(leadSource) }
+        if let referrer = value.referredByCustomerId { fields["referredByCustomerId"] = .string(referrer) }
         return try decode(fields)
     }
 
@@ -185,6 +198,7 @@ enum CanonicalUIAdapters {
         ]
         if let invoiceId = value.invoiceId { fields["invoiceId"] = .string(invoiceId) }
         if let archivedAt = value.archivedAt { fields["archivedAt"] = .string(archivedAt) }
+        if let propertyId = value.propertyId { fields["propertyId"] = .string(propertyId) }
         if let start = value.scheduledAt {
             fields["scheduledDate"] = .string(day(start, calendar: calendar))
             fields["scheduledStartTime"] = .string(time(start, calendar: calendar))
@@ -215,6 +229,8 @@ enum CanonicalUIAdapters {
             "isActive": .bool(true), "createdAt": .string(createdAt)
         ]
         if let costs = job.jobCosts { fields["jobCosts"] = try json(costs) }
+        // Phase 21: occurrences of the rule are at the source job's property.
+        if let propertyId = job.propertyId { fields["propertyId"] = .string(propertyId) }
         if let endCount { fields["endCount"] = .number(Decimal(endCount)) }
         if let endDate { fields["endDate"] = .string(endDate) }
         return try decode(fields)
@@ -228,13 +244,16 @@ enum CanonicalUIAdapters {
     /// (tiers and add-ons keep their nested metadata; the options container
     /// starts clean). The copy is unaccepted, so invariant M1 re-mirrors the
     /// recommended tier's full pricing into the duplicate's top level.
+    ///
+    /// Phase 21: `propertyId` is on the whitelist (the copy is at the same
+    /// property, beside the same `address`).
     static func duplicateJob(
         _ source: Canonical.Job,
         id: String,
         createdAt: Date,
         calendar: Calendar = .current
     ) throws -> NativeJobDuplicateDraft {
-        let fields: [String: Canonical.JSONValue] = [
+        var fields: [String: Canonical.JSONValue] = [
             "id": .string(id),
             "customerId": .string(source.customerId),
             "customerName": .string(source.customerName),
@@ -253,6 +272,7 @@ enum CanonicalUIAdapters {
             "invoiceId": .null,
             "createdAt": .string(timestamp(createdAt))
         ]
+        if let propertyId = source.propertyId { fields["propertyId"] = .string(propertyId) }
         var canonical: Canonical.Job = try decode(fields)
         if let sourceOptions = source.quoteOptions {
             let options = Canonical.QuoteOptions(
@@ -926,6 +946,7 @@ enum CanonicalUIAdapters {
         if edit.value.createdAt != original.createdAt { fields["createdAt"] = .string(timestamp(edit.value.createdAt)) }
         updateOptional(&fields, "archivedAt", edit.value.archivedAt, original.archivedAt)
         updateOptional(&fields, "leadSource", edit.value.leadSource, original.leadSource)
+        updateOptional(&fields, "referredByCustomerId", edit.value.referredByCustomerId, original.referredByCustomerId)
         return try decode(fields)
     }
 
@@ -953,6 +974,7 @@ enum CanonicalUIAdapters {
         update(&fields, "notes", edit.value.notes, original.notes)
         updateOptional(&fields, "invoiceId", edit.value.invoiceId, original.invoiceId)
         updateOptional(&fields, "archivedAt", edit.value.archivedAt, original.archivedAt)
+        updateOptional(&fields, "propertyId", edit.value.propertyId, original.propertyId)
         if edit.value.createdAt != original.createdAt { fields["createdAt"] = .string(timestamp(edit.value.createdAt)) }
         if edit.value.scheduledAt != original.scheduledAt || edit.value.scheduledEnd != original.scheduledEnd {
             if let start = edit.value.scheduledAt {
@@ -1089,7 +1111,8 @@ enum CanonicalUIAdapters {
         Customer(id: value.id, name: value.name, email: value.email, phone: value.phone,
                  address: value.address, notes: value.notes,
                  createdAt: try parsed(value.createdAt ?? "1970-01-01", field: "customer.createdAt", calendar: calendar),
-                 archivedAt: value.archivedAt, leadSource: value.leadSource)
+                 archivedAt: value.archivedAt, leadSource: value.leadSource,
+                 referredByCustomerId: value.referredByCustomerId)
     }
 
     static func job(from value: Canonical.Job, calendar: Calendar = .current) throws -> Job {
@@ -1102,7 +1125,7 @@ enum CanonicalUIAdapters {
                    estimateTotal: double(value.estimateTotal), laborHours: double(value.laborHours),
                    laborRate: double(value.laborRate), notes: value.notes, invoiceId: value.invoiceId,
                    createdAt: try parsed(value.createdAt, field: "job.createdAt", calendar: calendar),
-                   archivedAt: value.archivedAt)
+                   archivedAt: value.archivedAt, propertyId: value.propertyId)
     }
 
     static func payment(from value: Canonical.Payment, calendar: Calendar = .current) throws -> Payment {

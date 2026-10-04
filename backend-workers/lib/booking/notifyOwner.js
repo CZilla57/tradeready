@@ -18,10 +18,22 @@ function sanitizeSubjectPart(name) {
   return String(name || '').replace(/[\r\n]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
 }
 
+// Phase 34: a booking that came in through a customer's referral link. The
+// server never resolves the code, so the line names nobody, and the code
+// itself is never echoed (the owner's app resolves it at intake).
+const REFERRAL_LINE = "Came in through a customer's referral link — open TradeReady to see who referred them.";
+
+function hasReferralCode(request) {
+  return typeof request.referralCode === 'string' && request.referralCode !== '';
+}
+
 function buildBookingEmail({ to, request }) {
   // Accurate status wording (Phase 11 spec §2 Phase C): a slot booking is a
   // confirmed appointment on the calendar, not a quote request.
   const booked = request.kind === 'booked' && request.slot;
+  const closing = booked
+    ? `The slot is held for them. Open TradeReady to see it on your calendar.`
+    : `Open TradeReady to see the new lead in Jobs.`;
   const lines = booked
     ? [
         `New booked appointment via your booking link:`,
@@ -35,7 +47,6 @@ function buildBookingEmail({ to, request }) {
         `What they need:`,
         request.details,
         ``,
-        `The slot is held for them. Open TradeReady to see it on your calendar.`,
       ]
     : [
         `New quote request via your booking link:`,
@@ -49,8 +60,9 @@ function buildBookingEmail({ to, request }) {
         `What they need:`,
         request.details,
         ``,
-        `Open TradeReady to see the new lead in Jobs.`,
       ];
+  if (hasReferralCode(request)) lines.push(REFERRAL_LINE);
+  lines.push(closing);
   return {
     from: SENDER,
     to,

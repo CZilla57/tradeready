@@ -23,6 +23,8 @@ enum NativeMoneyDestination: Hashable {
     case mileage
     case pricebook
     case exportData
+    /// Phase 34: the "who referred whom" screen.
+    case referrals
 }
 
 struct MoneyView: View {
@@ -72,6 +74,7 @@ struct MoneyView: View {
                 case .mileage: NativeMileageLogView(initialFilter: filter)
                 case .pricebook: NativePricebookView()
                 case .exportData: NativeExportDataView()
+                case .referrals: NativeReferralsView(initialFilter: filter)
                 }
             }
             .confirmationDialog(
@@ -189,6 +192,9 @@ struct MoneyView: View {
             }
             if let leadSources = overview.leadSources {
                 NativeMoneyLeadSourceCardView(card: leadSources)
+            }
+            if let referrals = overview.referrals {
+                NativeMoneyReferralCardView(card: referrals) { destination = .referrals }
             }
             if overview.invoiceAging.showsCard {
                 NativeMoneyInvoiceAgingCardView(card: overview.invoiceAging)

@@ -31,3 +31,9 @@ create table public.jobs (id text primary key, user_id uuid not null references 
 create table public.customers (id text primary key, user_id uuid not null references auth.users(id), data jsonb not null default '{}', deleted boolean not null default false, updated_at timestamptz not null default now());
 create table public."bookingRequests" (id text primary key, user_id uuid not null references auth.users(id), data jsonb not null default '{}', deleted boolean not null default false, updated_at timestamptz not null default now());
 create table public.portal_tokens (token_hash text primary key, user_id uuid not null references auth.users(id), customer_id text not null, enabled boolean not null default true, revoked_at timestamptz, created_at timestamptz not null default now());
+-- Phase 20 (job forms): `forms` comes from supabase/migrations/20261002_forms.sql
+-- (applied in the SQL editor before the release that syncs it). Same shape
+-- here so a harness has the table the hosted project will have; re-applying
+-- that migration on top is a no-op for the table and adds RLS and the
+-- `set_updated_at_trg` trigger (which needs 20260831 applied first).
+create table public.forms (id text primary key, user_id uuid not null references auth.users(id) on delete cascade, data jsonb not null, updated_at timestamptz not null default now(), deleted boolean not null default false);

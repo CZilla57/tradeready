@@ -147,6 +147,7 @@ struct NativeEstimateReviewView: View {
                 Section("Estimate") {
                     Text(draft.snapshot.jobTitle).font(.headline)
                     LabeledContent("Customer", value: draft.snapshot.customerName)
+                    if !draft.serviceAddress.isEmpty { LabeledContent("Service address", value: draft.serviceAddress) }
                     if let options = draft.snapshot.options {
                         optionRows(options)
                     } else {
@@ -450,15 +451,17 @@ struct NativeEstimateReviewView: View {
             : "Shows options to change the date the customer can approve this estimate until.")
     }
 
-    /// Rebuilds the draft with the chosen date through the store. Messages
-    /// the owner has not edited are regenerated; edited ones keep their text
-    /// and get a footnote.
+    /// Changes the draft's date through the store. Only the date and its
+    /// zone change: the prices and names stay the ones the owner reviewed
+    /// (review fix 2026-10-03), so the send-time guards still catch a newer
+    /// estimate. Messages the owner has not edited are regenerated; edited
+    /// ones keep their text and get a footnote.
     private func applyValidity(_ choice: NativeEstimateValidUntilChoice) {
         guard !validityLocked else { return }
         let requested: String? = if case .date(let date) = choice { date } else { nil }
         guard requested != draft.validUntil else { return }
         store.migrationMessage = nil
-        guard let rebuilt = store.estimateReviewDraft(jobID: draft.jobID, validUntil: choice) else {
+        guard let rebuilt = store.estimateReviewDraft(draft, changingValidUntilTo: choice) else {
             validityErrorMessage = store.migrationMessage
                 ?? "The estimate could not be updated. Close it and review it again."
             return

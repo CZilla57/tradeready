@@ -10,6 +10,12 @@ import Foundation
 /// `NativeValidUntilPicker` bridge read a zone, and each reads exactly the
 /// one it is given.
 ///
+/// Every civil date is Gregorian (review fix 2026-10-03): the stored
+/// `YYYY-MM-DD` is the date the Worker enforces and the customer reads, so a
+/// device whose Calendar setting is Buddhist or Japanese (`Calendar.current`
+/// then counts 2569 or Reiwa 8) must still produce `2026-…`. Those entry
+/// points read only the time zone of the calendar they are handed.
+///
 /// Foundation and the canonical models only: no app-file dependencies, so
 /// every host runner can compile it next to its own sources.
 enum NativeQuoteExpiry {
@@ -42,9 +48,23 @@ enum NativeQuoteExpiry {
 
     // MARK: - Civil dates
 
-    /// The local `YYYY-MM-DD` for `now` in `calendar`'s time zone.
+    /// The device's calendar for civil dates: Gregorian in the current time
+    /// zone. Never `Calendar.current`, which follows the user's Calendar
+    /// setting.
+    static var localCalendar: Calendar { gregorian(in: .current) }
+
+    /// A Gregorian calendar in `timeZone`.
+    static func gregorian(in timeZone: TimeZone) -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        return calendar
+    }
+
+    /// The local Gregorian `YYYY-MM-DD` for `now` in `calendar`'s time zone.
+    /// Only the zone is read: a Buddhist or Japanese `calendar` still gives
+    /// the Gregorian date.
     static func today(now: Date, calendar: Calendar) -> String {
-        let parts = calendar.dateComponents([.year, .month, .day], from: now)
+        let parts = gregorian(in: calendar.timeZone).dateComponents([.year, .month, .day], from: now)
         return format(year: parts.year ?? 1970, month: parts.month ?? 1, day: parts.day ?? 1)
     }
 
@@ -112,9 +132,7 @@ enum NativeQuoteExpiry {
     /// A `validUntil` that is not a real date never expires.
     static func isExpired(validUntil: String, timeZoneID: String?, now: Date) -> Bool {
         guard utcDate(validUntil) != nil else { return false }
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = resolvedZone(timeZoneID)
-        return today(now: now, calendar: calendar) > validUntil
+        return today(now: now, calendar: gregorian(in: resolvedZone(timeZoneID))) > validUntil
     }
 
     // MARK: - Copy
@@ -163,11 +181,7 @@ enum NativeQuoteExpiry {
         return TimeZone(identifier: anywhereOnEarthZoneID) ?? TimeZone(secondsFromGMT: -12 * 3_600)!
     }
 
-    private static let utcCalendar: Calendar = {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "UTC") ?? TimeZone(secondsFromGMT: 0)!
-        return calendar
-    }()
+    private static let utcCalendar = gregorian(in: TimeZone(identifier: "UTC") ?? TimeZone(secondsFromGMT: 0)!)
 
     /// Strict `YYYY-MM-DD` that names a real calendar day, as UTC midnight.
     private static func utcDate(_ ymd: String) -> Date? {
@@ -194,28 +208,33 @@ enum NativeQuoteExpiry {
 
 /// Phase 32 (spec 2026-10-03 §6.4, §6.5): bridges a civil `YYYY-MM-DD`
 /// valid-until date and the `Date` a `DatePicker` edits. The picker shows
-/// days in `Calendar.current`, the calendar `NativeQuoteExpiry.today` reads,
-/// so the day the owner picks is the day stored; nothing parses a bare date
-/// in UTC (FA-039). Shared by the review sheet and the job-detail editor, and
-/// kept here (Foundation only) so the host suite pins the round trip.
+/// the instant in the device's own calendar; the bridge builds and reads it
+/// as a Gregorian day in the device zone, the calendar
+/// `NativeQuoteExpiry.today` reads, so the day the owner picks is the day
+/// stored whatever the Calendar setting; nothing parses a bare date in UTC
+/// (FA-039). Shared by the review sheet and the job-detail editor, and kept
+/// here (Foundation only) so the host suite pins the round trip. A
+/// `calendar` passed in contributes only its time zone.
 enum NativeValidUntilPicker {
     /// Noon local on that day (clear of any DST transition), or `nil` when
     /// `ymd` is not a real date.
-    static func date(from ymd: String, calendar: Calendar = .current) -> Date? {
+    static func date(from ymd: String, calendar: Calendar = NativeQuoteExpiry.localCalendar) -> Date? {
         guard NativeQuoteExpiry.addDays(ymd, 0) != nil else { return nil }
         let parts = ymd.split(separator: "-", omittingEmptySubsequences: false)
         guard parts.count == 3,
               let year = Int(parts[0]), let month = Int(parts[1]), let day = Int(parts[2])
         else { return nil }
-        return calendar.date(from: DateComponents(year: year, month: month, day: day, hour: 12))
+        return NativeQuoteExpiry.gregorian(in: calendar.timeZone)
+            .date(from: DateComponents(year: year, month: month, day: day, hour: 12))
     }
 
-    static func ymd(from date: Date, calendar: Calendar = .current) -> String {
+    static func ymd(from date: Date, calendar: Calendar = NativeQuoteExpiry.localCalendar) -> String {
         NativeQuoteExpiry.today(now: date, calendar: calendar)
     }
 
     /// Today through today + 365, inclusive of the whole last day.
-    static func range(today: String, calendar: Calendar = .current) -> ClosedRange<Date> {
+    static func range(today: String, calendar: Calendar = NativeQuoteExpiry.localCalendar) -> ClosedRange<Date> {
+        let calendar = NativeQuoteExpiry.gregorian(in: calendar.timeZone)
         let lower = date(from: today, calendar: calendar).map { calendar.startOfDay(for: $0) } ?? Date()
         let lastDay = NativeQuoteExpiry.addDays(today, NativeQuoteExpiry.maximumValidityDays) ?? today
         let upper = date(from: lastDay, calendar: calendar)

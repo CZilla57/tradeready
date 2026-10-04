@@ -1287,8 +1287,10 @@ Enum definitions:
 - `ExpenseCategoryId` = materials, tools, fuel, labor, insurance, software, marketing,
   other (`types/models.ts:44-45`).
 - `InsightKind` = labor_overrun, low_margin_estimate, uninvoiced_complete, due_soon,
-  open_slot, unscheduled_approved, maintenance_due, expense_anomaly
-  (`utils/todayInsights.ts:28`), plus the native-only quote_expiring and quote_expired
+  open_slot, unscheduled_approved, maintenance_due, warranty_expiring, expense_anomaly
+  (`utils/todayInsights.ts:28`; `warranty_expiring` is native-only, added in Roadmap
+  Phase 21, `docs/superpowers/specs/2026-10-02-properties-equipment-design.md` §4,
+  under the same `catalogVersion` 1), plus the native-only quote_expiring and quote_expired
   (Roadmap Phase 32, `docs/superpowers/specs/2026-10-03-quote-expiration-design.md`
   §6.8). The two kinds are an additive enum change only, so `catalogVersion` stays 1.
 
@@ -1307,7 +1309,7 @@ JSON. Each event maps to a list of allowed property-shape variants.
     "PaymentMethod": ["stripe","cash","check","card","other"],
     "JobStatus": ["lead","estimate_sent","approved","scheduled","in_progress","complete","invoiced","paid","declined"],
     "ExpenseCategoryId": ["materials","tools","fuel","labor","insurance","software","marketing","other"],
-    "InsightKind": ["labor_overrun","low_margin_estimate","uninvoiced_complete","due_soon","open_slot","unscheduled_approved","maintenance_due","expense_anomaly","quote_expiring","quote_expired"]
+    "InsightKind": ["labor_overrun","low_margin_estimate","uninvoiced_complete","due_soon","open_slot","unscheduled_approved","maintenance_due","warranty_expiring","expense_anomaly","quote_expiring","quote_expired"]
   },
   "events": {
     "ai_chat_sent": [{"source": "insight_prefill|organic", "provider": "anthropic|groq|backend"}],

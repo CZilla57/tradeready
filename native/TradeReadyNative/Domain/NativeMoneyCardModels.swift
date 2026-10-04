@@ -491,6 +491,57 @@ struct NativeMoneyLeadSourceCard: Equatable {
     }
 }
 
+// MARK: - Referrals (Phase 34, spec 2026-10-03-referral-program-design.md §5.7)
+
+struct NativeMoneyReferralRow: Equatable, Identifiable {
+    var id: String
+    var name: String
+    var isCatchAll: Bool
+    /// "2 new · 5 total"
+    var detailText: String
+    /// "$1,800.00"
+    var collectedText: String
+    /// The row's single VoiceOver element.
+    var accessibilityLabel: String
+}
+
+/// `Referrals` — the top five rows of `NativeReferralReport` for the chip's
+/// window, plus the rewards recorded in it. Hidden (nil) unless at least one
+/// customer has a referrer. Opening it shows `NativeReferralsView`.
+struct NativeMoneyReferralCard: Equatable {
+    static let title = "Referrals"
+    static let rowLimit = 5
+
+    var rows: [NativeMoneyReferralRow]
+    /// "Rewards recorded: 2 ($50.00)"
+    var footerText: String
+
+    static func make(
+        customers: [Canonical.Customer],
+        invoices: [Canonical.Invoice],
+        start: Date,
+        end: Date
+    ) -> NativeMoneyReferralCard? {
+        guard NativeReferrals.anyReferrer(in: customers) else { return nil }
+        let report = NativeReferralReport.make(customers: customers, invoices: invoices, start: start, end: end)
+        return NativeMoneyReferralCard(
+            rows: report.rows.prefix(rowLimit).map(row(for:)),
+            footerText: "Rewards recorded: \(report.rewardsRecorded) (\(NativeMoneyFormat.money(report.rewardsAmount)))"
+        )
+    }
+
+    private static func row(for row: NativeReferralReportRow) -> NativeMoneyReferralRow {
+        let collected = NativeMoneyFormat.money(row.collected)
+        let detail = "\(row.newReferred) new \u{00B7} \(row.referredAllTime) total"
+        let spoken = "\(row.name): \(NativeMoneyFormat.plural(row.newReferred, "new referred customer", "new referred customers")), "
+            + "\(row.referredAllTime) referred in total, \(collected) collected"
+        return NativeMoneyReferralRow(
+            id: row.id, name: row.name, isCatchAll: row.isCatchAll,
+            detailText: detail, collectedText: collected, accessibilityLabel: spoken
+        )
+    }
+}
+
 // MARK: - Days to pay (InvoiceAgingCard)
 
 struct NativeMoneySlowPayerRow: Equatable {
@@ -1023,6 +1074,8 @@ struct NativeMoneyOverview: Equatable {
     var customerMix: NativeMoneyCustomerMixCard?
     /// Phase 27: hidden (nil) when there are no customers.
     var leadSources: NativeMoneyLeadSourceCard?
+    /// Phase 34: hidden (nil) unless at least one customer has a referrer.
+    var referrals: NativeMoneyReferralCard? = nil
     var invoiceAging: NativeMoneyInvoiceAgingCard
     var receivables: NativeMoneyReceivablesCard
     var funnel: NativeMoneyConversionFunnelCard
@@ -1072,6 +1125,9 @@ struct NativeMoneyOverview: Equatable {
             ),
             leadSources: NativeMoneyLeadSourceCard.make(
                 customers: customers, jobs: jobs, invoices: invoices, start: range.start, end: range.end
+            ),
+            referrals: NativeMoneyReferralCard.make(
+                customers: customers, invoices: invoices, start: range.start, end: range.end
             ),
             invoiceAging: NativeMoneyInvoiceAgingCard.make(invoices: invoices),
             receivables: NativeMoneyReceivablesCard.make(invoices: invoices, jobs: jobs, now: now),
