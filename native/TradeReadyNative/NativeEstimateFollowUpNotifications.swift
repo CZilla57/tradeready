@@ -429,7 +429,9 @@ extension NativeEstimateFollowUpNotificationCenter {
     }
 }
 
-/// Owns only the `est_` local-notification namespace. Other notification
+/// Owns only the `est_` local-notification namespace (Phase 32: including the
+/// `est_exp_<jobId>` expiry reminder, which shares the prefix, the
+/// `estimate_follow_up` tap type and the 60-request ceiling). Other notification
 /// families remain untouched, and the shared 60-request ceiling accounts for
 /// their already-pending requests before adding estimate follow-ups.
 ///

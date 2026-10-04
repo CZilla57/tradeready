@@ -11,6 +11,7 @@ swiftc \
   -framework Combine \
   -framework UserNotifications \
   "$ROOT_DIR/native/TradeReadyNative/Domain/CanonicalModels.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeQuoteExpiry.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeEstimateFollowUp.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeEstimateFollowUpNotifications.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeNotificationCategories.swift" \

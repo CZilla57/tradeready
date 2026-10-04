@@ -103,6 +103,11 @@ struct RecurringJobTests {
             expect(job.scheduledStartTime == nil && job.scheduledEndTime == nil, "occurrence has no time window")
             expect(job.photos == nil && job.timeSessions == nil, "occurrence inherits no photos or time")
             expect(job.approval == nil && job.changeOrders == nil, "occurrence inherits no approvals or change orders")
+            // Phase 32 (spec 2026-10-03 §3): an occurrence is never a sent
+            // estimate, so it carries no valid-until date or key.
+            expect(job.estimateSentAt == nil && job.estimateValidUntil == nil, "occurrence has no send stamp or valid-until date")
+            let occurrenceJSON = (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(job))) as? [String: Any]
+            expect(occurrenceJSON != nil && occurrenceJSON?["estimateValidUntil"] == nil, "occurrence JSON has no estimateValidUntil key")
             expectEqual(result.updatedRules.count, 1, "due rule reports one updated rule")
             let updated = result.updatedRules[0]
             expectEqual(updated.occurrenceCount, 2, "rule occurrence count advances")

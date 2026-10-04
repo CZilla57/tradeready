@@ -16,7 +16,9 @@ private struct NativeEstimateDeliveryNotice: Identifiable {
 struct NativeEstimateReviewView: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
-    let draft: NativeEstimateReviewDraft
+    /// Phase 32: rebuilt through the store when the owner changes the
+    /// valid-until date, so the snapshot, messages and PDF follow it.
+    @State private var draft: NativeEstimateReviewDraft
 
     @State private var channel: NativeEstimateMessageChannel
     @State private var emailSubject: String
@@ -35,9 +37,17 @@ struct NativeEstimateReviewView: View {
     @State private var deliveryNotice: NativeEstimateDeliveryNotice?
     @State private var copiedMessage = false
     @State private var showingRegenerateConfirmation = false
+    @State private var showingValidityEditor = false
+    @State private var lastChosenValidUntil: String?
+    /// Channels whose owner-edited message was kept across a date change.
+    @State private var staleEditedChannels: Set<NativeEstimateMessageChannel> = []
+    @State private var validityErrorMessage: String?
+    @State private var markSentErrorMessage: String?
+    @State private var linkErrorTitle = "Couldn’t create approval link"
 
     init(draft: NativeEstimateReviewDraft) {
-        self.draft = draft
+        _draft = State(initialValue: draft)
+        _lastChosenValidUntil = State(initialValue: draft.validUntil)
         let initial: NativeEstimateMessageChannel = draft.customerEmail.isEmpty && !draft.customerPhone.isEmpty
             ? .text : .email
         let preparedEmail = NativeEstimateMessageDrafting.prepare(review: draft, channel: .email)
@@ -70,6 +80,58 @@ struct NativeEstimateReviewView: View {
         )
     }
 
+    /// Once a link is minted in this sheet its date is the customer's; the
+    /// date can only change through a fresh review or "Extend" on the job.
+    private var validityLocked: Bool { approvalLink != nil || isCreatingLink }
+
+    private var validityToday: String { store.estimateValidityToday() }
+
+    private var validUntilText: String {
+        draft.validUntil.map { NativeQuoteExpiry.displayDate($0, style: .medium) } ?? "Doesn’t expire"
+    }
+
+    private var fallbackValidUntil: String {
+        NativeValidUntilPicker.fallback(
+            lastChosen: lastChosenValidUntil,
+            validityDays: store.settings.estimateValidityDays,
+            today: validityToday
+        )
+    }
+
+    private var doesNotExpireBinding: Binding<Bool> {
+        Binding(
+            get: { draft.validUntil == nil },
+            set: { doesNotExpire in
+                applyValidity(doesNotExpire ? .doesNotExpire : .date(fallbackValidUntil))
+            }
+        )
+    }
+
+    private var validUntilDateBinding: Binding<Date> {
+        Binding(
+            get: { NativeValidUntilPicker.date(from: draft.validUntil ?? fallbackValidUntil) ?? Date() },
+            set: { applyValidity(.date(NativeValidUntilPicker.ymd(from: $0))) }
+        )
+    }
+
+    /// The customer's current, unanswered approval link (a re-send).
+    private var undecidedLinkApproval: Canonical.EstimateApproval? {
+        guard let approval = store.activeEstimateApproval(jobID: draft.jobID),
+              approval.decision == nil
+        else { return nil }
+        return approval
+    }
+
+    /// §6.4: the existing link still shows a different date than this draft.
+    private var staleLinkDateNote: String? {
+        guard approvalLink == nil, let approval = undecidedLinkApproval,
+              approval.snapshot.validUntil != draft.validUntil
+        else { return nil }
+        let shown = approval.snapshot.validUntil
+            .map { NativeQuoteExpiry.displayDate($0, style: .medium) } ?? "no valid-until date"
+        return "The customer’s approval link still shows \(shown). Update the approval link so it matches."
+    }
+
     private var composerDraft: NativeAppointmentMessageDraft {
         .init(
             channel: channel == .email ? .email : .sms,
@@ -94,6 +156,7 @@ struct NativeEstimateReviewView: View {
                         LabeledContent("Total", value: money(draft.snapshot.total))
                             .font(.headline)
                     }
+                    validityRow
                     Button {
                         exportPDF()
                     } label: {
@@ -126,6 +189,11 @@ struct NativeEstimateReviewView: View {
                     TextEditor(text: visibleBodyBinding)
                         .frame(minHeight: 180)
                         .accessibilityLabel("Estimate message")
+                    if staleEditedChannels.contains(channel) {
+                        Text("Your edited message may mention the old date. Use Restore default message to update it.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                     HStack {
                         Button {
                             copyMessage()
@@ -152,10 +220,18 @@ struct NativeEstimateReviewView: View {
                                 .multilineTextAlignment(.trailing)
                         }
                     } else {
-                        Button("Create approval link", systemImage: "link") {
+                        Button(
+                            undecidedLinkApproval == nil ? "Create approval link" : "Update approval link",
+                            systemImage: "link"
+                        ) {
                             createApprovalLink()
                         }
                         .disabled(isCreatingLink)
+                        if let staleLinkDateNote {
+                            Text(staleLinkDateNote)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     Button {
                         if NativeMessageComposer.canPresent(composerDraft.channel) {
@@ -181,10 +257,18 @@ struct NativeEstimateReviewView: View {
                 if draft.expectedStatus == .lead {
                     Section {
                         Button("Mark estimate as sent", systemImage: "checkmark.circle") {
+                            // Only this attempt's refusal explains a failure.
+                            store.migrationMessage = nil
                             if store.markEstimateSent(
                                 id: draft.jobID,
-                                from: draft.expectedStatus
-                            ) { dismiss() }
+                                from: draft.expectedStatus,
+                                validUntil: draft.validUntil
+                            ) {
+                                dismiss()
+                            } else {
+                                markSentErrorMessage = store.migrationMessage
+                                    ?? "The estimate could not be marked sent. Nothing was changed."
+                            }
                         }
                     } footer: {
                         Text("Use this only after delivering the estimate. It starts the approval follow-up clock without claiming a message was sent automatically.")
@@ -218,7 +302,23 @@ struct NativeEstimateReviewView: View {
                      ? "Set up a Mail account on this device and try again."
                      : "Messages is not available on this device.")
             }
-            .alert("Couldn’t create approval link", isPresented: Binding(
+            .alert("Couldn’t change the date", isPresented: Binding(
+                get: { validityErrorMessage != nil },
+                set: { if !$0 { validityErrorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) { validityErrorMessage = nil }
+            } message: {
+                Text(validityErrorMessage ?? "Close this estimate and review it again.")
+            }
+            .alert("Couldn’t mark the estimate sent", isPresented: Binding(
+                get: { markSentErrorMessage != nil },
+                set: { if !$0 { markSentErrorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) { markSentErrorMessage = nil }
+            } message: {
+                Text(markSentErrorMessage ?? "Please try again.")
+            }
+            .alert(linkErrorTitle, isPresented: Binding(
                 get: { linkErrorMessage != nil },
                 set: { if !$0 { linkErrorMessage = nil } }
             )) {
@@ -320,6 +420,71 @@ struct NativeEstimateReviewView: View {
         }
     }
 
+    /// Phase 32 (spec §6.4): "Valid until" with the date or "Doesn't
+    /// expire"; expanding it shows the "Doesn't expire" toggle and a date
+    /// picker limited to today…today+365. Locked once a link is created here.
+    @ViewBuilder
+    private var validityRow: some View {
+        DisclosureGroup(isExpanded: Binding(
+            get: { showingValidityEditor && !validityLocked },
+            set: { showingValidityEditor = $0 }
+        )) {
+            Toggle("Doesn’t expire", isOn: doesNotExpireBinding)
+            if draft.validUntil != nil {
+                DatePicker(
+                    "Valid-until date",
+                    selection: validUntilDateBinding,
+                    in: NativeValidUntilPicker.range(today: validityToday),
+                    displayedComponents: .date
+                )
+            }
+            Text("Customers can’t approve the estimate online after this date.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        } label: {
+            LabeledContent("Valid until", value: validUntilText)
+        }
+        .disabled(validityLocked)
+        .accessibilityHint(validityLocked
+            ? "The approval link was created with this date."
+            : "Shows options to change the date the customer can approve this estimate until.")
+    }
+
+    /// Changes the draft's date through the store. Only the date and its
+    /// zone change: the prices and names stay the ones the owner reviewed
+    /// (review fix 2026-10-03), so the send-time guards still catch a newer
+    /// estimate. Messages the owner has not edited are regenerated; edited
+    /// ones keep their text and get a footnote.
+    private func applyValidity(_ choice: NativeEstimateValidUntilChoice) {
+        guard !validityLocked else { return }
+        let requested: String? = if case .date(let date) = choice { date } else { nil }
+        guard requested != draft.validUntil else { return }
+        store.migrationMessage = nil
+        guard let rebuilt = store.estimateReviewDraft(draft, changingValidUntilTo: choice) else {
+            validityErrorMessage = store.migrationMessage
+                ?? "The estimate could not be updated. Close it and review it again."
+            return
+        }
+        if let requested { lastChosenValidUntil = requested }
+        let oldEmail = NativeEstimateMessageDrafting.prepare(review: draft, channel: .email)
+        let oldText = NativeEstimateMessageDrafting.prepare(review: draft, channel: .text)
+        let newEmail = NativeEstimateMessageDrafting.prepare(review: rebuilt, channel: .email)
+        let newText = NativeEstimateMessageDrafting.prepare(review: rebuilt, channel: .text)
+        draft = rebuilt
+        if emailSubject == oldEmail.subject && emailBody == oldEmail.body {
+            emailSubject = newEmail.subject
+            emailBody = newEmail.body
+        } else if newEmail != oldEmail {
+            staleEditedChannels.insert(.email)
+        }
+        if textBody == oldText.body {
+            textBody = newText.body
+        } else if newText.body != oldText.body {
+            staleEditedChannels.insert(.text)
+        }
+        copiedMessage = false
+    }
+
     private func addOnAccessibilityLabel(_ addOn: Canonical.EstimateApprovalSnapshot.OptionAddOn) -> String {
         var parts = ["Optional add-on: \(addOn.label)", "adds \(money(addOn.amount))"]
         if let description = addOn.description, !description.isEmpty { parts.append(description) }
@@ -366,6 +531,7 @@ struct NativeEstimateReviewView: View {
         } else {
             textBody = prepared.body
         }
+        staleEditedChannels.remove(channel)
         copiedMessage = false
     }
 
@@ -442,6 +608,10 @@ struct NativeEstimateReviewView: View {
     }
 
     private func createApprovalLink() {
+        guard !isCreatingLink else { return }
+        linkErrorTitle = undecidedLinkApproval == nil
+            ? "Couldn’t create approval link" : "Couldn’t update approval link"
+        showingValidityEditor = false
         isCreatingLink = true
         Task {
             let outcome = await store.createEstimateApprovalLink(for: draft)

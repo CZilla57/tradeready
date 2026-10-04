@@ -29,7 +29,10 @@ function planDeclinedEstimateRevision(job, expectedToken) {
   }
 
   const nextHistory = archived ? history.slice() : [...history, active];
-  const { approval: _approval, estimateSentAt: _estimateSentAt, ...rest } = job;
+  // Phase 32: the revised estimate is a new offer, so the old valid-until
+  // date goes too. (The dormant Vercel twin deliberately lacks this; see
+  // tests/estimateRevision.test.cjs.)
+  const { approval: _approval, estimateSentAt: _estimateSentAt, estimateValidUntil: _estimateValidUntil, ...rest } = job;
   return {
     changed: true,
     job: { ...rest, status: 'lead', approvalHistory: nextHistory },

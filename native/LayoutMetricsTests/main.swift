@@ -403,6 +403,8 @@ let scrollRootInventory: [String: Int] = [
     "JobsView.swift|JobsView|List": 1,
     "JobsView.swift|JobDetailView|List": 1,
     "JobsView.swift|JobEditor|Form": 1,
+    // Phase 32: job detail › "Extend estimate…" / "Change valid-until date…".
+    "JobsView.swift|NativeEstimateValidityEditorView|Form": 1,
     "MoneyView.swift|MoneyView|ScrollView": 1,
     "MoneyView.swift|MoneyView|List": 1,
     "NativeAuthView.swift|NativeAuthView|ScrollView": 1,
