@@ -595,12 +595,13 @@ describe('estimate view handler', () => {
     assert.deepEqual(approved.body.selection, selection);
   });
 
-  test('legacy view keeps its keys and gains only the digest', async () => {
+  test('legacy view keeps its keys and gains only the digest and expired flag', async () => {
     installDb(jobRow(legacySnapshot()));
     const res = await estimateViewHandler(fakeC({ method: 'GET', query: { j: 'job-1', t: TOKEN } }));
     assert.deepEqual(Object.keys(res.body).sort(), [
-      ...Object.keys(legacySnapshot()), 'consentAt', 'decision', 'signatureRequired', 'signerName', 'snapshotDigest',
+      ...Object.keys(legacySnapshot()), 'consentAt', 'decision', 'expired', 'signatureRequired', 'signerName', 'snapshotDigest',
     ].sort());
+    assert.equal(res.body.expired, false);
   });
 });
 

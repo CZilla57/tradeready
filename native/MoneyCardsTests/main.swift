@@ -751,6 +751,42 @@ private func testLeadSourceCard() {
     expectEqual(NativeMoneyLeadSourceCard.closeRateText(Decimal(2) / Decimal(3)), "67%", "lead sources: close rate rounds")
 }
 
+// MARK: - Referrals (Phase 34)
+
+private func testReferralCard() {
+    let invoices = [
+        invoice(#"{"id":"a","customer":"Alex","customerId":"c_alex","amount":1800,"due":"2026-03-01","paid":true,"paidAt":"2026-03-05"}"#),
+        invoice(#"{"id":"b","customer":"Bea","customerId":"c_bea","amount":600,"due":"2026-03-01","paid":true,"paidAt":"2026-03-06"}"#),
+    ]
+    let customers = [
+        customer(#"{"id":"c_sam","name":"Sam Ortiz","createdAt":"2025-01-01"}"#),
+        customer(#"{"id":"c_alex","name":"Alex","leadSource":"referral","referredByCustomerId":"c_sam","createdAt":"2026-03-02","referralReward":{"kind":"invoice_credit","amount":25,"recordedOn":"2026-03-09"}}"#),
+        customer(#"{"id":"c_bea","name":"Bea","leadSource":"referral","createdAt":"2026-01-02"}"#),
+    ]
+    func overview(_ customers: [Canonical.Customer]) -> NativeMoneyOverview {
+        NativeMoneyOverview.make(
+            filter: .thisMonth, invoices: invoices, expenses: [], jobs: [],
+            trips: [], pricebook: [], taxValues: NativeTaxSettingsValues(),
+            mileageRate: decimal("0.7"), laborCostRate: nil, customers: customers, now: march10
+        )
+    }
+    let withoutReferrer = [customer(#"{"id":"c_bea","name":"Bea","leadSource":"referral"}"#)]
+    expectEqual(overview(withoutReferrer).referrals, nil, "referrals: hidden unless a customer has a referrer")
+    expectEqual(overview([]).referrals, nil, "referrals: hidden with no customers")
+    guard let card = overview(customers).referrals else {
+        expect(false, "referrals: present once a customer has a referrer")
+        return
+    }
+    expectEqual(card.rows.map(\.name), ["Sam Ortiz", "Referrer not recorded"], "referrals: referrers first, catch-alls last")
+    expectEqual(card.rows[0].detailText, "1 new \u{00B7} 1 total", "referrals: new and total referred")
+    expectEqual(card.rows[0].collectedText, "$1,800.00", "referrals: collected in the window")
+    expectEqual(card.rows[0].accessibilityLabel,
+                "Sam Ortiz: 1 new referred customer, 1 referred in total, $1,800.00 collected", "referrals: spoken summary")
+    expectEqual(card.rows[1].isCatchAll, true, "referrals: the catch-all row is flagged")
+    expectEqual(card.footerText, "Rewards recorded: 1 ($25.00)", "referrals: rewards recorded in the window")
+    expectEqual(NativeMoneyReferralCard.title, "Referrals", "referrals: title")
+}
+
 // MARK: - Runner
 
 testFormatting()
@@ -774,6 +810,7 @@ testExpenseListRows()
 testOverviewState()
 testOverviewComposition()
 testLeadSourceCard()
+testReferralCard()
 
 if failures == 0 {
     print("MoneyCardsTests: all checks passed")

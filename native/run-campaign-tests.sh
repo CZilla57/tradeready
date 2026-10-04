@@ -14,6 +14,7 @@ MODULE_CACHE="${TMPDIR:-/tmp}/tradeready-campaign-module-cache"
 swiftc \
   -module-cache-path "$MODULE_CACHE" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/CanonicalModels.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeQuoteExpiry.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/BusinessRules.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/FinancialDomain.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeChangeOrders.swift" \
@@ -28,6 +29,8 @@ swiftc \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeServiceHistory.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeTodayInsights.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeLeadSource.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeReferrals.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativePropertiesEquipment.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeCustomerTags.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeAttributionCode.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeCampaignMessage.swift" \

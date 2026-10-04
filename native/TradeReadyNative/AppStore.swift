@@ -107,6 +107,124 @@ enum NativeEstimateRevisionOutcome: Equatable {
     case failure(NativeEstimateApprovalLinkError)
 }
 
+/// Phase 32 (spec 2026-10-03 §6.4): the owner's valid-until choice in the
+/// estimate review sheet. A review built without one proposes the default
+/// (`NativeQuoteExpiry.proposedValidUntil`).
+enum NativeEstimateValidUntilChoice: Equatable {
+    /// A local `YYYY-MM-DD`, inclusive, in today…today+365.
+    case date(String)
+    case doesNotExpire
+}
+
+/// Phase 32 (spec §6.5): the result of `AppStore.extendEstimateValidity`.
+enum NativeEstimateExtensionOutcome: Equatable {
+    /// `link` is the customer's existing approval link (same token, so the
+    /// same URL) when the estimate has one; `nil` for a local-only change.
+    case extended(link: URL?)
+    case failure(NativeEstimateExtensionError)
+}
+
+enum NativeEstimateExtensionError: LocalizedError, Equatable {
+    /// Not a sent estimate any more, or the customer already decided.
+    case notEligible
+    /// The date is outside today…today+365.
+    case invalidDate
+    /// The canonical estimate no longer matches what the customer's link
+    /// shows (prices, items, names), so only a re-issue may change it.
+    case pricingChanged
+    /// Refreshing the approval link failed; nothing on the device changed.
+    case link(NativeEstimateApprovalLinkError)
+    /// The device could not save. `linkUpdated` is true when the approval
+    /// link already shows the new date.
+    case notSaved(linkUpdated: Bool)
+
+    var errorDescription: String? {
+        switch self {
+        case .notEligible:
+            "The customer already responded to this estimate."
+        case .invalidDate:
+            "Choose a date between today and one year from today."
+        case .pricingChanged:
+            "This estimate changed after it was sent. Review and resend it so the customer sees the new version and date."
+        case .link(let error):
+            error.errorDescription
+        case .notSaved(let linkUpdated):
+            linkUpdated
+                ? "The approval link shows the new date, but this device couldn't save it. Refresh the job before trying again."
+                : "The new date could not be saved. Nothing was changed."
+        }
+    }
+}
+
+/// Phase 32 (spec 2026-10-03 §6.5): what the job-detail alert reports after
+/// a successful `extendEstimateValidity`. Kept beside the store (not in the
+/// view) so the host suite pins its copy.
+struct NativeEstimateExtensionResult: Identifiable, Equatable {
+    let id = UUID()
+    let jobID: String
+    let previousValidUntil: String?
+    let validUntil: String?
+    let link: URL?
+    let wasExpired: Bool
+
+    /// The customer gets more time (a later date, no limit, or a fresh
+    /// date on an expired estimate). Only then is there "good news" to send.
+    var isExtension: Bool {
+        if wasExpired { return true }
+        return switch (previousValidUntil, validUntil) {
+        case (_, nil): previousValidUntil != nil
+        case (nil, _): false
+        case let (previous?, next?): next > previous
+        }
+    }
+
+    /// "Estimate extended" for an extension; a plain date change otherwise.
+    var title: String { isExtension ? "Estimate extended" : "Valid-until date changed" }
+
+    var message: String {
+        let date = validUntil.map { "Valid until \(NativeQuoteExpiry.displayDate($0, style: .medium))." }
+            ?? "This estimate no longer expires."
+        guard link != nil else { return date }
+        return date + (wasExpired
+            ? " The customer’s approval link works again."
+            : " The customer’s approval link shows the new date.")
+    }
+}
+
+extension NativeEstimateReviewDraft {
+    /// Phase 32 (spec §6.4): the reviewed valid-until date. It is read from
+    /// the frozen snapshot the draft was built with, so the date the owner
+    /// sends, stamps and mints can never disagree with that snapshot.
+    var validUntil: String? { snapshot.validUntil }
+
+    /// The IANA zone the date is evaluated in (the device zone when the draft
+    /// was built). Meaningful only with a `validUntil`.
+    var validUntilTimeZone: String { snapshot.validUntilTimeZone ?? TimeZone.current.identifier }
+
+    /// The same reviewed draft with only the snapshot's validity replaced:
+    /// the date with the device zone (spec §2.5), or neither key for
+    /// "Doesn't expire". See `AppStore.estimateReviewDraft(_:changingValidUntilTo:now:)`.
+    func withValidity(_ validUntil: String?) -> NativeEstimateReviewDraft {
+        var frozen = snapshot
+        frozen.validUntil = validUntil
+        frozen.validUntilTimeZone = validUntil == nil ? nil : TimeZone.current.identifier
+        return NativeEstimateReviewDraft(
+            jobID: jobID,
+            expectedStatus: expectedStatus,
+            snapshot: frozen,
+            customerEmail: customerEmail,
+            customerPhone: customerPhone,
+            customerAddress: customerAddress,
+            businessContactName: businessContactName,
+            businessPhone: businessPhone,
+            businessEmail: businessEmail,
+            businessAddress: businessAddress,
+            businessLogoReference: businessLogoReference,
+            jobDescription: jobDescription
+        )
+    }
+}
+
 enum NativeChangeOrderApprovalLinkOutcome: Equatable {
     case success(NativeChangeOrderApprovalLink)
     case failure(NativeChangeOrderApprovalLinkError)
@@ -283,6 +401,13 @@ final class AppStore: ObservableObject {
     @Published private(set) var stripeConnectStatus: NativeStripeConnectStatus?
     @Published private(set) var stripeConnectLoading = false
     @Published private(set) var stripeConnectError: String?
+    /// Phase 24 §6.3: the Worker's autopay enrollments and charge rows for
+    /// this owner, in memory only (server-owned, never persisted or synced).
+    /// nil until the first successful read; a failed read keeps the last one.
+    @Published private(set) var autopayStatus: NativeAutopayStatusSnapshot?
+    @Published private(set) var autopayStatusError: String?
+    /// Enrollments with a remove request in flight (no double submit).
+    @Published private(set) var autopayRemovalsInFlight: Set<String> = []
     /// Phase 12 (12.00b.1, I2; owner decision D3): the changes the server
     /// refused that are waiting for Retry or Discard in Settings › Cloud Sync.
     @Published private(set) var rejectedChanges: [NativeRejectedChange] = []
@@ -520,6 +645,13 @@ final class AppStore: ObservableObject {
     private let injectedEstimateApprovalLinkService: (any NativeEstimateApprovalLinking)?
     private let injectedChangeOrderApprovalLinkService: (any NativeChangeOrderApprovalLinking)?
     private let injectedInvoiceDeliveryService: (any NativeInvoiceDelivering)?
+    private let injectedAutopayService: (any NativeAutopayServing)?
+    private var autopayStatusFetchedAt: Date?
+    /// Every status read and every local removal takes the next number; a
+    /// read applies only while it is still the newest, so a read that began
+    /// before a removal can't bring the removed card back.
+    private var autopayReadSequence: UInt64 = 0
+    private var autopayReadsInFlight = 0
     /// Advisory receipt-OCR / pricebook-suggestion transport. Injected so tests
     /// and previews never touch the network; defaults to the live client-key +
     /// backend-bearer implementation.
@@ -657,6 +789,7 @@ final class AppStore: ObservableObject {
         estimateApprovalLinkService: (any NativeEstimateApprovalLinking)? = nil,
         changeOrderApprovalLinkService: (any NativeChangeOrderApprovalLinking)? = nil,
         invoiceDeliveryService: (any NativeInvoiceDelivering)? = nil,
+        autopayService: (any NativeAutopayServing)? = nil,
         advisoryAITransport: (any NativeAdvisoryAITransport)? = nil,
         coachTransport: NativeCoachTransport? = nil,
         analytics: NativeAnalytics = NativeNoOpAnalytics(),
@@ -688,6 +821,7 @@ final class AppStore: ObservableObject {
         self.injectedEstimateApprovalLinkService = estimateApprovalLinkService
         self.injectedChangeOrderApprovalLinkService = changeOrderApprovalLinkService
         self.injectedInvoiceDeliveryService = invoiceDeliveryService
+        self.injectedAutopayService = autopayService
         self.advisoryAITransport = advisoryAITransport ?? NativeAITransport.live()
         self.coachTransport = coachTransport ?? NativeCoachTransport(backendBaseURL: BuildEnvironment.backendBaseURL)
         self.migrationJournal = Canonical.MigrationJournal(
@@ -1245,7 +1379,15 @@ final class AppStore: ObservableObject {
         return NativeJobPricingDraft(job: job, settings: snapshot.payload.settings)
     }
 
-    func estimateReviewDraft(jobID: String) -> NativeEstimateReviewDraft? {
+    /// Phase 32 (spec 2026-10-03 §3, §6.4): without a `validUntil` choice the
+    /// draft proposes the default date (a lead ignores any stale date; a
+    /// re-send keeps a still-valid one). The date and the device zone are
+    /// frozen into the snapshot. Building a draft never writes the job.
+    func estimateReviewDraft(
+        jobID: String,
+        validUntil choice: NativeEstimateValidUntilChoice? = nil,
+        now: Date = .now
+    ) -> NativeEstimateReviewDraft? {
         guard let job = snapshot.payload.jobs?.first(where: { $0.id == jobID }),
               let status = JobStatus(rawValue: job.status)
         else { return nil }
@@ -1254,16 +1396,41 @@ final class AppStore: ObservableObject {
             customerID: job.customerId,
             customerName: job.customerName
         )
+        let today = estimateValidityToday(now: now)
+        let validUntil: String?
+        switch choice {
+        case nil:
+            validUntil = NativeQuoteExpiry.proposedValidUntil(
+                job: job,
+                validityDays: NativeQuoteExpiry.validityDays(snapshot.payload.settings),
+                today: today
+            )
+        case .doesNotExpire:
+            validUntil = nil
+        case .date(let date):
+            guard NativeQuoteExpiry.isSelectable(date, today: today) else {
+                migrationMessage = NativeEstimateExtensionError.invalidDate.errorDescription
+                return nil
+            }
+            validUntil = date
+        }
         do {
             let reviewedSnapshot = try CanonicalUIAdapters.estimateApprovalSnapshot(
                 job: job,
                 customerName: customer?.name,
-                businessName: settings.businessName
+                businessName: settings.businessName,
+                validUntil: validUntil,
+                validUntilTimeZone: validUntil == nil ? nil : TimeZone.current.identifier
             )
+            // A fresh date alone is not a revision (spec §6.1).
             if status == .lead,
                job.approval == nil,
                let declined = job.approvalHistory?.last(where: { $0.decision == "declined" }),
-               CanonicalUIAdapters.estimateApprovalSnapshotsMatch(reviewedSnapshot, declined.snapshot) {
+               CanonicalUIAdapters.estimateApprovalSnapshotsMatch(
+                   reviewedSnapshot,
+                   declined.snapshot,
+                   ignoringValidity: true
+               ) {
                 migrationMessage = "Revise the declined estimate before sending it again. The previous customer decision is preserved in estimate history."
                 return nil
             }
@@ -1279,7 +1446,10 @@ final class AppStore: ObservableObject {
                 businessEmail: settings.email,
                 businessAddress: settings.address,
                 businessLogoReference: snapshot.payload.settings?.logoPhoto,
-                jobDescription: job.description
+                jobDescription: job.description,
+                serviceAddress: NativePropertiesEquipment.serviceAddressLine(
+                    jobAddress: job.address, customerAddress: customer?.address ?? ""
+                ) ?? ""
             )
         } catch {
             migrationMessage = "The estimate could not be prepared. Nothing was changed."
@@ -1312,7 +1482,7 @@ final class AppStore: ObservableObject {
         let rows = (snapshot.payload.jobs ?? []).compactMap { job -> String? in
             guard job.status == "estimate_sent" else { return nil }
             let sent = job.estimateSentAt ?? job.approval?.sentAt ?? ""
-            return "\(job.id)|\(sent)|\(job.archivedAt ?? "")|\(job.customerName)|\(job.title)"
+            return "\(job.id)|\(sent)|\(job.archivedAt ?? "")|\(job.customerName)|\(job.title)|\(job.estimateValidUntil ?? "")"
         }
         // appt_: title/body use the resolved customer's name (hashed via
         // appointmentContacts below); the job row itself needs status
@@ -1620,8 +1790,10 @@ final class AppStore: ObservableObject {
                 return nil
             }
             let changeOrderDelta = JobInvoiceDomain.approvedChangeOrderTotal(changeOrderMirrors(job))
-            let amount = changeOrderDelta != 0 ? billableBreakdown(for: job).total : existing.amount
-            return NativeInvoiceFromJobDraft(
+            // Phase 34: a re-derived amount keeps the credits already applied.
+            let appliedCredit = JobInvoiceDomain.referralCreditTotal(Self.lineDrafts(of: existing))
+            let amount = changeOrderDelta != 0 ? billableBreakdown(for: job).total + appliedCredit : existing.amount
+            var draft = NativeInvoiceFromJobDraft(
                 jobID: jobID, mode: .finalize, existingInvoiceID: invoiceID,
                 customer: existing.customer, customerID: existing.customerId ?? "",
                 number: existing.number, amount: amount, due: JobInvoiceDomain.defaultDueDate(),
@@ -1629,12 +1801,15 @@ final class AppStore: ObservableObject {
                 billedFromTracked: false, finalizeChangeOrderDelta: changeOrderDelta,
                 prefillReferenceAmount: 0
             )
+            draft.referralCreditAvailable = invoiceLineDrafts(for: job).isEmpty
+                ? 0 : referralCreditOwed(customerId: existing.customerId, name: existing.customer)
+            return draft
         }
 
         let customer = NativeCustomerIdentity.resolve(customers: customers, customerID: job.customerId, customerName: job.customerName)
         let breakdown = billableBreakdown(for: job)
         let changeOrderTotal = JobInvoiceDomain.approvedChangeOrderTotal(changeOrderMirrors(job))
-        return NativeInvoiceFromJobDraft(
+        var draft = NativeInvoiceFromJobDraft(
             jobID: jobID, mode: mode, existingInvoiceID: nil,
             customer: job.customerName, customerID: customer?.id ?? job.customerId,
             number: nextInvoiceNumber(), amount: breakdown.total, due: JobInvoiceDomain.defaultDueDate(),
@@ -1645,6 +1820,11 @@ final class AppStore: ObservableObject {
             // job estimate" banner quotes, not the tracked-time-aware `amount`.
             prefillReferenceAmount: job.estimateTotal + changeOrderTotal
         )
+        // Phase 34 (spec §5.6): offered on a full invoice only, never a deposit.
+        if mode == .create, !invoiceLineDrafts(for: job).isEmpty {
+            draft.referralCreditAvailable = referralCreditOwed(customerId: customer?.id ?? job.customerId, name: job.customerName)
+        }
+        return draft
     }
 
     /// Commits a create/requestDeposit/finalize invoice draft atomically with
@@ -1676,7 +1856,30 @@ final class AppStore: ObservableObject {
                 return false
             }
 
-            let lineItems = try CanonicalUIAdapters.invoiceLineItems(from: invoiceLineDrafts(for: job))
+            // Phase 34 (spec §5.6): a finalize recompute keeps applied
+            // referral credits, and a credit the owner turned on is re-checked
+            // against what is owed now.
+            let jobLineDrafts = invoiceLineDrafts(for: job)
+            let existingInvoice = draft.mode == .finalize
+                ? updated.payload.invoices?.first(where: { $0.id == draft.existingInvoiceID }) : nil
+            if draft.referralCreditToApply != 0 {
+                let owed = referralCreditOwed(
+                    customerId: draft.customerID.isEmpty ? existingInvoice?.customerId : draft.customerID,
+                    name: draft.customer
+                )
+                guard draft.mode != .requestDeposit, !jobLineDrafts.isEmpty, draft.referralCreditToApply > 0,
+                      draft.amount > 0, draft.referralCreditToApply <= owed
+                else {
+                    migrationMessage = "The referral credit changed while this invoice was open. Review it again before saving."
+                    return false
+                }
+            }
+            let lineItems = try CanonicalUIAdapters.invoiceLineItems(from: jobLineDrafts.isEmpty ? [] :
+                JobInvoiceDomain.appendingReferralCredit(
+                    jobLineDrafts,
+                    existingInvoiceLines: existingInvoice.map(Self.lineDrafts(of:)) ?? [],
+                    credit: draft.referralCreditToApply
+                ))
             var invoiceRecords = updated.payload.invoices ?? []
             let resultInvoice: Canonical.Invoice
             let invoicePaid: Bool
@@ -2148,6 +2351,168 @@ final class AppStore: ObservableObject {
         }
     }
 
+    // MARK: - Phase 24 autopay status and controls (spec §6.3)
+
+    private func configuredAutopayService() -> (any NativeAutopayServing)? {
+        if let injectedAutopayService { return injectedAutopayService }
+        guard let status = try? BuildEnvironment.endpoint("api/autopay/status", sendsUserData: true),
+              let manage = try? BuildEnvironment.endpoint("api/autopay/manage", sendsUserData: true)
+        else { return nil }
+        return NativeAutopayService(statusEndpoint: status, manageEndpoint: manage)
+    }
+
+    /// The owner identity an autopay read or write belongs to. Rechecked
+    /// across every await so one owner's cards never land under another.
+    private struct AutopayOwnerFence: Equatable {
+        let subject: String?
+        let binding: String?
+        let boundary: UInt64
+    }
+
+    private var autopayOwnerFence: AutopayOwnerFence {
+        AutopayOwnerFence(subject: authenticatedUserSubject, binding: verifiedAccountBinding, boundary: accountBoundaryGeneration)
+    }
+
+    /// Reads autopay status: on foreground at most every 10 minutes (and
+    /// not while another read runs), on opening the plans list, and after a
+    /// remove. Skipped without plans, a sign-in or a configured backend. One
+    /// verified session-refresh retry on a rejected session. Returns whether
+    /// a fresh status was applied.
+    @discardableResult
+    func refreshAutopayStatus(trigger: NativeAutopayRefreshTrigger, now: Date = Date()) async -> Bool {
+        guard !(trigger == .foreground && autopayReadsInFlight > 0),
+              !recurringInvoiceRules.isEmpty,
+              NativeAutopay.shouldRefresh(trigger, lastFetchedAt: autopayStatusFetchedAt, now: now),
+              authenticatedUserSubject != nil,
+              let service = configuredAutopayService(),
+              let credentials = currentSyncCredentials()
+        else { return false }
+        autopayReadsInFlight += 1
+        defer { autopayReadsInFlight -= 1 }
+        autopayReadSequence &+= 1
+        let sequence = autopayReadSequence
+        let fence = autopayOwnerFence
+        func isCurrent() -> Bool { autopayOwnerFence == fence && autopayReadSequence == sequence }
+        let unavailable = "Autopay status couldn't be loaded. Plans show their own settings until it can."
+        do {
+            let fresh = try await service.status(sessionBytes: credentials.sessionBytes)
+            guard isCurrent() else { return false }
+            applyAutopayStatus(fresh, at: now)
+            return true
+        } catch NativeAutopayServiceError.rejectedSession {
+            guard await refreshSyncSession(), isCurrent(), let retry = currentSyncCredentials() else {
+                if isCurrent() { autopayStatusError = "Your session expired. Sign in again to see autopay status." }
+                return false
+            }
+            do {
+                let fresh = try await service.status(sessionBytes: retry.sessionBytes)
+                guard isCurrent() else { return false }
+                applyAutopayStatus(fresh, at: now)
+                return true
+            } catch {
+                if isCurrent() { autopayStatusError = unavailable }
+                return false
+            }
+        } catch {
+            if isCurrent() { autopayStatusError = unavailable }
+            return false
+        }
+    }
+
+    private func applyAutopayStatus(_ fresh: NativeAutopayStatusSnapshot, at now: Date) {
+        autopayStatus = fresh
+        autopayStatusError = nil
+        autopayStatusFetchedAt = now
+    }
+
+    enum AutopayRemoveOutcome: Equatable {
+        case removed
+        /// A remove for this card is already running; nothing was sent.
+        case alreadyInProgress
+        case failed(String)
+    }
+
+    /// "Remove saved card": revokes the enrollment as the owner on the
+    /// Worker (which detaches the card on Stripe and emails the customer),
+    /// marks it removed in memory at once, then rereads status.
+    func removeAutopayCard(enrollmentID: String) async -> AutopayRemoveOutcome {
+        guard !autopayRemovalsInFlight.contains(enrollmentID) else { return .alreadyInProgress }
+        guard let service = configuredAutopayService(), let credentials = currentSyncCredentials() else {
+            return .failed("Removing a saved card needs an internet connection and an active sign-in.")
+        }
+        autopayRemovalsInFlight.insert(enrollmentID)
+        defer { autopayRemovalsInFlight.remove(enrollmentID) }
+        let fence = autopayOwnerFence
+        let failure = "The card couldn't be removed. Check your connection and try again."
+        func finish() async -> AutopayRemoveOutcome {
+            guard autopayOwnerFence == fence else { return .failed(failure) }
+            // Discard any read that began before the removal, show the card
+            // removed at once, then confirm with a fresh read.
+            autopayReadSequence &+= 1
+            autopayStatus = autopayStatus?.markingRemoved(enrollmentID: enrollmentID, at: Date())
+            await refreshAutopayStatus(trigger: .afterRemove)
+            return .removed
+        }
+        do {
+            try await service.removeCard(enrollmentID: enrollmentID, sessionBytes: credentials.sessionBytes)
+            return await finish()
+        } catch NativeAutopayServiceError.rejectedSession {
+            guard await refreshSyncSession(), autopayOwnerFence == fence, let retry = currentSyncCredentials() else {
+                return .failed("Your session expired. Sign in again to remove the card.")
+            }
+            do {
+                try await service.removeCard(enrollmentID: enrollmentID, sessionBytes: retry.sessionBytes)
+                return await finish()
+            } catch {
+                return .failed(failure)
+            }
+        } catch NativeAutopayServiceError.notFound {
+            if autopayOwnerFence == fence { await refreshAutopayStatus(trigger: .afterRemove) }
+            return .failed("This card is no longer on file. The list has been refreshed.")
+        } catch {
+            return .failed(failure)
+        }
+    }
+
+    /// The plan facts autopay status reads.
+    private static func autopayPlanFacts(_ rule: Canonical.RecurringInvoice) -> NativeAutopayPlanFacts {
+        NativeAutopayPlanFacts(id: rule.id, customerId: rule.customerId, autopayEnabled: rule.autopayEnabled == true)
+    }
+
+    private func autopayInvoiceFacts(_ record: Canonical.Invoice) -> NativeAutopayInvoiceFacts {
+        NativeAutopayInvoiceFacts(
+            id: record.id,
+            recurringInvoiceId: record.recurringInvoiceId,
+            due: record.due,
+            balanceDue: Self.ledgerBalance(record),
+            customerName: record.customer,
+            isImported: record.importBatchId != nil)
+    }
+
+    /// One plan's autopay status for its list row and actions.
+    func autopayPlanStatus(planID: String) -> NativeAutopayPlanStatus {
+        guard let rule = recurringInvoiceRules.first(where: { $0.id == planID }) else { return .off }
+        let planInvoices = (snapshot.payload.invoices ?? [])
+            .filter { $0.recurringInvoiceId == planID }
+            .map(autopayInvoiceFacts)
+        return NativeAutopay.planStatus(plan: Self.autopayPlanFacts(rule), invoices: planInvoices, snapshot: autopayStatus)
+    }
+
+    /// The plan's active enrollment (a saved card), if any.
+    func autopayActiveEnrollment(planID: String) -> NativeAutopayEnrollment? {
+        autopayStatus?.activeEnrollment(planID: planID)
+    }
+
+    /// The invoice-detail banner for a plan invoice, or nil.
+    func autopayInvoiceBanner(invoiceID: String, now: Date = Date()) -> NativeAutopayInvoiceBanner? {
+        guard let record = snapshot.payload.invoices?.first(where: { $0.id == invoiceID }),
+              let planID = record.recurringInvoiceId
+        else { return nil }
+        let plan = recurringInvoiceRules.first(where: { $0.id == planID }).map(Self.autopayPlanFacts)
+        return NativeAutopay.invoiceBanner(
+            invoice: autopayInvoiceFacts(record), plan: plan, snapshot: autopayStatus, now: now)
+    }
+
     /// A bulk settlement's result. P12-008 review (fix round 1, R41):
     /// `failure` says why nothing was settled when the commit did not happen
     /// (writes are blocked, or the save failed), so the Invoices list never
@@ -2284,16 +2649,23 @@ final class AppStore: ObservableObject {
         guard let service = configuredInvoiceDeliveryService(), let credentials = currentSyncCredentials() else {
             throw NativeInvoiceDeliveryError.invalidConfiguration
         }
-        // Recheck the request across the network await so a concurrent
-        // payment cannot leave a stale-amount link persisted as current.
+        // Phase 24 §6.1: a request may be the full balance or a deposit below
+        // it, never above it. Refused before the mint, so nothing is created
+        // on the owner's Stripe account for a request that can't be used.
+        let epsilon = NativeInvoicePaymentLinks.epsilon
+        let balanceBefore = NSDecimalNumber(decimal: PaymentLedger.balanceDue(Self.ledgerInvoice(record))).doubleValue
+        guard requested <= balanceBefore + epsilon else { throw NativeInvoiceDeliveryError.invalidAmount }
+        // Recheck across the network await: a payment that arrived meanwhile
+        // (the balance moved) refuses the link, so a stale-amount link is
+        // never persisted as current. The old check compared the request to
+        // the latest balance, which refused every deposit after minting it.
         let owner = authenticatedUserSubject
         let url = try await service.createPaymentLink(invoice: record, amount: amount, sessionBytes: credentials.sessionBytes)
         guard authenticatedUserSubject == owner,
               let latest = snapshot.payload.invoices?.first(where: { $0.id == invoiceID })
         else { throw NativeInvoiceDeliveryError.rejectedSession }
-        let latestBalance = PaymentLedger.balanceDue(Self.ledgerInvoice(latest))
-        let latestBalanceDouble = NSDecimalNumber(decimal: latestBalance).doubleValue
-        guard abs(latestBalanceDouble - requested) <= NativeInvoicePaymentLinks.epsilon else {
+        let latestBalance = NSDecimalNumber(decimal: PaymentLedger.balanceDue(Self.ledgerInvoice(latest))).doubleValue
+        guard abs(latestBalance - balanceBefore) <= epsilon, requested <= latestBalance + epsilon else {
             throw NativeInvoiceDeliveryError.invalidAmount
         }
         var updated = latest
@@ -2487,14 +2859,24 @@ final class AppStore: ObservableObject {
     /// Marks a reviewed lead estimate as sent only if the canonical job still
     /// has the status shown when the review opened. This is a local-first stamp:
     /// the snapshot commits before the UI reports success or queues the upsert.
+    ///
+    /// Phase 32 (spec §3, §6.4): `validUntil` is the review draft's date
+    /// (`nil` = doesn't expire). It is written with the stamp, and a date that
+    /// is no longer selectable (the sheet stayed open past it) is refused.
     @discardableResult
     func markEstimateSent(
         id: String,
         from expectedStatus: JobStatus,
+        validUntil: String? = nil,
         on date: Date = .now
     ) -> Bool {
         guard expectedStatus == .lead else { return false }
-        guard stampEstimateSent(id: id, from: expectedStatus, on: date) else { return false }
+        if let validUntil,
+           !NativeQuoteExpiry.isSelectable(validUntil, today: estimateValidityToday(now: date)) {
+            migrationMessage = "The valid-until date has passed. Choose a new date before marking the estimate sent."
+            return false
+        }
+        guard stampEstimateSent(id: id, from: expectedStatus, validUntil: validUntil, on: date) else { return false }
         // Task 11.08: RN `SendEstimateScreen.markAsSent` / `PricingCalculatorScreen`.
         emitAnalytics(.estimateSent)
         onAppRatingWin?(.estimateSent)
@@ -2505,6 +2887,8 @@ final class AppStore: ObservableObject {
     /// is compared with the reviewed customer-facing snapshot before stamping,
     /// so a delayed composer callback cannot claim that newer pricing was sent.
     /// Cancelled, saved, and failed composer outcomes never call this method.
+    /// Phase 32: the comparison rebuilds with the review's own date and zone,
+    /// and the stamp writes that date — the message already went out with it.
     func recordEstimateDelivery(
         for review: NativeEstimateReviewDraft,
         on date: Date = .now
@@ -2531,7 +2915,9 @@ final class AppStore: ObservableObject {
             currentReviewSnapshot = try CanonicalUIAdapters.estimateApprovalSnapshot(
                 job: currentJob,
                 customerName: currentCustomer?.name,
-                businessName: settings.businessName
+                businessName: settings.businessName,
+                validUntil: review.snapshot.validUntil,
+                validUntilTimeZone: review.snapshot.validUntilTimeZone
             )
         } catch {
             return .preservedNewerState
@@ -2541,7 +2927,12 @@ final class AppStore: ObservableObject {
             review.snapshot
         ) else { return .preservedNewerState }
 
-        guard stampEstimateSent(id: review.jobID, from: currentStatus, on: date) else { return .failed }
+        guard stampEstimateSent(
+            id: review.jobID,
+            from: currentStatus,
+            validUntil: review.validUntil,
+            on: date
+        ) else { return .failed }
         // Task 11.08: the composer-confirmed stamp is native's estimate-sent
         // commit (contract §9.7).
         emitAnalytics(.estimateSent)
@@ -2549,9 +2940,13 @@ final class AppStore: ObservableObject {
         return .recorded
     }
 
+    /// Phase 32 (spec §3): the one function that moves a job to
+    /// `estimate_sent` also writes the send's valid-until date, removing the
+    /// key for "Doesn't expire", in the same save and the same upsert.
     private func stampEstimateSent(
         id: String,
         from expectedStatus: JobStatus,
+        validUntil: String?,
         on date: Date
     ) -> Bool {
         guard [.lead, .estimateSent].contains(expectedStatus), ensurePersistenceWritable() else { return false }
@@ -2566,6 +2961,7 @@ final class AppStore: ObservableObject {
             }
             records[index].status = JobStatus.estimateSent.rawValue
             records[index].estimateSentAt = date.dateOnlyString
+            records[index].estimateValidUntil = validUntil
             let result = records[index]
             updated.payload.jobs = records
             try repository.save(updated)
@@ -2593,10 +2989,29 @@ final class AppStore: ObservableObject {
         guard let service = configuredEstimateApprovalLinkService() else {
             return .failure(.invalidConfiguration)
         }
+        // Phase 32: a sheet left open past its date never mints a link that
+        // is born expired (the Worker would refuse it); reopening the review
+        // proposes a fresh date.
+        if let validUntil = review.validUntil,
+           !NativeQuoteExpiry.isSelectable(validUntil, today: estimateValidityToday(now: date)) {
+            return .failure(.estimateChanged)
+        }
+
+        // Review fix 2026-10-03: while the customer holds an undecided link,
+        // the job keeps the date that link enforces until the new link is
+        // minted, and the reviewed date is written with the approval mirror
+        // (as `extendEstimateValidity` does). A failed "Update approval link"
+        // therefore never leaves the job showing a date the link doesn't
+        // have. Without an open link there is nothing to disagree with, so
+        // the reviewed date is stamped up front.
+        let localJob = snapshot.payload.jobs?.first(where: { $0.id == review.jobID })
+        let hasUndecidedLink = localJob?.approval != nil && localJob?.approval?.decision == nil
+        let stampedValidUntil = hasUndecidedLink ? localJob?.estimateValidUntil : review.validUntil
 
         guard stampEstimateSent(
             id: review.jobID,
             from: review.expectedStatus,
+            validUntil: stampedValidUntil,
             on: date
         ) else { return .failure(.jobNotSynced) }
 
@@ -2616,8 +3031,11 @@ final class AppStore: ObservableObject {
         // fresh canonical state before minting so another device's pricing,
         // customer, or business-profile edit cannot be hidden behind the
         // already-open review sheet.
+        // Phase 32: the pulled job must also carry the date just stamped
+        // (another device's send or extension in between fails closed).
         guard let currentJob = snapshot.payload.jobs?.first(where: { $0.id == review.jobID }),
-              currentJob.status == JobStatus.estimateSent.rawValue
+              currentJob.status == JobStatus.estimateSent.rawValue,
+              currentJob.estimateValidUntil == stampedValidUntil
         else { return .failure(.estimateChanged) }
         let currentCustomer = NativeCustomerIdentity.resolve(
             customers: customers,
@@ -2629,7 +3047,9 @@ final class AppStore: ObservableObject {
             currentApprovalSnapshot = try CanonicalUIAdapters.estimateApprovalSnapshot(
                 job: currentJob,
                 customerName: currentCustomer?.name,
-                businessName: settings.businessName
+                businessName: settings.businessName,
+                validUntil: review.snapshot.validUntil,
+                validUntilTimeZone: review.snapshot.validUntilTimeZone
             )
         } catch {
             return .failure(.estimateChanged)
@@ -2679,6 +3099,8 @@ final class AppStore: ObservableObject {
             guard let index = records.firstIndex(where: { $0.id == review.jobID }),
                   records[index].status == JobStatus.estimateSent.rawValue
             else { return .failure(.estimateChanged) }
+            // The link now shows the reviewed date, so the job does too.
+            records[index].estimateValidUntil = review.validUntil
             records[index].approval = try CanonicalUIAdapters.estimateApprovalAfterLink(
                 existing: records[index].approval,
                 snapshot: review.snapshot,
@@ -2698,6 +3120,273 @@ final class AppStore: ObservableObject {
         } catch {
             return .failure(.invalidResponse)
         }
+    }
+
+    // MARK: Phase 32 — estimate validity (spec 2026-10-03 §6.5)
+
+    /// Today's local calendar date: the "today" every validity rule reads,
+    /// in the same zone as `estimateSentAt` and Today (FA-039 safe). Always
+    /// the Gregorian date (review fix 2026-10-03): a Buddhist or Japanese
+    /// device Calendar setting must not write 2569 or Reiwa 8.
+    func estimateValidityToday(now: Date = .now) -> String {
+        NativeQuoteExpiry.today(now: now, calendar: NativeQuoteExpiry.localCalendar)
+    }
+
+    /// The sent estimate's validity for job detail; `nil` unless the job is
+    /// `estimate_sent` with a valid date.
+    func estimateValidity(jobID: String, now: Date = .now) -> NativeQuoteExpiry.State? {
+        guard let job = snapshot.payload.jobs?.first(where: { $0.id == jobID }) else { return nil }
+        return NativeQuoteExpiry.state(job: job, today: estimateValidityToday(now: now))
+    }
+
+    /// The stored valid-until date of a sent estimate (`nil` = doesn't
+    /// expire, or not a sent estimate).
+    func estimateValidUntil(jobID: String) -> String? {
+        guard let job = snapshot.payload.jobs?.first(where: { $0.id == jobID }),
+              job.status == JobStatus.estimateSent.rawValue
+        else { return nil }
+        return job.estimateValidUntil
+    }
+
+    /// Whether the job has an approval link the customer has not answered.
+    func hasUndecidedEstimateApprovalLink(jobID: String) -> Bool {
+        guard let approval = activeEstimateApproval(jobID: jobID) else { return false }
+        return approval.decision == nil
+    }
+
+    /// Whether the owner may extend or change the valid-until date now: a
+    /// sent estimate the customer has not answered.
+    func canChangeEstimateValidity(jobID: String) -> Bool {
+        guard let job = snapshot.payload.jobs?.first(where: { $0.id == jobID }) else { return false }
+        return job.status == JobStatus.estimateSent.rawValue && job.approval?.decision == nil
+    }
+
+    /// Phase 32 (spec §3, §6.4), review fix 2026-10-03: the review sheet's
+    /// date change. Only the frozen snapshot's `validUntil` and zone change;
+    /// prices, names, contact details and the expected status stay exactly
+    /// what the owner reviewed, so `recordEstimateDelivery` and
+    /// `createEstimateApprovalLink` still compare a newer canonical estimate
+    /// against them and preserve it. A date outside today…today+365 returns
+    /// `nil` with `.invalidDate`'s message.
+    func estimateReviewDraft(
+        _ draft: NativeEstimateReviewDraft,
+        changingValidUntilTo choice: NativeEstimateValidUntilChoice,
+        now: Date = .now
+    ) -> NativeEstimateReviewDraft? {
+        switch choice {
+        case .doesNotExpire:
+            return draft.withValidity(nil)
+        case .date(let date):
+            guard NativeQuoteExpiry.isSelectable(date, today: estimateValidityToday(now: now)) else {
+                migrationMessage = NativeEstimateExtensionError.invalidDate.errorDescription
+                return nil
+            }
+            return draft.withValidity(date)
+        }
+    }
+
+    /// Phase 32 (spec §6.5), review fix 2026-10-03: whether saving
+    /// `validUntil` from the job-detail editor changes nothing. The job must
+    /// already store it, and the customer's undecided approval link (if any)
+    /// must already show it. A link showing another date (a re-send recorded
+    /// without "Update approval link", or an older failed update) makes Save
+    /// refresh the link through `extendEstimateValidity`.
+    func isEstimateValidityUnchanged(jobID: String, validUntil: String?) -> Bool {
+        guard estimateValidUntil(jobID: jobID) == validUntil else { return false }
+        guard let approval = activeEstimateApproval(jobID: jobID), approval.decision == nil else { return true }
+        return approval.snapshot.validUntil == validUntil
+    }
+
+    /// The job-detail editor's note while the customer's undecided link
+    /// shows a different date than the job; `nil` when they agree or there
+    /// is no open link.
+    func estimateLinkValidityNote(jobID: String) -> String? {
+        guard canChangeEstimateValidity(jobID: jobID),
+              let approval = activeEstimateApproval(jobID: jobID),
+              approval.snapshot.validUntil != estimateValidUntil(jobID: jobID)
+        else { return nil }
+        let shown = approval.snapshot.validUntil
+            .map { NativeQuoteExpiry.displayDate($0, style: .medium) } ?? "no valid-until date"
+        return "The customer’s approval link still shows \(shown). Save to update the link to match."
+    }
+
+    /// Phase 32 (spec §6.7): the "Let the customer know" draft after an
+    /// extension, for the existing follow-up composer. `nil` when the
+    /// customer cannot be resolved or the estimate is no longer open.
+    func estimateExtensionNoticeDraft(jobID: String, link: URL?) -> NativeEstimateFollowUpDraft? {
+        guard hasExactSignedInWorkspace,
+              let job = snapshot.payload.jobs?.first(where: { $0.id == jobID }),
+              let customer = NativeCustomerIdentity.resolve(
+                customers: customers,
+                customerID: job.customerId,
+                customerName: job.customerName
+              )
+        else { return nil }
+        return NativeEstimateFollowUp.extensionDraft(
+            job: job,
+            approvalLink: link,
+            customerName: customer.name,
+            customerPhone: customer.phone,
+            customerEmail: customer.email,
+            businessName: settings.businessName
+        )
+    }
+
+    /// Extends (or changes) a sent estimate's valid-until date with the same
+    /// prices. `validUntil == nil` means "Doesn't expire".
+    ///
+    /// - Without an approval link: one local save of `estimateValidUntil`
+    ///   plus an upsert.
+    /// - With an undecided link: the `createEstimateApprovalLink` guards
+    ///   (sync, identity re-checks, a completed pull, nothing queued for the
+    ///   job), then the snapshot is rebuilt from the pulled job with the new
+    ///   date and must equal the link's snapshot apart from validity, or the
+    ///   owner has to re-issue (`.pricingChanged`). The link is refreshed
+    ///   under the same token; only then are the date and the approval mirror
+    ///   written, in one save and one upsert. A failure before that leaves
+    ///   the device unchanged.
+    ///
+    /// `estimateSentAt` (the follow-up clock) is never re-stamped.
+    func extendEstimateValidity(
+        jobID: String,
+        validUntil: String?,
+        now: Date = .now
+    ) async -> NativeEstimateExtensionOutcome {
+        guard let job = snapshot.payload.jobs?.first(where: { $0.id == jobID }),
+              job.status == JobStatus.estimateSent.rawValue,
+              job.approval?.decision == nil
+        else { return .failure(.notEligible) }
+        guard NativeQuoteExpiry.isSelectable(validUntil, today: estimateValidityToday(now: now)) else {
+            return .failure(.invalidDate)
+        }
+        guard let approval = job.approval else {
+            guard ensurePersistenceWritable() else { return .failure(.notSaved(linkUpdated: false)) }
+            do {
+                var updated = snapshot
+                var records = updated.payload.jobs ?? []
+                guard let index = records.firstIndex(where: { $0.id == jobID }) else {
+                    return .failure(.notEligible)
+                }
+                records[index].estimateValidUntil = validUntil
+                let result = records[index]
+                updated.payload.jobs = records
+                try repository.save(updated)
+                try apply(updated)
+                enqueueUpsert(table: "jobs", recordId: jobID, record: result)
+                return .extended(link: nil)
+            } catch {
+                return .failure(.notSaved(linkUpdated: false))
+            }
+        }
+
+        guard let subject = authenticatedUserSubject,
+              let binding = verifiedAccountBinding,
+              hasCompletedPersistedWorkspace(binding: binding)
+        else { return .failure(.link(.rejectedSession)) }
+        guard let service = configuredEstimateApprovalLinkService() else {
+            return .failure(.link(.invalidConfiguration))
+        }
+        guard await syncNowAndWait(trigger: .manual) != nil else {
+            return .failure(.link(.jobNotSynced))
+        }
+        guard subject == authenticatedUserSubject,
+              binding == verifiedAccountBinding,
+              hasCompletedPersistedWorkspace(binding: binding),
+              syncStatus.lastPullResult?.state == .completed
+        else { return .failure(.link(.jobNotSynced)) }
+
+        // Authoritative post-pull state: still undecided, still the same link.
+        // A decision pulled just now refuses first: the reconciler may have
+        // queued it, which is not "not synced" from the owner's view.
+        guard let current = snapshot.payload.jobs?.first(where: { $0.id == jobID }),
+              current.status == JobStatus.estimateSent.rawValue,
+              current.approval?.decision == nil
+        else { return .failure(.notEligible) }
+        guard !mutationQueue.load().contains(where: {
+            $0.table == "jobs" && $0.recordId == jobID
+        }) else { return .failure(.link(.jobNotSynced)) }
+        guard let currentApproval = current.approval, currentApproval.token == approval.token else {
+            return .failure(.pricingChanged)
+        }
+        let customer = NativeCustomerIdentity.resolve(
+            customers: customers,
+            customerID: current.customerId,
+            customerName: current.customerName
+        )
+        let rebuilt: Canonical.EstimateApprovalSnapshot
+        do {
+            rebuilt = try CanonicalUIAdapters.estimateApprovalSnapshot(
+                job: current,
+                customerName: customer?.name,
+                businessName: settings.businessName,
+                validUntil: validUntil,
+                validUntilTimeZone: validUntil == nil ? nil : TimeZone.current.identifier
+            )
+        } catch {
+            return .failure(.pricingChanged)
+        }
+        // Anything but the date differs: the customer would approve a
+        // version they never saw, so the owner must review and resend.
+        guard CanonicalUIAdapters.estimateApprovalSnapshotsMatch(
+            rebuilt,
+            currentApproval.snapshot,
+            ignoringValidity: true
+        ) else { return .failure(.pricingChanged) }
+
+        func request(_ credentials: NativeSyncCredentials) async throws -> NativeEstimateApprovalLink {
+            try await service.createLink(jobID: jobID, snapshot: rebuilt, sessionBytes: credentials.sessionBytes)
+        }
+        let link: NativeEstimateApprovalLink
+        do {
+            guard let credentials = currentSyncCredentials(), credentials.subject == subject else {
+                return .failure(.link(.malformedSession))
+            }
+            do {
+                link = try await request(credentials)
+            } catch NativeEstimateApprovalLinkError.rejectedSession {
+                guard await refreshSyncSession(),
+                      let fresh = currentSyncCredentials(),
+                      fresh.subject == subject,
+                      subject == authenticatedUserSubject
+                else { return .failure(.link(.rejectedSession)) }
+                link = try await request(fresh)
+            }
+        } catch let error as NativeEstimateApprovalLinkError {
+            return .failure(.link(error))
+        } catch {
+            return .failure(.link(.unavailable))
+        }
+
+        // Owner switch mid-await: never mirror into another owner's data.
+        guard subject == authenticatedUserSubject,
+              binding == verifiedAccountBinding,
+              hasCompletedPersistedWorkspace(binding: binding)
+        else { return .failure(.link(.rejectedSession)) }
+        guard ensurePersistenceWritable() else { return .failure(.notSaved(linkUpdated: true)) }
+        do {
+            var updated = snapshot
+            var records = updated.payload.jobs ?? []
+            guard let index = records.firstIndex(where: { $0.id == jobID }),
+                  records[index].status == JobStatus.estimateSent.rawValue,
+                  records[index].approval?.decision == nil
+            else { return .failure(.notEligible) }
+            records[index].estimateValidUntil = validUntil
+            records[index].approval = try CanonicalUIAdapters.estimateApprovalAfterLink(
+                existing: records[index].approval,
+                snapshot: rebuilt,
+                token: link.token,
+                sentAt: link.sentAt
+            )
+            let result = records[index]
+            updated.payload.jobs = records
+            try repository.save(updated)
+            try apply(updated)
+            enqueueUpsert(table: "jobs", recordId: jobID, record: result)
+        } catch {
+            return .failure(.notSaved(linkUpdated: true))
+        }
+        _ = await syncNowAndWait(trigger: .localChange)
+        return .extended(link: link.url)
     }
 
     /// Frozen customer-facing snapshot for ONE change order, taken when the
@@ -2944,9 +3633,14 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Adds an add-on. `addOnID` is the editor's once-per-sheet id: saving
+    /// it again rewrites that add-on, so a double-tapped Save never creates
+    /// two (nil mints a fresh id).
     @discardableResult
-    func addQuoteAddOn(jobID: String, draft: NativeQuoteAddOnDraft) -> Bool {
-        mutateQuoteOptions(jobID: jobID) { try NativeQuoteOptions.addAddOn(job: $0, draft: draft) }
+    func addQuoteAddOn(jobID: String, draft: NativeQuoteAddOnDraft, addOnID: String? = nil) -> Bool {
+        mutateQuoteOptions(jobID: jobID) {
+            try NativeQuoteOptions.addAddOn(job: $0, draft: draft, makeAddOnID: { addOnID ?? NativeQuoteOptions.newAddOnID() })
+        }
     }
 
     @discardableResult
@@ -4226,6 +4920,15 @@ final class AppStore: ObservableObject {
         return try? Data(contentsOf: url, options: [.mappedIfSafe])
     }
 
+    /// Phase 20 review fix: the file of a job photo's bytes on this device, or
+    /// nil when they are not here. The form PDF reads it off the main thread.
+    func jobPhotoFileURL(photoID: String) -> URL? {
+        guard let url = try? NativeJobPhotoStorage.photoURL(root: repository.liveMediaDirectoryURL, photoID: photoID),
+              FileManager.default.fileExists(atPath: url.path)
+        else { return nil }
+        return url
+    }
+
     /// Captures already-normalized image bytes for a job: validates/converts to
     /// the JPEG `<= 6 MiB` transfer contract, mints a `p<digits>_<base36>` ID,
     /// atomically writes `<media-root>/job-photos/<id>.jpg` (local bytes win;
@@ -4406,6 +5109,11 @@ final class AppStore: ObservableObject {
     /// Every stored `forms` row: custom templates and job instances.
     var formRecords: [Canonical.Form] { snapshot.payload.forms ?? [] }
 
+    /// Phase 20 review fix: form text a closing screen could not save, by form
+    /// id, until the form opens again (`NativeJobFormsStore.swift`). Memory
+    /// only; cleared with the snapshot at an account boundary.
+    @Published var heldFormText: [String: NativeJobFormsPresentation.HeldText] = [:]
+
     /// Whether the canonical job is on this device. A deleted job's form
     /// instances stay stored but hidden (spec §8, no cascade).
     func canonicalJobExists(id: String) -> Bool {
@@ -4418,6 +5126,31 @@ final class AppStore: ObservableObject {
         /// A changed row: refused when a pull has removed it meanwhile, so a
         /// stale screen never resurrects a deleted form.
         case replace
+    }
+
+    /// Phase 34 (`NativeReferralsStore.swift`): durably saves already-stored
+    /// customer rows changed by one referral action, publishes them, then
+    /// queues one `customers` upsert each. Nothing is written when a row is
+    /// no longer stored.
+    func commitCanonicalCustomers(_ changed: [Canonical.Customer], failureMessage: String) -> Bool {
+        guard !changed.isEmpty else { return true }
+        guard ensurePersistenceWritable() else { return false }
+        var updated = snapshot
+        var records = updated.payload.customers ?? []
+        for record in changed {
+            guard let index = records.firstIndex(where: { $0.id == record.id }) else { return false }
+            records[index] = record
+        }
+        updated.payload.customers = records
+        do {
+            try repository.save(updated)
+            try apply(updated)
+        } catch {
+            migrationMessage = failureMessage
+            return false
+        }
+        for record in changed { enqueueUpsert(table: "customers", recordId: record.id, record: record) }
+        return true
     }
 
     /// Durably commits one `forms` row and enqueues its upsert: durable save,
@@ -4470,6 +5203,113 @@ final class AppStore: ObservableObject {
             return false
         } catch {
             migrationMessage = "The form could not be deleted safely. Nothing was changed."
+            return false
+        }
+    }
+
+    // MARK: - Properties & equipment (Phase 21) primitives
+    //
+    // The API lives in `NativePropertiesEquipmentStore.swift`. Only what needs
+    // this file's private state (the snapshot, repository, queue and deletion
+    // undo) lives here.
+
+    var canonicalRecurringJobs: [Canonical.RecurringJob] { snapshot.payload.recurringJobs ?? [] }
+
+    /// Durably commits one customer whose `properties` changed, plus any jobs
+    /// linked in the same step, then enqueues them as one batch (customers
+    /// first). Every record must still be stored: a pull that removed one
+    /// meanwhile refuses the whole change. A list that fails
+    /// `NativePropertiesEquipment.validate` is refused before anything is
+    /// written.
+    func commitPropertyChange(
+        customer: Canonical.Customer,
+        jobs changedJobs: [Canonical.Job] = []
+    ) -> Result<Canonical.Customer, NativePropertiesEquipment.PropertyError> {
+        do { try NativePropertiesEquipment.validate(customer.properties) } catch {
+            return .failure((error as? NativePropertiesEquipment.PropertyError) ?? .notSaved)
+        }
+        guard ensurePersistenceWritable() else { return .failure(.notSaved) }
+        var updated = snapshot
+        var customers = updated.payload.customers ?? []
+        guard let customerIndex = customers.firstIndex(where: { $0.id == customer.id }) else {
+            return .failure(.customerNotFound)
+        }
+        customers[customerIndex] = customer
+        updated.payload.customers = customers
+        var jobRecords = updated.payload.jobs ?? []
+        for job in changedJobs {
+            guard let index = jobRecords.firstIndex(where: { $0.id == job.id }) else { return .failure(.jobNotFound) }
+            jobRecords[index] = job
+        }
+        if !changedJobs.isEmpty { updated.payload.jobs = jobRecords }
+        let drafts: [Canonical.MutationDraft]
+        do {
+            drafts = try [Canonical.MutationDraft(
+                table: "customers", op: .upsert, recordId: customer.id, payload: Self.mutationPayload(customer)
+            )] + changedJobs.map {
+                Canonical.MutationDraft(table: "jobs", op: .upsert, recordId: $0.id, payload: try Self.mutationPayload($0))
+            }
+            try repository.save(updated)
+            try apply(updated)
+        } catch {
+            migrationMessage = "The property change could not be saved. Nothing was changed."
+            return .failure(.notSaved)
+        }
+        do {
+            try mutationQueue.enqueueBatch(drafts)
+            scheduleSyncAfterLocalChange()
+        } catch {
+            print("TradeReadyMutationQueue stage=enqueue table=customers")
+            recordLocalSyncFailure("queue/enqueue-properties")
+        }
+        return .success(customer)
+    }
+
+    /// Deletes a non-primary property (a customer upsert) with the shared
+    /// 8 s undo. Jobs linked to it keep their own address (P3).
+    @discardableResult
+    func deleteProperty(customerID: String, propertyID: String) -> Bool {
+        commitNestedDeletion("property") {
+            try NativeRecordDeletion.deleteProperty(
+                snapshot: snapshot, customerID: customerID, propertyID: propertyID,
+                primaryID: newPrimaryPropertyID(customerID: customerID)
+            )
+        }
+    }
+
+    /// Deletes one equipment entry made by mistake, with the shared 8 s undo.
+    /// Removed or replaced equipment is archived instead (history).
+    @discardableResult
+    func deleteEquipment(customerID: String, propertyID: String, equipmentID: String) -> Bool {
+        commitNestedDeletion("equipment") {
+            try NativeRecordDeletion.deleteEquipment(
+                snapshot: snapshot, customerID: customerID, propertyID: propertyID, equipmentID: equipmentID,
+                primaryID: newPrimaryPropertyID(customerID: customerID)
+            )
+        }
+    }
+
+    /// A fresh id for a primary the next write may have to materialize.
+    func newPrimaryPropertyID(customerID: String, now: Date = .now) -> String {
+        let customer = canonicalCustomers.first { $0.id == customerID }
+        return NativePropertiesEquipment.makeUniqueID(
+            prefix: "pr", now: now, existingIDs: customer.map(NativePropertiesEquipment.allIDs(in:)) ?? []
+        )
+    }
+
+    private func commitNestedDeletion(_ noun: String, _ plan: () throws -> NativeRecordDeletionResult) -> Bool {
+        guard ensurePersistenceWritable() else { return false }
+        do {
+            let result = try plan()
+            try commitRecordDeletion(result)
+            pendingCustomerMergeUndo = nil
+            pendingRecordDeleteUndo = result.undo
+            scheduleRecordDeleteUndoExpiration(id: result.undo.id)
+            return true
+        } catch NativeRecordDeletionError.recordNotFound {
+            return false
+        } catch {
+            migrationMessage = "The \(noun) could not be deleted safely. Nothing was changed."
             return false
         }
     }
@@ -5994,6 +6834,11 @@ final class AppStore: ObservableObject {
         stripeConnectStatus = nil
         stripeConnectLoading = false
         stripeConnectError = nil
+        // Phase 24: another owner's cards and charges never outlive the boundary.
+        autopayStatus = nil
+        autopayStatusError = nil
+        autopayStatusFetchedAt = nil
+        autopayRemovalsInFlight = []
         deepLinkedOutreachInvoiceID = nil
         authenticatedAccountState = .noMigratedSession
         authenticationGateState = .signedOut
@@ -7611,6 +8456,7 @@ final class AppStore: ObservableObject {
     }
 
     private func applyEmptySnapshot() {
+        heldFormText = [:]
         do { try apply(Canonical.Snapshot(payload: .init())) }
         catch { migrationMessage = "Could not initialize data: \(error.localizedDescription)" }
     }
@@ -8554,6 +9400,9 @@ final class AppStore: ObservableObject {
         refreshRecurringJobs()
         refreshRecurringInvoices()
         rescheduleInvoiceDeliveries()
+        // Phase 24 §6.3: autopay status, at most every 10 minutes. Detached so
+        // a slow Worker read never holds up the rest of the refresh.
+        Task { [weak self] in await self?.refreshAutopayStatus(trigger: .foreground) }
         // Phase 12 (12.00b.2-K, P12-016): customer bookings the pull brought
         // become lead jobs and customers (RN: `syncIfOnline`, then
         // `applyBookingRequests`, `context/AuthContext.tsx:118-120`). Only
@@ -9826,8 +10675,18 @@ final class AppStore: ObservableObject {
             materials: materials, materialMarkup: job.materialMarkup, directCosts: directCosts,
             status: job.status, timeSessions: sessions, changeOrders: changeOrderMirrors(job),
             // Phase 25: accepted add-ons bill as their own lines.
-            addOnLines: NativeQuoteOptions.invoiceAddOnLines(job: job)
+            addOnLines: NativeQuoteOptions.invoiceAddOnLines(job: job),
+            // Phase 25 review fix: what the customer approved through the
+            // link bills as approved when current pricing has drifted.
+            approvedQuote: NativeQuoteOptions.approvedInvoiceQuote(job: job)
         )
+    }
+
+    /// An invoice's stored lines as drafts (Phase 34 credit carry-over).
+    private static func lineDrafts(of invoice: Canonical.Invoice) -> [JobInvoiceLineDraft] {
+        (invoice.lineItems ?? []).map {
+            JobInvoiceLineDraft(description: $0.description, amount: $0.amount, category: $0.category)
+        }
     }
 
     /// A job's invoice line items, recomputed fresh from its current
@@ -9954,6 +10813,9 @@ final class AppStore: ObservableObject {
         // Phase 20: form and form-item keys (key names only, never values).
         "kind", "jobId", "templateId", "items", "label", "required", "photoRequired",
         "checked", "result", "text", "photoIds", "completedAt", "archivedAt", "formId", "formItemId",
+        // Phase 21: property and equipment keys (key names only, never values).
+        "properties", "propertyId", "primary", "equipment", "type", "make", "model", "serial",
+        "installDate", "warrantyExpires",
         // Phase 33: campaign and customer marketing keys (key names only).
         "campaigns", "code", "segment", "channelPlan", "message", "recipients", "frozenOn",
         "manualExclusions", "endedAt", "channel", "skipReason", "sentAt", "tags",
@@ -12993,9 +13855,10 @@ extension AppStore {
     /// to persist it under.
     func applyInsightMute(_ insight: NativeTodayInsight, days: Int?) {
         guard let mutes = insightMutes, let binding = verifiedAccountBinding else { return }
-        if let days {
+        // Phase 34: `referral_thanks` is not in the §9.5 catalog, so it sends nothing.
+        if insight.kind.isInAnalyticsCatalog, let days {
             emitAnalytics(.insightSnoozed(insight.kind, insightID: insight.id, days: days))
-        } else {
+        } else if insight.kind.isInAnalyticsCatalog {
             emitAnalytics(.insightDismissed(insight.kind, insightID: insight.id))
         }
         let now = Date()
@@ -13146,18 +14009,25 @@ extension AppStore {
         lastShownInsightIDsKey = key
         // Task 11.08: typed string arrays (the 11.07 handoff), not
         // comma-joined strings.
-        emitAnalytics(.insightShown(kinds: insights.map(\.kind), ids: insights.map(\.id)))
+        // Phase 34: kinds outside the §9.5 catalog (`referral_thanks`) are
+        // left out rather than failing the whole event at the transport.
+        let cataloged = insights.filter(\.kind.isInAnalyticsCatalog)
+        guard !cataloged.isEmpty else { return }
+        emitAnalytics(.insightShown(kinds: cataloged.map(\.kind), ids: cataloged.map(\.id)))
     }
 
     func trackInsightTapped(_ insight: NativeTodayInsight) {
+        guard insight.kind.isInAnalyticsCatalog else { return }
         emitAnalytics(.insightTapped(insight.kind))
     }
 
     func trackInsightCoachOpened(_ insight: NativeTodayInsight) {
+        guard insight.kind.isInAnalyticsCatalog else { return }
         emitAnalytics(.insightCoachOpened(insight.kind))
     }
 
     func trackInsightReasonViewed(_ insight: NativeTodayInsight) {
+        guard insight.kind.isInAnalyticsCatalog else { return }
         emitAnalytics(.insightReasonViewed(insight.kind))
     }
 

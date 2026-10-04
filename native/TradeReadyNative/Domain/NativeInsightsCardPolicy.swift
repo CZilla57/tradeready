@@ -13,16 +13,24 @@ enum NativeInsightsCardPolicy {
     static let visibleLimit = 3
 
     /// `MUTEABLE_KINDS` — long-horizon conditions that can't self-clear.
-    /// The other five kinds deliberately have no dismiss/snooze affordance;
-    /// they disappear on their own as their condition resolves.
+    /// The other kinds deliberately have no dismiss/snooze affordance; they
+    /// disappear on their own as their condition resolves. Phase 21's
+    /// `warranty_expiring` is muteable (spec §4).
+    ///
+    /// Phase 32 (spec 2026-10-03 §6.8): `quote_expired` is dismiss-only (its
+    /// id carries the date, so an extension re-arms it); `quote_expiring`
+    /// resolves on its own and is not muteable.
     static let muteableKinds: Set<NativeInsightKind> = [
-        .lowMarginEstimate, .maintenanceDue, .expenseAnomaly,
+        .lowMarginEstimate, .maintenanceDue, .warrantyExpiring, .expenseAnomaly, .quoteExpired,
+        // Phase 34: dismiss-only; recording a reward clears it on its own.
+        .referralThanks,
     ]
 
-    /// `SNOOZE_DAYS` — only `maintenance_due` offers "Snooze"; the other two
-    /// muteable kinds are dismiss-only (their ids are already time/price
+    /// `SNOOZE_DAYS` — `maintenance_due` (30 days) and Phase 21's
+    /// `warranty_expiring` (14 days, spec §4) offer "Snooze"; the other
+    /// muteable kinds are dismiss-only (their ids are already time/price/date
     /// scoped, so a plain dismiss naturally expires).
-    static let snoozeDaysByKind: [NativeInsightKind: Int] = [.maintenanceDue: 30]
+    static let snoozeDaysByKind: [NativeInsightKind: Int] = [.maintenanceDue: 30, .warrantyExpiring: 14]
 
     static func isMuteable(_ kind: NativeInsightKind) -> Bool {
         muteableKinds.contains(kind)
@@ -44,7 +52,11 @@ enum NativeInsightsCardPolicy {
         case .openSlot: return "calendar.badge.clock"
         case .unscheduledApproved: return "calendar"
         case .maintenanceDue: return "wrench.and.screwdriver"
+        case .warrantyExpiring: return "shield.lefthalf.filled"
         case .expenseAnomaly: return "chart.line.uptrend.xyaxis"
+        case .referralThanks: return "gift"
+        case .quoteExpiring: return "hourglass"
+        case .quoteExpired: return "hourglass.bottomhalf.filled"
         }
     }
 
@@ -55,7 +67,7 @@ enum NativeInsightsCardPolicy {
     /// Fail-closed (brief step 5, decision row 17): `mutes == nil` means the
     /// mute store could not be read. RN would degrade to `[]` (an EMPTY mute
     /// list, which is unsafe here — it would let an actively-dismissed row
-    /// resurrect). Native instead renders ONLY the five non-muteable
+    /// resurrect). Native instead renders ONLY the non-muteable
     /// (self-resolving) kinds, unfiltered — those kinds have no persisted
     /// mute state to begin with, so omitting mute-filtering for them cannot
     /// resurrect a dismissal. Muteable-kind rows are hidden entirely rather

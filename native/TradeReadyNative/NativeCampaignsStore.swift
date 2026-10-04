@@ -41,9 +41,8 @@ extension AppStore {
         campaignRecords.first { $0.id == id }
     }
 
-    func canonicalCustomer(id: String) -> Canonical.Customer? {
-        canonicalCustomers.first { $0.id == id }
-    }
+    // `canonicalCustomer(id:)` is declared once, in
+    // `NativePropertiesEquipmentStore.swift` (Phase 21), with the same body.
 
     /// Spec §3.1: the tags in use, by count.
     var customerTagVocabulary: [NativeCustomerTags.Entry] {

@@ -108,6 +108,41 @@ private func optionsDocumentTests() throws {
            "Phase 25: the accepted document is one estimate with the accepted add-on as its own line")
 }
 
+/// Phase 32 (spec 2026-10-03 §6.6): the frozen valid-until date, its header
+/// display and the closing sentence, single and options, dated and undated.
+private func validityDocumentTests() throws {
+    let single = try approvalSnapshot()
+    let undated = NativeEstimatePDFDocument(review: review(snapshot: single))
+    expect(undated.validUntil == nil && undated.validUntilDisplay == nil,
+           "Phase 32: an undated snapshot has no valid-until date or header line")
+    expect(undated.closingNote == "Reply to approve and we'll get you scheduled.",
+           "Phase 32: an undated single estimate closes with the call to action alone")
+
+    var datedSingle = single
+    datedSingle.validUntil = "2026-11-02"
+    datedSingle.validUntilTimeZone = "America/Phoenix"
+    let dated = NativeEstimatePDFDocument(review: review(snapshot: datedSingle))
+    expect(dated.validUntil == "2026-11-02", "Phase 32: the document carries the snapshot's frozen date")
+    expect(dated.validUntilDisplay == "Nov 2, 2026", "Phase 32: the header shows the medium date")
+    expect(dated.closingNote == "This estimate is valid until November 2, 2026. Reply to approve and we'll get you scheduled.",
+           "Phase 32: a dated single estimate names its date in the closing note")
+
+    let optionsJob = try optionsJob()
+    let optionsUndated = NativeEstimatePDFDocument(review: review(snapshot: try CanonicalUIAdapters.estimateApprovalSnapshot(
+        job: optionsJob, customerName: nil, businessName: "Rector Plumbing"
+    )))
+    expect(optionsUndated.closingNote == "Reply with the option you'd like and we'll get you scheduled.",
+           "Phase 32: an undated options estimate closes with the option call to action alone")
+    let optionsDated = NativeEstimatePDFDocument(review: review(snapshot: try CanonicalUIAdapters.estimateApprovalSnapshot(
+        job: optionsJob, customerName: nil, businessName: "Rector Plumbing",
+        validUntil: "2027-01-01", validUntilTimeZone: "America/Phoenix"
+    )))
+    expect(optionsDated.validUntilDisplay == "Jan 1, 2027", "Phase 32: Jan 1 never shifts to Dec 31 west of UTC")
+    expect(optionsDated.closingNote == "This estimate is valid until January 1, 2027. Reply with the option you'd like and we'll get you scheduled.",
+           "Phase 32: a dated options estimate names its date in the closing note")
+    expect(dated != undated, "Phase 32: the date is part of the document's identity")
+}
+
 @main
 enum EstimatePDFTests {
     static func main() throws {
@@ -139,6 +174,14 @@ enum EstimatePDFTests {
                "customer contact fields are carried into the document")
         expect(document.businessEmail == "hello@example.test" && document.businessAddress == "20 Trade Ave",
                "business contact fields are carried into the document")
+        // Phase 21 (spec 2026-10-02-properties-equipment-design.md §3): the
+        // "Service address" line, computed by the store, rides on the draft.
+        expect(document.serviceAddress.isEmpty, "Phase 21: no service address unless the draft carries one")
+        var atRental = review
+        atRental.serviceAddress = "  44 Elm St, Unit B  "
+        let rentalDocument = NativeEstimatePDFDocument(review: atRental, issuedAt: issuedAt, calendar: calendar)
+        expect(rentalDocument.serviceAddress == "44 Elm St, Unit B" && rentalDocument.customerAddress == "10 Main St",
+               "Phase 21: the service address prints beside, not instead of, the customer address")
         expect(document.lineItems.count == 3 && document.lineItems[1].amount == 50,
                "all reviewed customer-visible line items remain exact")
         expect(document.total == 325 && document.currency == "USD",
@@ -154,6 +197,7 @@ enum EstimatePDFTests {
                "Phase 25: a single-total estimate has no option or add-on blocks")
 
         try optionsDocumentTests()
+        try validityDocumentTests()
 
         if failures == 0 {
             print("PASS: native estimate PDF document tests")

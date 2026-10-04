@@ -434,6 +434,17 @@ public enum NativeTodayBriefing {
                 body: "\(when ?? "")\(note)",
                 jobDestination: jobDestination
             )
+        case .portalChange where isQuoteUpdate(request):
+            // Phase 32 (spec 2026-10-03 §6.9): the customer's expired-estimate
+            // page asked for an updated estimate. The body is the server's
+            // templated details; the owner acts from the job (extend, or edit
+            // and resend).
+            return NativeBookingRowPresentation(
+                title: quoteUpdateLabel(request),
+                summary: quoteUpdateLabel(request),
+                body: row.note ?? "",
+                jobDestination: jobDestination
+            )
         case .portalChange:
             let verb = request.portalKind == "cancel" ? "cancel" : "reschedule"
             return NativeBookingRowPresentation(
@@ -448,6 +459,14 @@ public enum NativeTodayBriefing {
                 summary: "Booking cancelled — \(request.name), \(when ?? "")".trimmingCharacters(in: .whitespaces),
                 body: "\(when ?? "") is free again. Clear or reuse the time on the job.",
                 jobDestination: jobDestination
+            )
+        case .missingJob where isQuoteUpdate(request):
+            // Phase 32: the request names its estimate, not a booking.
+            return NativeBookingRowPresentation(
+                title: quoteUpdateLabel(request),
+                summary: quoteUpdateLabel(request),
+                body: "The linked job could not be found. It may have been deleted on another device.",
+                jobDestination: .jobs
             )
         case .missingJob:
             return NativeBookingRowPresentation(
@@ -472,6 +491,9 @@ public enum NativeTodayBriefing {
     /// time-inclusive `when` meant for the tap alert, not this row.
     public static func bookingRowLabel(_ row: NativeBookingAttention.Row) -> String {
         let request = row.request
+        if isQuoteUpdate(request), row.kind == .portalChange || row.kind == .missingJob {
+            return quoteUpdateLabel(request)
+        }
         if row.kind == .portalChange {
             let verb = request.portalKind == "cancel" ? "cancel" : "reschedule"
             return "\(request.name) asked to \(verb) an appointment"
@@ -487,6 +509,16 @@ public enum NativeTodayBriefing {
         case .portalChange:
             return ""
         }
+    }
+
+    /// Phase 32: a `portal_change_requested` row the customer's expired
+    /// estimate page wrote (`portalKind: "quote_update"`).
+    private static func isQuoteUpdate(_ request: Canonical.BookingRequest) -> Bool {
+        request.portalKind == "quote_update"
+    }
+
+    private static func quoteUpdateLabel(_ request: Canonical.BookingRequest) -> String {
+        "\(request.name) asked for an updated estimate"
     }
 
     // MARK: - Private formatting tables

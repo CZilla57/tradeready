@@ -513,14 +513,12 @@ enum NativeCampaignSegments {
         return trimmed.isEmpty ? "Unnamed customer" : trimmed
     }
 
-    /// Phase 34 (referrals) adds a typed `referredByCustomerId`; until it is
-    /// on this branch the key is read from the preserved unknown fields, so a
-    /// value another client wrote already counts.
+    /// Phase 34 (referrals) types `referredByCustomerId` on the customer, so
+    /// it is read from the typed field (it no longer lands in the preserved
+    /// unknown fields).
     static func referrerID(_ customer: Canonical.Customer) -> String? {
-        if case let .string(id)? = customer.preservation.unknownFields["referredByCustomerId"], !id.isEmpty {
-            return id
-        }
-        return nil
+        guard let id = customer.referredByCustomerId, !id.isEmpty else { return nil }
+        return id
     }
 
     /// Whether any customer carries a referrer, so the builder can offer

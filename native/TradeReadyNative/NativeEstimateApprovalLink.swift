@@ -12,6 +12,10 @@ enum NativeEstimateApprovalLinkError: LocalizedError, Equatable {
     case jobNotSynced
     case estimateChanged
     case revisionConflict
+    /// Phase 32 (spec 2026-10-03 §6.10): `create-link` answered 400 — the
+    /// Worker refused the snapshot's details (for example a valid-until date
+    /// that is already past or malformed).
+    case estimateRejected
     case invalidResponse
     case unavailable
 
@@ -31,6 +35,8 @@ enum NativeEstimateApprovalLinkError: LocalizedError, Equatable {
             "This estimate changed while the review was open. Review the latest estimate before creating its approval link."
         case .revisionConflict:
             "This estimate changed before the revision could begin. Refresh it and review the customer's latest decision."
+        case .estimateRejected:
+            "The approval service couldn't accept this estimate's details. Review the estimate, check its valid-until date, and try again."
         case .unavailable:
             "The approval service is unavailable. Check your connection and try again."
         }
@@ -132,6 +138,7 @@ struct NativeEstimateApprovalLinkService: NativeEstimateApprovalLinking {
         }
         switch http.statusCode {
         case 200..<300: break
+        case 400: throw NativeEstimateApprovalLinkError.estimateRejected
         case 401, 403: throw NativeEstimateApprovalLinkError.rejectedSession
         case 422: throw NativeEstimateApprovalLinkError.jobNotSynced
         case 429: throw NativeEstimateApprovalLinkError.rateLimited

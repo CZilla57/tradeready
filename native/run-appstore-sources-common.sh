@@ -19,7 +19,23 @@
 #
 # Phase 20 (job forms): AppStore.swift uses `Domain/NativeJobForms.swift` (photo
 # capture from a form item), and `NativeJobFormsStore.swift` extends AppStore
-# with the forms API, so it follows AppStore.swift too.
+# with the forms API, so it follows AppStore.swift too. The review fixes
+# (2026-10-03) hold unsaved form text as `NativeJobFormsPresentation.HeldText`,
+# so `Domain/NativeJobFormsPresentation.swift` is listed too.
+#
+# Phase 21 (properties & equipment): `Domain/NativePropertiesEquipment.swift` is
+# used by AppStore.swift, the customer merge, record deletion and the Today
+# insights; `NativePropertiesEquipmentStore.swift` extends AppStore with the
+# properties API, so it follows AppStore.swift.
+#
+# Phase 34 (referrals): booking intake, merge-free reads, the Today insight and
+# the Money card use `Domain/NativeReferrals.swift` and
+# `Domain/NativeReferralReport.swift`; `NativeReferralsStore.swift` extends
+# AppStore with the referral API, so it follows AppStore.swift.
+#
+# Phase 24 (autopay): `Domain/NativeAutopay.swift` (pure status policy) and
+# `NativeAutopayService.swift` (the owner-route transport) are AppStore
+# dependencies.
 #
 # Phase 33 (campaigns and customer tags): customer merge and CSV import use
 # `Domain/NativeCustomerTags.swift`, the Today insights use
@@ -30,8 +46,12 @@ $ROOT_DIR/native/HostTestSupport/HostInMemoryKeychain.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/FinancialDomain.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/BusinessRules.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/CanonicalModels.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeQuoteExpiry.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeLeadSourceReport.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeLeadSource.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeReferrals.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeReferralReport.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativePropertiesEquipment.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeCustomerTags.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/CanonicalSnapshot.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/SnapshotRepository.swift
@@ -46,6 +66,7 @@ $ROOT_DIR/native/TradeReadyNative/NativeStripeConnect.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/UIModelAdapters.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeQuoteOptions.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeJobForms.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeJobFormsPresentation.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeRecurringJobs.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeRecurringInvoices.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeSchedule.swift
@@ -94,6 +115,8 @@ $ROOT_DIR/native/TradeReadyNative/NativeSetupChecklistStore.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeInsightMutes.swift
 $ROOT_DIR/native/TradeReadyNative/NativeInsightMuteStore.swift
 $ROOT_DIR/native/TradeReadyNative/NativeInvoiceDelivery.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeAutopay.swift
+$ROOT_DIR/native/TradeReadyNative/NativeAutopayService.swift
 $ROOT_DIR/native/TradeReadyNative/NativeInvoicePDF.swift
 $ROOT_DIR/native/TradeReadyNative/NativeEstimateDelivery.swift
 $ROOT_DIR/native/TradeReadyNative/NativeEstimateFollowUp.swift
@@ -166,5 +189,7 @@ $ROOT_DIR/native/TradeReadyNative/NativeRunMarker.swift
 $ROOT_DIR/native/TradeReadyNative/AppStore.swift
 $ROOT_DIR/native/TradeReadyNative/NativeBookingOwnerResponses.swift
 $ROOT_DIR/native/TradeReadyNative/NativeJobFormsStore.swift
+$ROOT_DIR/native/TradeReadyNative/NativeReferralsStore.swift
+$ROOT_DIR/native/TradeReadyNative/NativePropertiesEquipmentStore.swift
 $ROOT_DIR/native/TradeReadyNative/NativeCampaignsStore.swift
 "

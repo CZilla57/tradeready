@@ -124,6 +124,10 @@ struct NativeEstimateReviewDraft: Identifiable {
     let businessAddress: String
     let businessLogoReference: String?
     let jobDescription: String
+    /// Phase 21 (spec §3): the job address when it differs from the
+    /// customer's, printed as "Service address" under the customer block;
+    /// empty otherwise (`NativePropertiesEquipment.serviceAddressLine`).
+    var serviceAddress: String = ""
 
     var id: String { jobID }
 }
@@ -154,6 +158,14 @@ struct NativeInvoiceFromJobDraft: Identifiable {
     /// The job's current billable total, shown in the "pre-filled from job
     /// estimate" banner (create/requestDeposit only; 0 hides the banner).
     let prefillReferenceAmount: Decimal
+    /// Phase 34 (spec §5.6): the referral credit owed to this job's customer
+    /// when the sheet opened (create/finalize only, and only when the job
+    /// produced a line); 0 hides the "Referral credit" section.
+    var referralCreditAvailable: Decimal = 0
+    /// The credit the owner turned on: 0 or exactly `referralCreditAvailable`
+    /// (partial application is not in v1). `amount` already has it
+    /// subtracted; commit adds the matching negative line.
+    var referralCreditToApply: Decimal = 0
 
     var id: String { jobID }
 }
@@ -170,6 +182,7 @@ enum CanonicalUIAdapters {
         ]
         if let archivedAt = value.archivedAt { fields["archivedAt"] = .string(archivedAt) }
         if let leadSource = value.leadSource { fields["leadSource"] = .string(leadSource) }
+        if let referrer = value.referredByCustomerId { fields["referredByCustomerId"] = .string(referrer) }
         if let tags = value.tags { fields["tags"] = .array(tags.map { .string($0) }) }
         if let optOut = value.marketingOptOutOn { fields["marketingOptOutOn"] = .string(optOut) }
         if let via = value.marketingOptOutVia { fields["marketingOptOutVia"] = .string(via) }
@@ -188,6 +201,7 @@ enum CanonicalUIAdapters {
         ]
         if let invoiceId = value.invoiceId { fields["invoiceId"] = .string(invoiceId) }
         if let archivedAt = value.archivedAt { fields["archivedAt"] = .string(archivedAt) }
+        if let propertyId = value.propertyId { fields["propertyId"] = .string(propertyId) }
         if let start = value.scheduledAt {
             fields["scheduledDate"] = .string(day(start, calendar: calendar))
             fields["scheduledStartTime"] = .string(time(start, calendar: calendar))
@@ -218,6 +232,8 @@ enum CanonicalUIAdapters {
             "isActive": .bool(true), "createdAt": .string(createdAt)
         ]
         if let costs = job.jobCosts { fields["jobCosts"] = try json(costs) }
+        // Phase 21: occurrences of the rule are at the source job's property.
+        if let propertyId = job.propertyId { fields["propertyId"] = .string(propertyId) }
         if let endCount { fields["endCount"] = .number(Decimal(endCount)) }
         if let endDate { fields["endDate"] = .string(endDate) }
         return try decode(fields)
@@ -231,13 +247,16 @@ enum CanonicalUIAdapters {
     /// (tiers and add-ons keep their nested metadata; the options container
     /// starts clean). The copy is unaccepted, so invariant M1 re-mirrors the
     /// recommended tier's full pricing into the duplicate's top level.
+    ///
+    /// Phase 21: `propertyId` is on the whitelist (the copy is at the same
+    /// property, beside the same `address`).
     static func duplicateJob(
         _ source: Canonical.Job,
         id: String,
         createdAt: Date,
         calendar: Calendar = .current
     ) throws -> NativeJobDuplicateDraft {
-        let fields: [String: Canonical.JSONValue] = [
+        var fields: [String: Canonical.JSONValue] = [
             "id": .string(id),
             "customerId": .string(source.customerId),
             "customerName": .string(source.customerName),
@@ -256,6 +275,7 @@ enum CanonicalUIAdapters {
             "invoiceId": .null,
             "createdAt": .string(timestamp(createdAt))
         ]
+        if let propertyId = source.propertyId { fields["propertyId"] = .string(propertyId) }
         var canonical: Canonical.Job = try decode(fields)
         if let sourceOptions = source.quoteOptions {
             let options = Canonical.QuoteOptions(
@@ -320,11 +340,25 @@ enum CanonicalUIAdapters {
     /// - Accepted: a single estimate of the job's (accepted, M2) pricing plus
     ///   one line per accepted add-on. Add-on prices are subtracted before the
     ///   residual operating-cost line; there is no `options` key.
+    /// - Accepted through the link, while the job's total is still the
+    ///   consented total: the frozen lines the customer approved
+    ///   (`linkApprovedEstimateLines(job:)`), so a tier edited after sending
+    ///   never changes the accepted estimate the owner shares.
+    ///
+    /// Phase 32 (spec 2026-10-03 §2.3, §6.1): `validUntil` (`YYYY-MM-DD`) and
+    /// `validUntilTimeZone` (IANA id) are frozen into the snapshot as a term of
+    /// the offer. Both present or both absent; exactly one throws
+    /// `invalidCanonicalRecord("estimate-validity")`.
     static func estimateApprovalSnapshot(
         job: Canonical.Job,
         customerName: String?,
-        businessName: String
+        businessName: String,
+        validUntil: Canonical.DateString? = nil,
+        validUntilTimeZone: String? = nil
     ) throws -> Canonical.EstimateApprovalSnapshot {
+        guard (validUntil == nil) == (validUntilTimeZone == nil) else {
+            throw CanonicalUIAdapterError.invalidCanonicalRecord("estimate-validity")
+        }
         var lineItems: [Canonical.JSONValue]
         var total = job.estimateTotal
         var optionsField: [String: Canonical.JSONValue]?
@@ -335,23 +369,13 @@ enum CanonicalUIAdapters {
             guard let recommended = quoteOptions.tier(id: quoteOptions.recommendedTierId) else {
                 throw CanonicalUIAdapterError.invalidCanonicalRecord("quote-options")
             }
-            lineItems = estimateLineFields(EstimatePricing(recommended), total: recommended.estimateTotal)
-                .map(Canonical.JSONValue.object)
+            lineItems = estimateLines(EstimatePricing(recommended), total: recommended.estimateTotal)
+                .map(lineJSON)
             total = recommended.estimateTotal
-        } else if let quoteOptions = job.quoteOptions {
-            let addOns = quoteOptions.acceptedAddOns
-            let reserved = addOns.reduce(Decimal.zero) { $0 + $1.price }
-            lineItems = estimateLineFields(
-                EstimatePricing(job),
-                total: job.estimateTotal,
-                reservedBeforeResidual: reserved
-            ).map(Canonical.JSONValue.object)
-            lineItems += addOns.map {
-                .object(["label": .string($0.label), "amount": .number($0.price)])
-            }
+        } else if job.quoteOptions != nil, let approved = linkApprovedEstimateLines(job: job) {
+            lineItems = approved.map { lineJSON(($0.label, $0.amount)) }
         } else {
-            lineItems = estimateLineFields(EstimatePricing(job), total: job.estimateTotal)
-                .map(Canonical.JSONValue.object)
+            lineItems = currentPricingLines(job).map(lineJSON)
         }
 
         var fields: [String: Canonical.JSONValue] = [
@@ -363,6 +387,10 @@ enum CanonicalUIAdapters {
             "currency": .string("USD")
         ]
         if let optionsField { fields["options"] = .object(optionsField) }
+        if let validUntil, let validUntilTimeZone {
+            fields["validUntil"] = .string(validUntil)
+            fields["validUntilTimeZone"] = .string(validUntilTimeZone)
+        }
         return try decode(fields)
     }
 
@@ -396,8 +424,7 @@ enum CanonicalUIAdapters {
                 "id": .string(tier.id),
                 "name": .string(tier.name),
                 "lineItems": .array(
-                    estimateLineFields(EstimatePricing(tier), total: tier.estimateTotal)
-                        .map(Canonical.JSONValue.object)
+                    estimateLines(EstimatePricing(tier), total: tier.estimateTotal).map(lineJSON)
                 ),
                 "total": .number(tier.estimateTotal)
             ]
@@ -449,12 +476,13 @@ enum CanonicalUIAdapters {
     /// customer-visible direct costs, then a positive residual "Overhead &
     /// operating costs" line. `reservedBeforeResidual` (accepted add-on
     /// prices) is taken out of the residual so the add-ons can be listed as
-    /// their own lines without changing the total.
-    private static func estimateLineFields(
+    /// their own lines without changing the total. Every label is capped at
+    /// the Worker's `MAX_LINE_LABEL_CHARS` (`estimateLineLabelMaxLength`).
+    private static func estimateLines(
         _ pricing: EstimatePricing,
         total: Decimal,
         reservedBeforeResidual: Decimal = 0
-    ) -> [[String: Canonical.JSONValue]] {
+    ) -> [(label: String, amount: Decimal)] {
         let laborCost = pricing.laborHours * pricing.laborRate
         let materialBase = pricing.materials.reduce(Decimal.zero) {
             $0 + $1.quantity * $1.unitCost
@@ -472,32 +500,113 @@ enum CanonicalUIAdapters {
             return (estimateDirectCostLabel(cost), FinancialDecimal.cents(amount))
         }
 
-        var lineItems: [[String: Canonical.JSONValue]] = [[
-            "label": .string("Labor (\(estimateNumber(pricing.laborHours)) hrs @ $\(estimateNumber(pricing.laborRate))/hr)"),
-            "amount": .number(laborCost)
-        ]]
+        var lines: [(label: String, amount: Decimal)] = [(
+            "Labor (\(estimateNumber(pricing.laborHours)) hrs @ $\(estimateNumber(pricing.laborRate))/hr)",
+            laborCost
+        )]
         if !pricing.materials.isEmpty {
             let suffix = pricing.materials.count == 1 ? "item" : "items"
-            lineItems.append([
-                "label": .string("Materials (\(pricing.materials.count) \(suffix))"),
-                "amount": .number(materialCost)
-            ])
+            lines.append(("Materials (\(pricing.materials.count) \(suffix))", materialCost))
         }
-        for directCost in visibleDirectCosts {
-            lineItems.append([
-                "label": .string(directCost.0),
-                "amount": .number(directCost.1)
-            ])
-        }
+        lines.append(contentsOf: visibleDirectCosts.map { (label: $0.0, amount: $0.1) })
         let visibleDirectTotal = visibleDirectCosts.reduce(Decimal.zero) { $0 + $1.1 }
         let operatingCost = total - laborCost - materialCost - visibleDirectTotal - reservedBeforeResidual
         if operatingCost > 0 {
-            lineItems.append([
-                "label": .string("Overhead & operating costs"),
-                "amount": .number(operatingCost)
-            ])
+            lines.append((estimateOverheadLineLabel, operatingCost))
         }
-        return lineItems
+        return lines.map { (label: cappedEstimateLineLabel($0.label), amount: $0.amount) }
+    }
+
+    private static func lineJSON(_ line: (label: String, amount: Decimal)) -> Canonical.JSONValue {
+        .object(["label": .string(line.label), "amount": .number(line.amount)])
+    }
+
+    /// The customer lines the job's *current* pricing derives, exactly as the
+    /// snapshot builder would freeze them when no link acceptance is in force:
+    /// the accepted tier plus accepted add-on lines once options are accepted
+    /// (M2), otherwise the job's own single-estimate lines. Undecided options
+    /// derive the job's lines too (they mirror the recommended tier, M1).
+    private static func currentPricingLines(_ job: Canonical.Job) -> [(label: String, amount: Decimal)] {
+        guard let quoteOptions = job.quoteOptions, quoteOptions.acceptance != nil else {
+            return estimateLines(EstimatePricing(job), total: job.estimateTotal)
+        }
+        let addOns = quoteOptions.acceptedAddOns
+        let reserved = addOns.reduce(Decimal.zero) { $0 + $1.price }
+        return estimateLines(EstimatePricing(job), total: job.estimateTotal, reservedBeforeResidual: reserved)
+            + addOns.map { (label: $0.label, amount: $0.price) }
+    }
+
+    /// The customer lines the job's current pricing derives (see
+    /// `currentPricingLines`), as snapshot line items. Phase 25 review fix:
+    /// compared with `linkApprovedEstimateLines(job:)` to decide whether the
+    /// approved lines still match what the pricing would bill.
+    static func currentEstimateLines(job: Canonical.Job) -> [Canonical.EstimateApprovalSnapshot.LineItem] {
+        currentPricingLines(job).map { .init(label: $0.label, amount: $0.amount) }
+    }
+
+    /// The customer lines a quote tier's pricing derives (its frozen
+    /// `snapshot.options` lines). Phase 25 review fix: finds the draft tier
+    /// that still prices a single-price estimate exactly as it was sent.
+    static func estimateLineItems(for tier: Canonical.QuoteTier) -> [Canonical.EstimateApprovalSnapshot.LineItem] {
+        estimateLines(EstimatePricing(tier), total: tier.estimateTotal).map { .init(label: $0.label, amount: $0.amount) }
+    }
+
+    /// Phase 25 review fix (spec §12 "Review fixes (2026-10-03)"): the
+    /// estimate lines the customer approved through the link, while that
+    /// approval is still the job's price — or `nil`.
+    ///
+    /// - Options: a link acceptance with the server's `selection` for the
+    ///   accepted tier, and the job's total still the consented
+    ///   `selection.total`. The lines are the accepted tier's frozen
+    ///   `snapshot.options` lines (the selection's tier lines when the
+    ///   snapshot lacks the tier) followed by one line per selected add-on at
+    ///   its frozen amount. An owner-recorded acceptance has no customer
+    ///   snapshot and returns `nil` (current pricing applies).
+    /// - Single price: an approved snapshot without options on a job without
+    ///   options, whose total is still the snapshot total. The lines are the
+    ///   snapshot's.
+    ///
+    /// Once the owner re-prices the job (its total moves off the approved
+    /// total) the owner's pricing applies again and this returns `nil`.
+    static func linkApprovedEstimateLines(job: Canonical.Job) -> [Canonical.EstimateApprovalSnapshot.LineItem]? {
+        guard let approval = job.approval, approval.decision == "approved" else { return nil }
+        if let quoteOptions = job.quoteOptions {
+            guard let acceptance = quoteOptions.acceptance,
+                  acceptance.source == Canonical.QuoteAcceptance.sourceLink,
+                  let selection = approval.selection,
+                  selection.tierId == acceptance.tierId,
+                  job.estimateTotal == selection.total
+            else { return nil }
+            let tierLines = approval.snapshot.options?.tiers.first(where: { $0.id == selection.tierId })?.lineItems
+                ?? Array(selection.lineItems.dropLast(min(selection.addOns.count, selection.lineItems.count)))
+            return tierLines.map { .init(label: $0.label, amount: $0.amount) }
+                + selection.addOns.map { .init(label: $0.label, amount: $0.amount) }
+        }
+        guard approval.snapshot.options == nil, job.estimateTotal == approval.snapshot.total else { return nil }
+        return approval.snapshot.lineItems.map { .init(label: $0.label, amount: $0.amount) }
+    }
+
+    /// The Worker's `MAX_LINE_LABEL_CHARS` for frozen option line labels
+    /// (`backend-workers/lib/estimate/quoteOptions.js`), in UTF-16 code units
+    /// like JavaScript's `String.length`.
+    static let estimateLineLabelMaxLength = 300
+    static let estimateOverheadLineLabel = "Overhead & operating costs"
+
+    /// Phase 25 review fix: owner-named direct costs are the only uncapped
+    /// line labels; a longer one would make the Worker refuse the whole
+    /// options estimate (400 at send). Trims to 299 code units on a
+    /// character boundary and appends an ellipsis.
+    static func cappedEstimateLineLabel(_ label: String) -> String {
+        guard label.utf16.count > estimateLineLabelMaxLength else { return label }
+        var capped = ""
+        var length = 0
+        for character in label {
+            let width = String(character).utf16.count
+            guard length + width <= estimateLineLabelMaxLength - 1 else { break }
+            capped.append(character)
+            length += width
+        }
+        return capped + "\u{2026}"
     }
 
     /// Mirrors the backend's `planApprovalWrite` semantics. An approved
@@ -533,10 +642,22 @@ enum CanonicalUIAdapters {
     /// additive fields preserved from a future writer. Used after the
     /// sync-before-mint round trip so a stale review can never freeze newer
     /// canonical estimate values.
+    ///
+    /// Phase 32 (spec 2026-10-03 §6.1): `validUntil` and `validUntilTimeZone`
+    /// are terms of the offer and compare exactly. `ignoringValidity: true`
+    /// compares as if both were absent on both sides: the declined-revision
+    /// guard and the extension check use it so a fresh date alone never
+    /// counts as a revision (or as a pricing change).
     static func estimateApprovalSnapshotsMatch(
         _ lhs: Canonical.EstimateApprovalSnapshot,
-        _ rhs: Canonical.EstimateApprovalSnapshot
+        _ rhs: Canonical.EstimateApprovalSnapshot,
+        ignoringValidity: Bool = false
     ) -> Bool {
+        if !ignoringValidity {
+            guard lhs.validUntil == rhs.validUntil,
+                  lhs.validUntilTimeZone == rhs.validUntilTimeZone
+            else { return false }
+        }
         guard lhs.businessName == rhs.businessName,
               lhs.customerName == rhs.customerName,
               lhs.jobTitle == rhs.jobTitle,
@@ -655,6 +776,13 @@ enum CanonicalUIAdapters {
         return FinancialDecimal.integerCentsSum([tierTotal] + options.acceptedAddOns.map(\.price))
     }
 
+    /// Phase 25 review fix: the job carries good/better/best options with no
+    /// acceptance yet, so its top-level price mirrors the recommended tier
+    /// (M1) and is owned by the options sheet, not the job editor.
+    static func hasUndecidedQuoteOptions(_ job: Canonical.Job) -> Bool {
+        job.quoteOptions != nil && job.quoteOptions?.acceptance == nil
+    }
+
     private static func apply(
         _ pricing: NativeJobPricingDraft,
         total: Decimal,
@@ -677,9 +805,11 @@ enum CanonicalUIAdapters {
 
     /// Not `private`: also used by `JobInvoiceDomain`'s line-item builder, so
     /// an invoice's direct-cost labels match the estimate review's exactly.
+    /// Phase 25 review fix: an owner label longer than the Worker's line-label
+    /// cap is shortened here, so the estimate and the invoice still agree.
     static func estimateDirectCostLabel(_ cost: Canonical.JobCost) -> String {
         let ownLabel = cost.label.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !ownLabel.isEmpty { return ownLabel }
+        if !ownLabel.isEmpty { return cappedEstimateLineLabel(ownLabel) }
         switch cost.category {
         case PricingCostCategory.permit.rawValue: return "Permit"
         case PricingCostCategory.disposal.rawValue: return "Disposal"
@@ -769,6 +899,9 @@ enum CanonicalUIAdapters {
             "reviewRequestTemplate": .string(value.reviewRequestTemplate),
             "googleReviewLink": .string(value.googleReviewLink),
             "reviewRequestDelayHours": .number(Decimal(value.reviewRequestDelayHours)),
+            "estimateValidityDays": .number(Decimal(value.estimateValidityDays)),
+            // Phase 28: absent = off, so a new record writes the key only when on.
+            "tipsEnabled": value.tipsEnabled ? .bool(true) : .null,
             // Native-only preferences stay inside the canonical record's
             // preservation bag instead of a second persisted model.
             "appearance": .string(value.appearance.rawValue),
@@ -818,6 +951,7 @@ enum CanonicalUIAdapters {
         if edit.value.createdAt != original.createdAt { fields["createdAt"] = .string(timestamp(edit.value.createdAt)) }
         updateOptional(&fields, "archivedAt", edit.value.archivedAt, original.archivedAt)
         updateOptional(&fields, "leadSource", edit.value.leadSource, original.leadSource)
+        updateOptional(&fields, "referredByCustomerId", edit.value.referredByCustomerId, original.referredByCustomerId)
         updateOptionalStringArray(&fields, "tags", edit.value.tags, original.tags)
         updateOptional(&fields, "marketingOptOutOn", edit.value.marketingOptOutOn, original.marketingOptOutOn)
         updateOptional(&fields, "marketingOptOutVia", edit.value.marketingOptOutVia, original.marketingOptOutVia)
@@ -834,12 +968,21 @@ enum CanonicalUIAdapters {
         update(&fields, "description", edit.value.description, original.description)
         if edit.value.status != original.status { fields["status"] = .string(edit.value.status.rawValue) }
         update(&fields, "address", edit.value.address, original.address)
-        updateNumber(&fields, "estimateTotal", edit.value.estimateTotal, original.estimateTotal)
-        updateNumber(&fields, "laborHours", edit.value.laborHours, original.laborHours)
-        updateNumber(&fields, "laborRate", edit.value.laborRate, original.laborRate)
+        // Phase 25 review fix (invariant M1): while good/better/best options
+        // are undecided the job's price is the recommended tier's, edited
+        // only through the options sheet or the calculator (which writes the
+        // tier too). A job-editor or other UI-model save keeps the baseline's
+        // pricing, so a stale or hand-typed total can never drift from the
+        // tier the customer is sent.
+        if !hasUndecidedQuoteOptions(edit.baseline) {
+            updateNumber(&fields, "estimateTotal", edit.value.estimateTotal, original.estimateTotal)
+            updateNumber(&fields, "laborHours", edit.value.laborHours, original.laborHours)
+            updateNumber(&fields, "laborRate", edit.value.laborRate, original.laborRate)
+        }
         update(&fields, "notes", edit.value.notes, original.notes)
         updateOptional(&fields, "invoiceId", edit.value.invoiceId, original.invoiceId)
         updateOptional(&fields, "archivedAt", edit.value.archivedAt, original.archivedAt)
+        updateOptional(&fields, "propertyId", edit.value.propertyId, original.propertyId)
         if edit.value.createdAt != original.createdAt { fields["createdAt"] = .string(timestamp(edit.value.createdAt)) }
         if edit.value.scheduledAt != original.scheduledAt || edit.value.scheduledEnd != original.scheduledEnd {
             if let start = edit.value.scheduledAt {
@@ -951,6 +1094,10 @@ enum CanonicalUIAdapters {
         update(&fields, "googleReviewLink", edit.value.googleReviewLink, original.googleReviewLink)
         update(&fields, "reviewRequestTemplate", edit.value.reviewRequestTemplate, original.reviewRequestTemplate)
         if edit.value.reviewRequestDelayHours != original.reviewRequestDelayHours { fields["reviewRequestDelayHours"] = .number(Decimal(edit.value.reviewRequestDelayHours)) }
+        // Phase 32: absent reads as 30, so an untouched default never writes the key.
+        if edit.value.estimateValidityDays != original.estimateValidityDays { fields["estimateValidityDays"] = .number(Decimal(edit.value.estimateValidityDays)) }
+        // Phase 28: absent reads as off, so an untouched default never writes the key.
+        updateBool(&fields, "tipsEnabled", edit.value.tipsEnabled, original.tipsEnabled)
         if edit.value.appearance != original.appearance { fields["appearance"] = .string(edit.value.appearance.rawValue) }
         if edit.value.bookingEnabled != original.bookingEnabled { fields["bookingEnabled"] = .bool(edit.value.bookingEnabled) }
 
@@ -974,7 +1121,8 @@ enum CanonicalUIAdapters {
         Customer(id: value.id, name: value.name, email: value.email, phone: value.phone,
                  address: value.address, notes: value.notes,
                  createdAt: try parsed(value.createdAt ?? "1970-01-01", field: "customer.createdAt", calendar: calendar),
-                 archivedAt: value.archivedAt, leadSource: value.leadSource, tags: value.tags,
+                 archivedAt: value.archivedAt, leadSource: value.leadSource,
+                 referredByCustomerId: value.referredByCustomerId, tags: value.tags,
                  marketingOptOutOn: value.marketingOptOutOn, marketingOptOutVia: value.marketingOptOutVia)
     }
 
@@ -988,13 +1136,14 @@ enum CanonicalUIAdapters {
                    estimateTotal: double(value.estimateTotal), laborHours: double(value.laborHours),
                    laborRate: double(value.laborRate), notes: value.notes, invoiceId: value.invoiceId,
                    createdAt: try parsed(value.createdAt, field: "job.createdAt", calendar: calendar),
-                   archivedAt: value.archivedAt)
+                   archivedAt: value.archivedAt, propertyId: value.propertyId)
     }
 
     static func payment(from value: Canonical.Payment, calendar: Calendar = .current) throws -> Payment {
         Payment(id: value.id, amount: double(value.amount), date: try parsed(value.date, field: "payment.date", calendar: calendar),
                 method: displayPaymentMethod(value.method), note: value.note ?? "",
-                voidedAt: try value.voidedAt.map { try parsed($0, field: "payment.voidedAt", calendar: calendar) })
+                voidedAt: try value.voidedAt.map { try parsed($0, field: "payment.voidedAt", calendar: calendar) },
+                tip: value.tipAmount.map(double))
     }
 
     static func invoice(from value: Canonical.Invoice, calendar: Calendar = .current) throws -> Invoice {
@@ -1053,6 +1202,9 @@ enum CanonicalUIAdapters {
         result.bookableSlotsEnabled = value.schedule?.bookableSlotsEnabled ?? false
         result.reviewRequestEnabled = value.reviewRequestEnabled; result.googleReviewLink = value.googleReviewLink
         result.reviewRequestDelayHours = value.reviewRequestDelayHours; result.reviewRequestTemplate = value.reviewRequestTemplate
+        // Phase 32: absent = 30; a malformed stored value is clamped into 0…365.
+        result.estimateValidityDays = min(max(value.estimateValidityDays ?? 30, 0), 365)
+        result.tipsEnabled = value.tipsEnabled ?? false
         if case let .string(raw)? = value.preservation.unknownFields["appearance"] {
             result.appearance = Appearance(rawValue: raw) ?? .system
         }
@@ -1180,15 +1332,21 @@ private extension CanonicalUIAdapters {
         }
         return result
     }
+    /// Phase 24: `stripe` (pay-link, pay-page and autopay payments booked by
+    /// the Worker) shows as "Stripe", matching RN `PaymentHistoryList`'s
+    /// METHOD_LABELS; it read "Other" before. The two maps round-trip it, so
+    /// a re-canonicalized Stripe payment never becomes `other`.
     static func displayPaymentMethod(_ value: String) -> String {
         switch value.lowercased() {
         case "cash": return "Cash"; case "check", "cheque": return "Check"; case "card": return "Card"
+        case "stripe": return "Stripe"
         case "ach", "bank_transfer", "bank transfer": return "ACH"; default: return "Other"
         }
     }
     static func canonicalPaymentMethod(_ value: String) -> String {
         switch value.lowercased() {
         case "cash": return "cash"; case "check", "cheque": return "check"; case "card": return "card"
+        case "stripe": return "stripe"
         case "ach", "bank_transfer", "bank transfer": return "bank_transfer"; default: return "other"
         }
     }
@@ -1204,12 +1362,15 @@ private extension CanonicalUIAdapters {
         return try decode(fields)
     }
     static func newCanonicalPayment(_ value: Payment, calendar: Calendar) throws -> Canonical.Payment {
-        let fields: [String: Canonical.JSONValue] = [
+        var fields: [String: Canonical.JSONValue] = [
             "id": .string(value.id), "amount": .number(Decimal(string: String(value.amount)) ?? 0),
             "date": .string(day(value.date, calendar: calendar)), "method": .string(canonicalPaymentMethod(value.method)),
             "note": value.note.isEmpty ? .null : .string(value.note),
             "voidedAt": value.voidedAt.map { .string(timestamp($0)) } ?? .null
         ]
+        // Phase 28: the UI never creates a tip, but a projected payment that
+        // carries one keeps it on the no-baseline path.
+        if let tip = value.tip { fields["tipAmount"] = number(tip) }
         return try decode(fields)
     }
     static func scheduleFieldsChanged(_ value: BusinessSettings, _ old: BusinessSettings) -> Bool {

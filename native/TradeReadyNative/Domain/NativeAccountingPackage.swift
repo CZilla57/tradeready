@@ -24,7 +24,10 @@ struct NativePackageInput {
 struct NativePackageSummary: Equatable {
     var rangeStart: String
     var rangeEnd: String
+    /// Phase 28: invoice payments + tips (= Σ active-payments.csv Amount).
     var cashCollected: Decimal
+    /// Phase 28: the tips inside `cashCollected`; always emitted.
+    var tipsCollected: Decimal
     var voidedAmount: Decimal
     var expensesTotal: Decimal
     var netCash: Decimal
@@ -66,6 +69,9 @@ enum NativeAccountingPackage {
         }
         return NativeCashBasis.paymentsInRange(invoice, start: start, end: end).contains { $0.voidedAt == nil }
     }
+
+    /// Phase 28 (tips spec §6.3): the Source of a payment-activity tip row.
+    static let tipSource = "tip"
 
     static func paymentSource(_ id: String) -> String {
         if id.hasPrefix("stripe_") { return "stripe" }
@@ -133,18 +139,33 @@ enum NativeAccountingPackage {
         "Date", "Customer", "Invoice #", "Method", "Note", "Amount", "Voided", "Voided At", "Source",
     ]
 
+    /// Phase 28 (tips spec §6.3): a payment with a tip is followed by a tip
+    /// row (Note "Tip", Source `tip`) that shares its Voided / Voided At, since
+    /// voiding a payment voids its tip. It sorts with its payment's (date, id),
+    /// and the stable sort keeps it right after the payment.
     static func buildPaymentActivityCsv(_ invoices: [Canonical.Invoice], start: Date, end: Date) -> String {
         var rows: [(date: String, id: String, fields: [String])] = []
         for invoice in invoices {
             for payment in NativeCashBasis.paymentsInRange(invoice, start: start, end: end) {
                 let isLegacy = payment.id.hasPrefix("legacy_")
+                let method = isLegacy ? "" : payment.method.rawValue
+                let voided = payment.voidedAt != nil ? "Yes" : "No"
                 rows.append((payment.date, payment.id, [
                     payment.date, invoice.customer, invoice.number,
-                    isLegacy ? "" : payment.method.rawValue, payment.note ?? "",
+                    method, payment.note ?? "",
                     NativeCSVExport.money(payment.amount),
-                    payment.voidedAt != nil ? "Yes" : "No", payment.voidedAt ?? "",
+                    voided, payment.voidedAt ?? "",
                     paymentSource(payment.id),
                 ]))
+                if payment.countedTip > 0 {
+                    rows.append((payment.date, payment.id, [
+                        payment.date, invoice.customer, invoice.number,
+                        method, NativeCSVExport.tipRowNote,
+                        NativeCSVExport.money(payment.countedTip),
+                        voided, payment.voidedAt ?? "",
+                        tipSource,
+                    ]))
+                }
             }
         }
         let sorted = NativeCSVExport.stableSorted(rows) {
@@ -178,15 +199,20 @@ enum NativeAccountingPackage {
     /// Phase 27 (lead source, spec §7) appends `Lead source` after RN's seven
     /// columns: the display name, custom labels verbatim, empty when unknown.
     /// It is the one deliberate divergence from the RN package bytes.
+    /// Phase 34 (referrals, spec §5.9) appends `Referred by`: the
+    /// referrer's name, "Former customer" when that record is gone, or blank
+    /// (no referrer, or one that breaks R1). Codes and rewards are never
+    /// exported.
     /// Phase 33 (campaigns spec §3.4) appends `Tags` (labels joined with
     /// "; ") and `Marketing opt-out` (the local date, or blank). Both headers
     /// are import synonyms, so a customer list round-trips.
     static let customersHeader = [
-        "Name", "Email", "Phone", "Address", "Notes", "Created", "Archived", "Lead source",
+        "Name", "Email", "Phone", "Address", "Notes", "Created", "Archived", "Lead source", "Referred by",
         "Tags", "Marketing opt-out",
     ]
 
     static func buildCustomersCsv(_ customers: [Canonical.Customer]) -> String {
+        let names = Dictionary(customers.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
         let rows = NativeCSVExport.stableSorted(customers) {
             NativeCSVExport.byCodeThenCode($0.name, $0.id, $1.name, $1.id)
         }.map { customer in
@@ -194,11 +220,21 @@ enum NativeAccountingPackage {
                 customer.name, customer.email, customer.phone, customer.address,
                 customer.notes, customer.createdAt ?? "", customer.archivedAt ?? "",
                 NativeLeadSource.exportLabel(customer.leadSource),
+                referredByLabel(customer, names: names),
                 (customer.tags ?? []).joined(separator: "; "),
                 customer.isMarketingOptedOut ? (customer.marketingOptOutOn ?? "") : "",
             ]
         }
         return NativeCSVExport.toCsv(customersHeader, rows)
+    }
+
+    /// R1 inline (this file's runners do not compile `NativeReferrals`).
+    static func referredByLabel(_ customer: Canonical.Customer, names: [String: String]) -> String {
+        let referrer = customer.referredByCustomerId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !referrer.isEmpty, referrer != customer.id,
+              NativeLeadSource.normalize(customer.leadSource) == "referral"
+        else { return "" }
+        return names[referrer] ?? "Former customer"
     }
 
     static let categoryHeader = ["Category ID", "Label"]
@@ -275,11 +311,16 @@ enum NativeAccountingPackage {
     // MARK: summary + README
 
     static func buildSummary(_ input: NativePackageInput, start: Date, end: Date) -> NativePackageSummary {
-        let cash = NativeCashBasis.collected(invoices: input.invoices, start: start, end: end)
+        // Phase 28 (tips spec §6.3): cash collected is cash received (tips
+        // included), matching Σ active-payments.csv again; `voided_amount`
+        // likewise includes a voided payment's tip, matching the Voided = Yes
+        // rows of payment-activity.csv.
+        let cash = NativeCashBasis.received(invoices: input.invoices, start: start, end: end)
+        let tips = NativeCashBasis.tipsCollected(invoices: input.invoices, start: start, end: end)
         var voided = Decimal.zero
         for invoice in input.invoices {
             for payment in NativeCashBasis.paymentsInRange(invoice, start: start, end: end) where payment.voidedAt != nil {
-                voided += payment.amount
+                voided += payment.amount + payment.countedTip
             }
         }
         let expensesTotal = input.expenses
@@ -294,6 +335,7 @@ enum NativeAccountingPackage {
             rangeStart: NativeCashBasis.ymd(start),
             rangeEnd: NativeCashBasis.ymd(end),
             cashCollected: cashCollected,
+            tipsCollected: round2(tips),
             voidedAmount: round2(voided),
             expensesTotal: expensesRounded,
             netCash: round2(cashCollected - expensesRounded),
@@ -307,13 +349,16 @@ enum NativeAccountingPackage {
     }
 
     /// `JSON.stringify(summary, null, 2)` — fixed key order, no trailing newline,
-    /// two-space indent, JS number formatting.
+    /// two-space indent, JS number formatting. Phase 28 (tips spec §6.3):
+    /// `tips_collected` always follows `cash_collected`, so the schema is the
+    /// same with or without tips.
     static func buildSummaryJson(_ summary: NativePackageSummary) -> String {
         let lines: [String] = [
             "{",
             "  \"range_start\": \(quoted(summary.rangeStart)),",
             "  \"range_end\": \(quoted(summary.rangeEnd)),",
             "  \"cash_collected\": \(number(summary.cashCollected)),",
+            "  \"tips_collected\": \(number(summary.tipsCollected)),",
             "  \"voided_amount\": \(number(summary.voidedAmount)),",
             "  \"expenses_total\": \(number(summary.expensesTotal)),",
             "  \"net_cash\": \(number(summary.netCash)),",
@@ -362,6 +407,7 @@ enum NativeAccountingPackage {
             "Notes:",
             "  - No values are inferred. Unknown fields are left blank and flagged in export-warnings.csv.",
             "  - There is no refund concept in the app; only voids are recorded.",
+            "  - Tips appear as separate rows with Note \"Tip\". They are income but not invoice payments, so invoices.csv Amount Paid excludes them.",
             "  - Mileage and receipts are stored on the device only and may differ between devices.",
             "  - net_cash in summary.json is cash collected minus expenses (before paying yourself).",
             "",

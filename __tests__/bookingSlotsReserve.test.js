@@ -268,6 +268,68 @@ describe("reserveCore", () => {
     }
   });
 
+  // Phase 34: the booking page's ?r= referral code rides the same spread.
+  test("referralCode from the booking page lands lowercased in the stored request blob", async () => {
+    const calls = mockBackend({ settingsRows: settingsRow(enabledSettings()) });
+    const r = await runReserve(reserveBody({ referralCode: " VTPVXVR024H36H2N ", leadSource: "nextdoor" }));
+    expect(r.status).toBe(200);
+    expect(calls.requestPosts).toHaveLength(1);
+    expect(calls.requestPosts[0].data).toMatchObject({
+      id: `bk${NOW_MS}_${RAND}`,
+      kind: "booked",
+      name: "Dana Fox",
+      leadSource: "nextdoor",
+      referralCode: "vtpvxvr024h36h2n",
+    });
+  });
+
+  test("a missing or garbage referralCode leaves no key on the stored request and never fails the booking", async () => {
+    const calls = mockBackend({ settingsRows: settingsRow(enabledSettings()) });
+    const bad = [undefined, "0123456789abcdeu", "0123456789abcde", "<i>x</i>", 42, { $ne: "" }, ["0123456789abcdef"], null];
+    for (const referralCode of bad) {
+      const body = referralCode === undefined ? reserveBody() : reserveBody({ referralCode });
+      expect((await runReserve(body)).status).toBe(200);
+    }
+    expect(calls.requestPosts).toHaveLength(bad.length);
+    for (const post of calls.requestPosts) {
+      expect(post.data).not.toHaveProperty("referralCode");
+    }
+  });
+
+  test("valid, unknown, malformed and absent codes get identical reserve responses (no oracle)", async () => {
+    const bodies = [
+      reserveBody({ referralCode: "0123456789abcdef" }),
+      reserveBody({ referralCode: "zzzzzzzzzzzzzzzz" }),
+      reserveBody({ referralCode: "not-a-code" }),
+      reserveBody(),
+    ];
+    const seen = [];
+    for (const body of bodies) {
+      mockBackend({ settingsRows: settingsRow(enabledSettings()) });
+      seen.push(JSON.stringify(await runReserve(body)));
+    }
+    expect(new Set(seen).size).toBe(1);
+  });
+
+  test("on the atomic claim RPC path the code rides in p_request, never in p_reservation", async () => {
+    mockBackend({ settingsRows: settingsRow(enabledSettings()) });
+    const fallback = global.fetch;
+    const rpcBodies = [];
+    global.fetch = jest.fn(async (url, init = {}) => {
+      if (String(url).includes("/rest/v1/rpc/claim_booking_slot")) {
+        rpcBodies.push(JSON.parse(init.body));
+        return jsonRes({ ok: true });
+      }
+      return fallback(url, init);
+    });
+    const r = await runReserve(reserveBody({ referralCode: "0123456789ABCDEF" }));
+    expect(r.status).toBe(200);
+    expect(Object.keys(r.body).sort()).toEqual(["manageToken", "ok", "slot"]);
+    expect(rpcBodies).toHaveLength(1);
+    expect(rpcBodies[0].p_request.referralCode).toBe("0123456789abcdef");
+    expect(rpcBodies[0].p_reservation).not.toHaveProperty("referralCode");
+  });
+
   test("unique-index conflict (racing customer) → 409 slot_taken, no request row", async () => {
     const calls = mockBackend({
       settingsRows: settingsRow(enabledSettings()),

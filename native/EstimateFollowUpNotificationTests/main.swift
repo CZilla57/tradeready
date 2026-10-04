@@ -75,6 +75,68 @@ private func plan(_ id: String, now: Date, offset: TimeInterval = 120) -> Native
     )
 }
 
+/// Phase 32: a dated sent estimate as stored on the device.
+private func datedJob(_ id: String, sent: String, validUntil: String) -> Canonical.Job {
+    let json = """
+    {"id":"\(id)","customerId":"c1","customerName":"Dave Smith","title":"Water heater swap","description":"","status":"estimate_sent","address":"","estimateTotal":850,"laborHours":3,"laborRate":85,"materials":[],"materialMarkup":20,"overhead":15,"margin":20,"notes":"","invoiceId":null,"createdAt":"2026-07-01","estimateSentAt":"\(sent)","estimateValidUntil":"\(validUntil)"}
+    """
+    return try! JSONDecoder().decode(Canonical.Job.self, from: Data(json.utf8))
+}
+
+/// Phase 32 (spec 2026-10-03 §6.7, §8): the expiry reminder rides the same
+/// coordinator. Both kinds sit under `est_`, a sweep replaces both, the
+/// 60-request ceiling counts both, and an `est_exp_` tap routes by `jobId`.
+@MainActor
+private func quoteExpiryCoordinatorTests() async {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(identifier: "America/Phoenix")!
+    let now = calendar.date(from: DateComponents(year: 2026, month: 8, day: 2, hour: 12))!
+    let jobs = [
+        datedJob("a", sent: "2026-08-01", validUntil: "2026-08-31"),
+        datedJob("b", sent: "2026-08-01", validUntil: "2026-08-20")
+    ]
+
+    do {
+        let center = FakeNotificationCenter()
+        center.pendingIdentifiers = ["est_a", "est_exp_a", "est_exp_gone", "appt_keep"]
+        let coordinator = NativeEstimateFollowUpNotificationCoordinator(
+            center: center,
+            exactWorkspaceBinding: { "owner-a" },
+            notificationPlan: { date in
+                NativeEstimateFollowUp.notificationPlan(jobs: jobs, now: date, enabled: true, calendar: calendar)
+            },
+            openFollowUp: { _ in }
+        )
+        await coordinator.synchronize(now: now)
+        expect(Set(center.removals.first ?? []) == ["est_a", "est_exp_a", "est_exp_gone"],
+               "Phase 32: a sweep replaces est_exp_ requests with the rest of the est_ namespace")
+        expect(center.scheduled.map(\.identifier) == ["est_a", "est_b", "est_exp_b", "est_exp_a"],
+               "Phase 32: two items per dated job are scheduled under est_, soonest first")
+        expect(center.scheduled.filter { $0.jobID == "a" }.count == 2 && center.scheduled.filter { $0.jobID == "b" }.count == 2,
+               "Phase 32: each expiry item carries its job id")
+        expect(center.pendingIdentifiers.contains("appt_keep"), "Phase 32: other families stay untouched")
+    }
+
+    do {
+        let center = FakeNotificationCenter()
+        center.pendingIdentifiers = (0..<57).map { "other_\($0)" }
+        let coordinator = NativeEstimateFollowUpNotificationCoordinator(
+            center: center,
+            exactWorkspaceBinding: { "owner-a" },
+            notificationPlan: { date in
+                NativeEstimateFollowUp.notificationPlan(jobs: jobs, now: date, enabled: true, calendar: calendar)
+            },
+            openFollowUp: { _ in }
+        )
+        await coordinator.synchronize(now: now)
+        expect(center.scheduled.map(\.identifier) == ["est_a", "est_b", "est_exp_b"],
+               "Phase 32: the shared 60-request ceiling counts expiry reminders too")
+    }
+
+    let route = NativeNotificationRoute.decode(userInfo: ["type": "estimate_follow_up", "jobId": "a"])
+    expect(route == .estimateFollowUp(jobID: "a"), "Phase 32: an est_exp_ tap carries the same type and job id, so it opens the follow-up")
+}
+
 @main
 @MainActor
 enum EstimateFollowUpNotificationTests {
@@ -197,6 +259,8 @@ enum EstimateFollowUpNotificationTests {
             expect(!center.pendingIdentifiers.contains("est_first"), "a request added during an account transition is immediately removed")
             expect(center.removals.contains(["est_first"]), "account-bound cleanup is explicit and deterministic")
         }
+
+        await quoteExpiryCoordinatorTests()
 
         if failures == 0 {
             print("PASS: native estimate follow-up notification coordinator tests")

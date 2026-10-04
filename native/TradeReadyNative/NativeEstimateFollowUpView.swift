@@ -9,9 +9,19 @@ private struct NativeEstimateFollowUpNotice: Identifiable {
 }
 
 struct NativeEstimateFollowUpView: View {
+    /// Phase 32 (spec 2026-10-03 §6.5, §6.7): the same reviewed composer also
+    /// carries the "Let the customer know" notice after an extension. That
+    /// notice is not a follow-up, so it never emits `estimate_follow_up_sent`
+    /// (the spec adds no analytics events) and its copy says what it is.
+    enum Purpose: Equatable {
+        case followUp
+        case extensionNotice
+    }
+
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: AppStore
     let draft: NativeEstimateFollowUpDraft
+    let purpose: Purpose
 
     @State private var channel: NativeEstimateMessageChannel
     @State private var bodyText: String
@@ -20,8 +30,9 @@ struct NativeEstimateFollowUpView: View {
     @State private var copied = false
     @State private var notice: NativeEstimateFollowUpNotice?
 
-    init(draft: NativeEstimateFollowUpDraft) {
+    init(draft: NativeEstimateFollowUpDraft, purpose: Purpose = .followUp) {
         self.draft = draft
+        self.purpose = purpose
         let initial: NativeEstimateMessageChannel = draft.customerPhone.isEmpty ? .email : .text
         _channel = State(initialValue: initial)
         _bodyText = State(initialValue: draft.body)
@@ -75,7 +86,7 @@ struct NativeEstimateFollowUpView: View {
 
                     TextEditor(text: $bodyText)
                         .frame(minHeight: 180)
-                        .accessibilityLabel("Follow-up message")
+                        .accessibilityLabel(purpose == .followUp ? "Follow-up message" : "Message to the customer")
 
                     Button {
                         UIPasteboard.general.string = bodyText
@@ -87,7 +98,7 @@ struct NativeEstimateFollowUpView: View {
                     } label: {
                         Label(copied ? "Copied" : "Copy message", systemImage: copied ? "checkmark" : "doc.on.doc")
                     }
-                    .accessibilityLabel(copied ? "Message copied" : "Copy follow-up message")
+                    .accessibilityLabel(copied ? "Message copied" : (purpose == .followUp ? "Copy follow-up message" : "Copy message"))
                 }
 
                 Section {
@@ -107,13 +118,15 @@ struct NativeEstimateFollowUpView: View {
                     .tradeReadyProminentButtonStyle()
                     .disabled(recipient.isEmpty || bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 } footer: {
-                    Text("Nothing is sent automatically. Review the message again and tap Send in the system composer. Following up does not change the job status.")
+                    Text(purpose == .followUp
+                         ? "Nothing is sent automatically. Review the message again and tap Send in the system composer. Following up does not change the job status."
+                         : "Nothing is sent automatically. Review the message again and tap Send in the system composer.")
                 }
             }
             .nativeContentColumn(.list)
             .scrollContentBackground(.hidden)
             .background(Color.tradeCanvas)
-            .navigationTitle("Estimate Follow-Up")
+            .navigationTitle(purpose == .followUp ? "Estimate Follow-Up" : "Let the Customer Know")
             .navigationBarTitleDisplayMode(.inline)
             .nativeKeyboardDoneBar()
             .toolbar {
@@ -147,22 +160,28 @@ struct NativeEstimateFollowUpView: View {
         showingComposer = false
         switch outcome {
         case .sent:
-            store.recordEstimateFollowUpSent(channel: channel == .email ? .email : .sms)
+            if purpose == .followUp {
+                store.recordEstimateFollowUpSent(channel: channel == .email ? .email : .sms)
+            }
             notice = .init(
-                title: "Follow-up sent",
+                title: purpose == .followUp ? "Follow-up sent" : "Message sent",
                 message: "Sent to \(draft.customerName) by \(channel == .email ? "email" : "text").",
                 dismissAfterAcknowledgement: true
             )
         case .saved:
             notice = .init(
                 title: "Draft saved in Mail",
-                message: "The follow-up was not recorded as sent. Your editable message remains available.",
+                message: purpose == .followUp
+                    ? "The follow-up was not recorded as sent. Your editable message remains available."
+                    : "The message was not sent. Your editable message remains available.",
                 dismissAfterAcknowledgement: false
             )
         case .failed:
             notice = .init(
                 title: "Message not sent",
-                message: "The system composer could not send the follow-up. Your editable message remains available.",
+                message: purpose == .followUp
+                    ? "The system composer could not send the follow-up. Your editable message remains available."
+                    : "The system composer could not send the message. Your editable message remains available.",
                 dismissAfterAcknowledgement: false
             )
         case .cancelled:

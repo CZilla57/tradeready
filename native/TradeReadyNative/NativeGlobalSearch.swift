@@ -68,12 +68,16 @@ enum NativeGlobalSearch {
         ),
     ]
 
+    /// Phase 21: `customerEquipment` is each customer's equipment serial and
+    /// model text (`NativePropertiesEquipment.equipmentSearchIndex`), so a
+    /// serial or model match lands on the customer.
     static func search(
         jobs: [Job],
         customers: [Customer],
         invoices: [Invoice],
         query: String,
-        limit: Int = sectionLimit
+        limit: Int = sectionLimit,
+        customerEquipment: [String: [String]] = [:]
     ) -> NativeGlobalSearchResults {
         let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !normalized.isEmpty else { return empty }
@@ -83,7 +87,10 @@ enum NativeGlobalSearch {
             .filter { !isArchived($0.archivedAt) && jobMatches($0, normalized) }
             .sorted { $0.createdAt > $1.createdAt }
         let matchingCustomers = customers
-            .filter { !isArchived($0.archivedAt) && customerMatches($0, normalized) }
+            .filter {
+                !isArchived($0.archivedAt)
+                    && (customerMatches($0, normalized) || equipmentMatches(customerEquipment[$0.id], normalized))
+            }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         let matchingInvoices = invoices
             .filter { invoiceMatches($0, normalized) }
@@ -109,6 +116,10 @@ enum NativeGlobalSearch {
     static func customerMatches(_ customer: Customer, _ query: String) -> Bool {
         [customer.name, customer.phone, customer.email, customer.address, customer.notes]
             .contains { contains($0, query) }
+    }
+
+    static func equipmentMatches(_ values: [String]?, _ query: String) -> Bool {
+        (values ?? []).contains { contains($0, query) }
     }
 
     static func invoiceMatches(_ invoice: Invoice, _ query: String) -> Bool {
@@ -151,7 +162,8 @@ struct NativeGlobalSearchView: View {
             jobs: store.jobs,
             customers: store.customers,
             invoices: store.invoices,
-            query: query
+            query: query,
+            customerEquipment: store.customerEquipmentSearchIndex
         )
     }
 

@@ -208,7 +208,7 @@ func testKeywordsTagsSources() {
     let referred = customers + [customer("r", "Rae", phone: "6025550199", extra: ["referredByCustomerId": "c"])]
     let referralJobs = jobs + [job("jr", customer: "r", date: "2026-01-01")]
     expectEqual(ids(audience(.init(service: "served", referral: "hasReferred"), customers: referred, jobs: referralJobs)), ["c"],
-                "has referred someone (Phase 34's referredByCustomerId, read until it is typed)")
+                "has referred someone (Phase 34's typed referredByCustomerId)")
     expect(NativeCampaignSegments.referralDataAvailable(referred) && !NativeCampaignSegments.referralDataAvailable(customers),
            "has-referred is offered only once referral data exists")
 }

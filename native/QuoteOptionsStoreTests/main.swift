@@ -429,6 +429,178 @@ func testGraftKeepsDecisionUnderQueuedEdit() async throws {
     expect(notPending.grafted.isEmpty, "graft: only queued jobs are grafted")
 }
 
+// MARK: - 5. Review fixes (2026-10-03, spec §12)
+
+/// The invoice committed for `jobID`, as saved on disk.
+@MainActor
+func storedInvoice(_ h: Harness, jobID: String) -> Canonical.Invoice? {
+    let repository = Canonical.SnapshotRepository(primaryURL: h.dir.appendingPathComponent("store.json"))
+    return (try? repository.load())??.snapshot.payload.invoices?.first { $0.jobId == jobID }
+}
+
+/// Sends `ids.job` and creates its approval link from the version the
+/// server now holds; returns that sent version.
+@MainActor
+func sendWithLink(_ h: Harness, _ jobID: String, token: String, _ label: String) async throws -> Canonical.Job? {
+    expect(h.store.markEstimateSent(id: jobID, from: .lead), "\(label): sent")
+    _ = await h.coordinator.sync(trigger: .manual)
+    guard var server = h.serverJob(jobID) else { expect(false, "\(label): the server holds the job"); return nil }
+    let sent = server
+    server.approval = try approval(for: sent, token: token)
+    try await h.remoteWrite(server)
+    _ = await h.coordinator.sync(trigger: .manual)
+    expectEqual(h.job(jobID)?.approval?.token, token, "\(label): the device holds the live link")
+    return sent
+}
+
+/// The customer approves `tierID` (+ add-ons) on the page built from `sent`.
+@MainActor
+func customerApproves(
+    _ h: Harness, _ jobID: String, sent: Canonical.Job, token: String, tierID: String, addOnIDs: [String]
+) async throws -> Decimal? {
+    guard var decided = h.serverJob(jobID) else { expect(false, "the server holds the job"); return nil }
+    decided.approval = try approval(for: sent, token: token, approvingTier: tierID, addOnIDs: addOnIDs)
+    try await h.remoteWrite(decided)
+    _ = await h.coordinator.sync(trigger: .manual)
+    return decided.approval?.selection?.total
+}
+
+@MainActor
+func testReviewCustomerChoiceSurvivesEditsAfterSending() async throws {
+    let h = Harness(tag: "review-choice")
+    defer { h.cleanup() }
+
+    // Fix 1: options removed after sending; the customer approves Better + add-on.
+    guard let ids = optionsEstimate(h, "removed"),
+          let sent = try await sendWithLink(h, ids.job, token: "tok-removed", "removed")
+    else { return }
+    expectEqual(h.store.quoteOptionsState(jobID: ids.job)?.linkShowsEarlierVersion, false,
+                "removed: no notice while the options match the link")
+    expect(h.store.removeQuoteOptions(jobID: ids.job, keepingTierID: ids.good),
+           "removed: the edit is allowed while the link is live")
+    expectEqual(h.store.quoteOptionsState(jobID: ids.job)?.linkShowsEarlierVersion, true,
+                "removed: the sheet says the link still shows the sent version")
+    _ = await h.coordinator.sync(trigger: .manual)
+    guard let consented = try await customerApproves(
+        h, ids.job, sent: sent, token: "tok-removed", tierID: ids.better, addOnIDs: [ids.addOn]
+    ) else { return }
+    guard let local = h.job(ids.job), let acceptance = local.quoteOptions?.acceptance else {
+        expect(false, "removed: the customer's choice is applied"); return
+    }
+    expectEqual(local.status, "approved", "removed: approved")
+    expectEqual(acceptance.tierId, ids.better, "removed: Better is accepted")
+    expectEqual(acceptance.addOnIds, [ids.addOn], "removed: with the add-on")
+    expectEqual(local.estimateTotal, consented, "removed: the job total is what the customer agreed to")
+    expectEqual(local.quoteOptions?.tiers.map(\.id), [ids.good, ids.better], "removed: the sent options are restored")
+
+    // Deposit request from the approved job: amount and lines both consented.
+    guard let deposit = h.store.invoiceFromJobDraft(jobID: ids.job) else {
+        expect(false, "removed: the deposit sheet opens"); return
+    }
+    expectEqual(deposit.mode, .requestDeposit, "removed: deposit mode")
+    expectEqual(deposit.amount, consented, "removed: the deposit invoice bills the consented total")
+    expect(h.store.commitInvoiceFromJob(deposit), "removed: the deposit invoice saves")
+    let removedInvoice = storedInvoice(h, jobID: ids.job)
+    expectEqual(removedInvoice?.amount, consented, "removed: invoice amount")
+    expectEqual(removedInvoice?.lineItems?.reduce(Decimal.zero) { $0 + $1.amount }, consented,
+                "removed: invoice lines sum to the consented total")
+    expectEqual(removedInvoice?.lineItems?.last?.description, "Expansion tank", "removed: the add-on is billed")
+
+    // Fix 4: Better re-priced (5 h → 8 h) after sending, not re-sent.
+    guard let other = optionsEstimate(h, "drift"),
+          let driftSent = try await sendWithLink(h, other.job, token: "tok-drift", "drift"),
+          var pricing = h.store.quoteTierPricingDraft(jobID: other.job, tierID: other.better)
+    else { return }
+    pricing.laborHours = 8
+    expect(h.store.saveQuoteTierPricing(pricing, tierID: other.better), "drift: Better re-priced after sending")
+    _ = await h.coordinator.sync(trigger: .manual)
+    guard let driftConsented = try await customerApproves(
+        h, other.job, sent: driftSent, token: "tok-drift", tierID: other.better, addOnIDs: [other.addOn]
+    ) else { return }
+    expectEqual(h.job(other.job)?.estimateTotal, driftConsented, "drift: the job total is the consented total")
+    expectEqual(h.job(other.job)?.laborHours, 8, "drift: the job keeps Better's current pricing")
+    guard let driftDeposit = h.store.invoiceFromJobDraft(jobID: other.job) else {
+        expect(false, "drift: the deposit sheet opens"); return
+    }
+    expectEqual(driftDeposit.amount, driftConsented, "drift: the deposit bills the consented total")
+    expect(h.store.commitInvoiceFromJob(driftDeposit), "drift: the deposit invoice saves")
+    let driftInvoice = storedInvoice(h, jobID: other.job)
+    expectEqual(driftInvoice?.lineItems?.reduce(Decimal.zero) { $0 + $1.amount }, driftConsented,
+                "drift: invoice lines sum to the consented total")
+    expectEqual(driftInvoice?.lineItems?.first?.description, "Labor (5 hrs @ $100/hr)",
+                "drift: the labor line is the 5 h the customer approved, not the re-priced 8 h")
+    expectEqual(driftInvoice?.lineItems?.first?.amount, 500, "drift: approved labor amount")
+}
+
+@MainActor
+func testReviewDeclineThenApprove() async throws {
+    let h = Harness(tag: "review-decline")
+    defer { h.cleanup() }
+    guard let ids = optionsEstimate(h, "redecide"),
+          let sent = try await sendWithLink(h, ids.job, token: "tok-redecide", "redecide"),
+          var declined = h.serverJob(ids.job)
+    else { return }
+    declined.approval?.decision = "declined"
+    declined.approval?.consentAt = consentAt
+    declined.approval?.declineReason = "Need to think"
+    try await h.remoteWrite(declined)
+    _ = await h.coordinator.sync(trigger: .manual)
+    expectEqual(h.job(ids.job)?.status, "declined", "redecide: the decline lands")
+    _ = await h.coordinator.sync(trigger: .manual)
+
+    // Same token, now approved (the Worker allows declined → approved).
+    guard let consented = try await customerApproves(
+        h, ids.job, sent: sent, token: "tok-redecide", tierID: ids.better, addOnIDs: []
+    ) else { return }
+    expectEqual(h.job(ids.job)?.status, "approved", "redecide: the later approval moves the job to approved")
+    expectEqual(h.job(ids.job)?.quoteOptions?.acceptance?.tierId, ids.better, "redecide: with the chosen option")
+    expectEqual(h.job(ids.job)?.estimateTotal, consented, "redecide: at the consented total")
+    expectEqual(h.store.jobs.first { $0.id == ids.job }?.status, .approved, "redecide: the UI sees approved")
+    expectEqual(h.queuedJob(ids.job)?.status, "approved", "redecide: the approved status is queued for the server")
+}
+
+@MainActor
+func testReviewOptionsOwnTheJobPrice() throws {
+    let h = Harness(tag: "review-price")
+    defer { h.cleanup() }
+    guard let ids = optionsEstimate(h, "price"), let before = h.job(ids.job) else { return }
+
+    // Fix 3: a job-editor save cannot type over the recommended option's price.
+    guard var edited = h.store.jobs.first(where: { $0.id == ids.job }) else { return }
+    edited.estimateTotal = 400
+    edited.laborHours = 9
+    edited.notes = "Side gate"
+    expect(h.store.upsert(edited), "price: the editor save succeeds")
+    let after = h.job(ids.job)
+    expectEqual(after?.estimateTotal, before.estimateTotal, "price: the job total stays the recommended option's")
+    expectEqual(after?.laborHours, before.laborHours, "price: the hours stay the recommended option's")
+    expectEqual(after?.notes, "Side gate", "price: the other edits save")
+    expectEqual(h.queuedJob(ids.job)?.estimateTotal, before.estimateTotal, "price: the queued blob keeps the option price")
+    guard let review = h.store.estimateReviewDraft(jobID: ids.job) else {
+        expect(false, "price: the estimate review opens"); return
+    }
+    expectEqual(review.snapshot.total, after?.estimateTotal, "price: Review & send sends the price the list shows")
+
+    // A duplicate of an options job keeps its copied options' price too.
+    guard let duplicate = h.store.duplicateJobDraft(sourceID: ids.job) else {
+        expect(false, "price: the duplicate draft opens"); return
+    }
+    var copy = duplicate.job
+    copy.estimateTotal = 999
+    expect(h.store.createDuplicatedJob(copy, template: duplicate.canonicalTemplate), "price: the duplicate saves")
+    expectEqual(h.job(copy.id)?.estimateTotal, duplicate.canonicalTemplate.estimateTotal,
+                "price: the duplicate keeps the recommended option's price")
+
+    // Fix 5: the add-on editor's Save, tapped twice, creates one add-on.
+    let count = h.store.quoteOptionsState(jobID: ids.job)?.addOns.count ?? 0
+    let draft = NativeQuoteAddOnDraft(label: "Drain pan", price: 45)
+    expect(h.store.addQuoteAddOn(jobID: ids.job, draft: draft, addOnID: "qa_sheet_once"), "add-on: first save")
+    expect(h.store.addQuoteAddOn(jobID: ids.job, draft: draft, addOnID: "qa_sheet_once"), "add-on: repeated save")
+    let addOns = h.store.quoteOptionsState(jobID: ids.job)?.addOns ?? []
+    expectEqual(addOns.count, count + 1, "add-on: one add-on for one sheet")
+    expectEqual(addOns.filter { $0.id == "qa_sheet_once" }.count, 1, "add-on: under the sheet's id")
+}
+
 // MARK: - Main
 
 @main
@@ -439,6 +611,9 @@ struct QuoteOptionsStoreTests {
         try testOwnerRecordedChoice()
         try await testReconcilerAppliesLinkDecision()
         try await testGraftKeepsDecisionUnderQueuedEdit()
+        try await testReviewCustomerChoiceSurvivesEditsAfterSending()
+        try await testReviewDeclineThenApprove()
+        try testReviewOptionsOwnTheJobPrice()
         if failures == 0 {
             print("PASS: quote-options store tests (\(checks) checks)")
         } else {

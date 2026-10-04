@@ -351,6 +351,18 @@ struct LedgerPayment: Codable, Equatable, Identifiable {
     var method: LedgerPaymentMethod = .other
     var note: String?
     var voidedAt: String?
+    /// Phase 28 (tips spec §6.1): the tip that rode on this payment. It is
+    /// never part of `amount`, so every balance/paid/overpaid rule ignores it;
+    /// only `tips` and `received` read it. Mapped by `NativeCashBasis` (the
+    /// income path) and the UI round trip; balance-only mappings leave it nil.
+    var tip: Decimal? = nil
+
+    /// The tip this entry counts: a positive tip, else zero. A voided entry
+    /// voids its tip too (spec §5), so callers that sum skip voided entries.
+    var countedTip: Decimal {
+        guard let tip, tip > 0 else { return 0 }
+        return tip
+    }
 }
 
 struct DepositRequest: Codable, Equatable {
@@ -477,6 +489,33 @@ enum PaymentLedger {
                 $0 + ($1.voidedAt == nil ? $1.amount : 0)
             }
         }
+    }
+
+    /// Phase 28 (tips spec §6.2): tips on non-voided payments dated inside
+    /// the inclusive window. Never part of `collected`, `amountPaid` or any
+    /// balance.
+    static func tips(
+        from invoices: [LedgerInvoice],
+        from start: String,
+        through end: String
+    ) -> Decimal {
+        invoices.reduce(Decimal.zero) { invoiceTotal, invoice in
+            invoiceTotal + payments(for: invoice, from: start, through: end).reduce(Decimal.zero) {
+                $0 + ($1.voidedAt == nil ? $1.countedTip : 0)
+            }
+        }
+    }
+
+    /// Phase 28: cash actually received = invoice payments + tips, non-voided
+    /// only. Income, cash and tax surfaces read this; invoice, receivables and
+    /// customer surfaces stay on `collected`.
+    static func received(
+        from invoices: [LedgerInvoice],
+        from start: String,
+        through end: String
+    ) -> Decimal {
+        collected(from: invoices, from: start, through: end)
+            + tips(from: invoices, from: start, through: end)
     }
 
     /// Records exactly the remaining balance. Already-settled invoices are unchanged.
@@ -759,8 +798,9 @@ enum TaxEstimateEngine {
                 mileageRate: settings.mileageRate,
                 fuelExpenses: split.fuel
             )
+            // Phase 28 (tips spec §6.3): tips are business income.
             let tax = estimate(TaxEstimateInput(
-                collectedIncome: PaymentLedger.collected(
+                collectedIncome: PaymentLedger.received(
                     from: invoices,
                     from: start,
                     through: end

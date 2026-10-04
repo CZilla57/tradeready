@@ -20,6 +20,17 @@ struct NativeEstimatePreparedMessage: Equatable, Sendable {
 }
 
 enum NativeEstimateMessageDrafting {
+    /// Phase 32 (spec 2026-10-03 §6.6): the reviewed snapshot's frozen
+    /// valid-until date adds one sentence to each channel. An undated
+    /// snapshot produces exactly the earlier copy.
+    private static func emailValidityLine(_ snapshot: Canonical.EstimateApprovalSnapshot) -> String? {
+        snapshot.validUntil.map { "This estimate is valid until \(NativeQuoteExpiry.displayDate($0, style: .long))." }
+    }
+
+    private static func textValidityPart(_ snapshot: Canonical.EstimateApprovalSnapshot) -> String? {
+        snapshot.validUntil.map { "Valid until \(NativeQuoteExpiry.displayDate($0, style: .short))." }
+    }
+
     static func prepare(
         review: NativeEstimateReviewDraft,
         channel: NativeEstimateMessageChannel,
@@ -46,6 +57,7 @@ enum NativeEstimateMessageDrafting {
                 .filter { $0.label != "Overhead & operating costs" }
                 .map { "\($0.label): \(amount($0.amount))" })
             parts.append("Total: \(amount(review.snapshot.total)).")
+            if let validity = textValidityPart(review.snapshot) { parts.append(validity) }
             let contact = if let approvalLink {
                 "View & approve: \(approvalLink.absoluteString)"
             } else if review.businessPhone.isEmpty {
@@ -68,6 +80,9 @@ enum NativeEstimateMessageDrafting {
         })
         lines.append("  ────────────────────────────────────")
         lines.append("  TOTAL ESTIMATE  \(amount(review.snapshot.total))")
+        if let validity = emailValidityLine(review.snapshot) {
+            lines.append(contentsOf: ["", validity])
+        }
         if !review.jobDescription.isEmpty {
             lines.append(contentsOf: ["", review.jobDescription])
         }
@@ -121,6 +136,7 @@ enum NativeEstimateMessageDrafting {
             parts.append(contentsOf: options.addOns.map {
                 "Add-on \($0.label): +\(amount($0.amount))."
             })
+            if let validity = textValidityPart(review.snapshot) { parts.append(validity) }
             let contact = if let approvalLink {
                 "View your options and approve: \(approvalLink.absoluteString)"
             } else if review.businessPhone.isEmpty {
@@ -148,6 +164,9 @@ enum NativeEstimateMessageDrafting {
             })
             lines.append("  ────────────────────────────────────")
             lines.append("  OPTION TOTAL  \(amount(tier.total))")
+        }
+        if let validity = emailValidityLine(review.snapshot) {
+            lines.append(contentsOf: ["", validity])
         }
         if !options.addOns.isEmpty {
             lines.append(contentsOf: ["", "Optional add-ons (added to the option you choose):"])

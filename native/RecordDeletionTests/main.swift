@@ -157,6 +157,39 @@ struct RecordDeletionTests {
             expect(false, "deleting a form from a snapshot without forms must fail closed")
         } catch NativeRecordDeletionError.recordNotFound {}
 
+        // Phase 21: nested property and equipment deletes upsert the
+        // customer and share the same undo, exact and in place.
+        guard let richCustomer = original.payload.customers?.first(where: { $0.properties != nil }),
+              let rental = richCustomer.properties?.first(where: { $0.primary != true }),
+              let furnace = richCustomer.properties?.first?.equipment?.first
+        else { fatalError("the rich fixture customer carries properties and equipment") }
+        let deletedEquipment = try NativeRecordDeletion.deleteEquipment(
+            snapshot: original, customerID: richCustomer.id, propertyID: NativePropertiesEquipment.implicitPrimaryID,
+            equipmentID: furnace.id, primaryID: "pr_unused"
+        )
+        expect(deletedEquipment.mutation.table == "customers" && deletedEquipment.mutation.op == .upsert
+               && deletedEquipment.mutation.recordId == richCustomer.id,
+               "an equipment delete plans one customer upsert, never a tombstone")
+        expect(deletedEquipment.undo.kind == .equipment && deletedEquipment.undo.bannerMessage == "Deleted equipment Furnace"
+               && deletedEquipment.undo.propertyID == richCustomer.properties?.first?.id,
+               "an equipment delete offers the shared undo, naming the type and the stored property")
+        let sortedEncoder = JSONEncoder()
+        sortedEncoder.outputFormatting = .sortedKeys
+        let originalCustomers = try sortedEncoder.encode(original.payload.customers)
+        let restoredEquipment = try NativeRecordDeletion.undo(snapshot: deletedEquipment.snapshot, token: deletedEquipment.undo)
+        let restoredEquipmentCustomers = try sortedEncoder.encode(restoredEquipment.snapshot.payload.customers)
+        expect(restoredEquipmentCustomers == originalCustomers,
+               "equipment undo restores the item, its unknown keys and its place")
+        let deletedProperty = try NativeRecordDeletion.deleteProperty(
+            snapshot: original, customerID: richCustomer.id, propertyID: rental.id, primaryID: "pr_unused"
+        )
+        expect(deletedProperty.undo.kind == .property && deletedProperty.undo.bannerMessage == "Deleted property Rental on Elm",
+               "a property delete offers the shared undo with its name")
+        let restoredProperty = try NativeRecordDeletion.undo(snapshot: deletedProperty.snapshot, token: deletedProperty.undo)
+        let restoredPropertyCustomers = try sortedEncoder.encode(restoredProperty.snapshot.payload.customers)
+        expect(restoredPropertyCustomers == originalCustomers, "property undo restores it exactly")
+        expect(NativeRecordDeletionKind.property.table == "customers" && NativeRecordDeletionKind.equipment.table == "customers",
+               "nested kinds belong to the customers table")
         // Phase 33: a campaign deletes and restores exactly (recipients and
         // unknown keys included); jobs it booked keep their campaignId.
         let richCampaign: Canonical.Campaign = try field("campaign")

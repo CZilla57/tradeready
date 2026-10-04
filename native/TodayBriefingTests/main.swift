@@ -381,6 +381,42 @@ expectEqual(
     "bookingRowLabel: native-only missingJob falls back to the presentation summary"
 )
 
+// MARK: - Phase 32: quote_update requests (spec 2026-10-03 §6.9)
+
+let quoteUpdateDetails = "Updated estimate requested for \"Water heater\" (expired November 2, 2026) — Can you redo it?"
+let quoteUpdateRow = NativeBookingAttention.Row(
+    kind: .portalChange,
+    request: bookedRequest(id: "bkeu_1", status: "portal_change_requested", jobRef: "j7", portalKind: "quote_update"),
+    jobID: "j7",
+    note: quoteUpdateDetails
+)
+let quoteUpdatePresentation = NativeTodayBriefing.bookingRowPresentation(quoteUpdateRow)
+expectEqual(quoteUpdatePresentation.title, "Dana Fox asked for an updated estimate", "quote_update: title")
+expectEqual(quoteUpdatePresentation.summary, "Dana Fox asked for an updated estimate", "quote_update: summary")
+expectEqual(quoteUpdatePresentation.body, quoteUpdateDetails, "quote_update: the body is the server details")
+expectEqual(quoteUpdatePresentation.jobDestination, .job(jobId: "j7"), "quote_update: destination is the job")
+expectEqual(NativeTodayBriefing.bookingRowLabel(quoteUpdateRow), "Dana Fox asked for an updated estimate", "quote_update: label")
+
+let quoteUpdateMissingJob = NativeBookingAttention.Row(
+    kind: .missingJob,
+    request: bookedRequest(id: "bkeu_2", status: "portal_change_requested", jobRef: "gone", portalKind: "quote_update"),
+    jobID: "gone",
+    note: quoteUpdateDetails
+)
+let quoteUpdateMissingPresentation = NativeTodayBriefing.bookingRowPresentation(quoteUpdateMissingJob)
+expectEqual(quoteUpdateMissingPresentation.title, "Dana Fox asked for an updated estimate", "quote_update missing job: title names the estimate")
+expectEqual(quoteUpdateMissingPresentation.jobDestination, .jobs, "quote_update missing job: falls back to the Jobs tab")
+expectEqual(NativeTodayBriefing.bookingRowLabel(quoteUpdateMissingJob), "Dana Fox asked for an updated estimate", "quote_update missing job: label")
+
+let rescheduleKind = NativeBookingAttention.Row(
+    kind: .portalChange,
+    request: bookedRequest(id: "bk4", status: "portal_change_requested", jobRef: "j1", portalKind: "reschedule"),
+    jobID: "j1",
+    note: "n"
+)
+expectEqual(NativeTodayBriefing.bookingRowLabel(rescheduleKind), "Dana Fox asked to reschedule an appointment",
+            "quote_update: other portal kinds keep their verbs")
+
 // MARK: - isSampleId (utils/sampleData.ts SAMPLE_ID_RE port)
 
 expect(NativeTodayBriefing.isSampleId("j1"), "isSampleId j1")

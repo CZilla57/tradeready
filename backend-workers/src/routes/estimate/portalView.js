@@ -16,6 +16,9 @@ import {
   fetchCustomerInvoices,
   fetchCustomerBookingRequests,
   fetchCustomerJobPhotos,
+  fetchCustomerPlans,
+  fetchCustomerAutopayEnrollments,
+  fetchStripeConnected,
 } from '../../../lib/estimate/portalStore.js';
 import { resolvePortalCustomer } from '../../../lib/estimate/portalTokenStore.js';
 import { logPortalEvent } from '../../../lib/estimate/portalRequestStore.js';
@@ -69,6 +72,26 @@ export async function portalViewHandler(c) {
     }
   }
 
+  // Phase 24: the "Automatic payments" section. Additive like photos — a
+  // failure leaves it empty and never fails the portal.
+  let planRows = [];
+  let enrollmentRows = [];
+  let stripeConnected = false;
+  if (c.env.PAY_LINK_SIGNING_SECRET) {
+    try {
+      [planRows, enrollmentRows, stripeConnected] = await Promise.all([
+        fetchCustomerPlans(c.env, row.user_id, row.id),
+        fetchCustomerAutopayEnrollments(c.env, row.user_id, row.id),
+        fetchStripeConnected(c.env, row.user_id),
+      ]);
+    } catch (err) {
+      console.error('[estimate/portal-view] autopay fetch failed:', err.message);
+      planRows = [];
+      enrollmentRows = [];
+      stripeConnected = false;
+    }
+  }
+
   // Security log (Phase 12D read events) — best-effort, prefix only.
   await logPortalEvent(c.env, { userId: row.user_id, tokenPrefix: String(token).slice(0, 8), event: 'view', ip });
 
@@ -85,6 +108,11 @@ export async function portalViewHandler(c) {
       nowMs: Date.now(),
       userId: row.user_id,
       photoSecret: c.env.PORTAL_URL_SIGNING_SECRET,
+      planRows,
+      enrollmentRows,
+      paySecret: c.env.PAY_LINK_SIGNING_SECRET || null,
+      payEnv: c.env,
+      stripeConnected,
     }),
     200
   );
