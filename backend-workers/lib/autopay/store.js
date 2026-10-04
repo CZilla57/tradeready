@@ -6,6 +6,13 @@
 //
 // Read helpers throw on a Supabase error (callers map that to a 500 or a
 // retry); the few best-effort writes say so in their names.
+//
+// Sweep-wide reads (review fix 2026-10-04, spec §13.7) go through sbGetAll:
+// keyset pagination on a unique column, read until an EMPTY page, so a
+// PostgREST max-rows cap (1000 by default, or any lower setting) can never
+// silently truncate them. Long id lists are chunked so the URL stays small.
+// Any page error throws, and so does running past MAX_PAGES: a partial read
+// must never look like "no more rows".
 
 const { ID_RE, UUID_RE } = require('../pay/payToken.js');
 const { isPlausibleEmail } = require('../selectInvoicesToRemind.js');
@@ -42,6 +49,45 @@ async function sbWrite(env, method, pathAndQuery, body, prefer = 'return=represe
 
 const enc = encodeURIComponent;
 
+const PAGE_SIZE = 1000;
+const MAX_PAGES = 200;
+const IN_LIST_CHUNK = 100;
+
+// Every row matching `pathAndQuery` (which must not carry order/limit),
+// ordered by the unique column `key`.
+async function sbGetAll(env, pathAndQuery, { key = 'id', pageSize = PAGE_SIZE } = {}) {
+  const out = [];
+  let last = null;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const after = last === null ? '' : `&${key}=gt.${enc(last)}`;
+    const rows = await sbGet(env, `${pathAndQuery}&order=${key}.asc&limit=${pageSize}${after}`);
+    if (!Array.isArray(rows)) throw new Error(`Supabase GET ${pathAndQuery.split('?')[0]}: not a row list`);
+    if (!rows.length) return out;
+    const next = rows[rows.length - 1][key];
+    if (next === undefined || next === null || String(next) === String(last)) {
+      throw new Error(`Supabase GET ${pathAndQuery.split('?')[0]}: pagination on ${key} did not advance`);
+    }
+    out.push(...rows);
+    last = next;
+  }
+  throw new Error(`Supabase GET ${pathAndQuery.split('?')[0]}: more than ${MAX_PAGES} pages`);
+}
+
+function chunks(list, size = IN_LIST_CHUNK) {
+  const out = [];
+  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
+  return out;
+}
+
+// sbGetAll over a shape-checked id list, IN_LIST_CHUNK ids per request.
+// `build(inList)` returns the path and filters for one chunk.
+async function sbGetAllIn(env, ids, re, build, opts) {
+  const safe = [...new Set((ids || []).map(String))].filter((id) => re.test(id));
+  const out = [];
+  for (const chunk of chunks(safe)) out.push(...(await sbGetAll(env, build(`(${chunk.map((id) => `"${id}"`).join(',')})`), opts)));
+  return out;
+}
+
 // PostgREST in-list of quoted, shape-checked ids. Anything outside the id
 // alphabet is dropped, so a hostile id can never break out of the filter.
 function inList(ids, re = ID_RE) {
@@ -57,9 +103,7 @@ async function fetchSettings(env, userId) {
 }
 
 async function fetchSettingsForUsers(env, userIds) {
-  const list = inList(userIds, UUID_RE);
-  if (!list) return new Map();
-  const rows = await sbGet(env, `settings?user_id=in.${list}&select=user_id,data`);
+  const rows = await sbGetAllIn(env, userIds, UUID_RE, (list) => `settings?user_id=in.${list}&select=user_id,data`, { key: 'user_id' });
   return new Map(rows.map((r) => [r.user_id, r.data || {}]));
 }
 
@@ -69,9 +113,7 @@ async function fetchStripeAccountId(env, userId) {
 }
 
 async function fetchStripeAccountsForUsers(env, userIds) {
-  const list = inList(userIds, UUID_RE);
-  if (!list) return new Map();
-  const rows = await sbGet(env, `stripe_accounts?user_id=in.${list}&select=user_id,stripe_account_id`);
+  const rows = await sbGetAllIn(env, userIds, UUID_RE, (list) => `stripe_accounts?user_id=in.${list}&select=user_id,stripe_account_id`, { key: 'user_id' });
   return new Map(rows.map((r) => [r.user_id, r.stripe_account_id]));
 }
 
@@ -110,8 +152,13 @@ async function fetchEnrollmentsForUser(env, userId, { statuses } = {}) {
   return sbGet(env, `autopay_enrollments?user_id=eq.${enc(userId)}${status}&select=${ENROLLMENT_COLUMNS}&order=consented_at.desc`);
 }
 
+// Every active or pending enrollment, all owners (the sweep), paginated.
 async function fetchLiveEnrollments(env) {
-  return sbGet(env, `autopay_enrollments?status=in.(active,pending)&select=${ENROLLMENT_COLUMNS}`);
+  return sbGetAll(env, `autopay_enrollments?status=in.(active,pending)&select=${ENROLLMENT_COLUMNS}`);
+}
+
+async function fetchEnrollmentsByIds(env, ids) {
+  return sbGetAllIn(env, ids, UUID_RE, (list) => `autopay_enrollments?id=in.${list}&select=${ENROLLMENT_COLUMNS}`);
 }
 
 // The newest Stripe Customer already used for (owner, TradeReady customer)
@@ -146,9 +193,12 @@ async function fetchChargesForInvoice(env, userId, invoiceId) {
 }
 
 async function fetchChargesForUsers(env, userIds) {
-  const list = inList(userIds, UUID_RE);
-  if (!list) return [];
-  return sbGet(env, `autopay_charges?user_id=in.${list}&select=*`);
+  return sbGetAllIn(env, userIds, UUID_RE, (list) => `autopay_charges?user_id=in.${list}&select=*`);
+}
+
+// Claims a previous run left open, all owners (the sweep), paginated.
+async function fetchClaimedCharges(env) {
+  return sbGetAll(env, 'autopay_charges?status=eq.claimed&select=*');
 }
 
 async function fetchRecentChargesForUser(env, userId, sinceIso) {
@@ -170,10 +220,21 @@ async function claimCharge(env, row, { now = new Date() } = {}) {
   return Array.isArray(rows) && rows.length ? rows[0] : null;
 }
 
-// Releases a claim no charge was attempted for (the customer paid on the pay
-// page first). Conditional on status=claimed.
+// Releases a claim no charge was attempted for. Conditional on
+// status=claimed AND charge_sent_at is null, so a claim whose create may
+// have reached Stripe can never be released (a later claim reusing the
+// invoice could otherwise charge twice).
 async function deleteClaim(env, chargeId) {
-  return sbWrite(env, 'DELETE', `autopay_charges?id=eq.${enc(chargeId)}&status=eq.claimed`, undefined, 'return=minimal');
+  return sbWrite(env, 'DELETE', `autopay_charges?id=eq.${enc(chargeId)}&status=eq.claimed&charge_sent_at=is.null`, undefined, 'return=minimal');
+}
+
+// Stamps charge_sent_at immediately before paymentIntents.create, on a row
+// still `claimed`. → the updated row, or null when the claim was settled or
+// released meanwhile (the caller must then not charge). A replay keeps the
+// first stamp.
+async function markChargeSent(env, claim, { now = new Date() } = {}) {
+  const rows = await updateCharge(env, claim.id, { charge_sent_at: claim.charge_sent_at || now.toISOString() }, { where: '&status=eq.claimed' });
+  return rows.length ? rows[0] : null;
 }
 
 async function updateCharge(env, chargeId, patch, { where = '' } = {}) {
@@ -182,18 +243,22 @@ async function updateCharge(env, chargeId, patch, { where = '' } = {}) {
 
 // --- plan + invoice reads for the sweep ------------------------------------
 
+// Plan rows (deleted ones included) by id. Plan ids are the table's primary
+// key; rows of users outside `userIds` are dropped.
 async function fetchPlansByIds(env, userIds, planIds) {
-  const users = inList(userIds, UUID_RE);
-  const plans = inList(planIds);
-  if (!users || !plans) return [];
-  return sbGet(env, `recurringInvoices?user_id=in.${users}&id=in.${plans}&select=id,user_id,data,deleted`);
+  const users = new Set((userIds || []).map(String));
+  const rows = await sbGetAllIn(env, planIds, ID_RE, (list) => `recurringInvoices?id=in.${list}&select=id,user_id,data,deleted`);
+  return rows.filter((r) => users.has(String(r.user_id)));
 }
 
-async function fetchPlanInvoices(env, userIds, planIds) {
-  const users = inList(userIds, UUID_RE);
-  const plans = inList(planIds);
-  if (!users || !plans) return [];
-  return sbGet(env, `invoices?user_id=in.${users}&data->>recurringInvoiceId=in.${plans}&deleted=is.false&select=id,user_id,data`);
+// Non-deleted invoices of the given plans, scoped to due dates on or after
+// `dueFrom` (YYYY-MM-DD) when given: the sweep never needs an invoice whose
+// charge window closed, so history doesn't grow the read. Paginated.
+async function fetchPlanInvoices(env, userIds, planIds, { dueFrom } = {}) {
+  const users = new Set((userIds || []).map(String));
+  const due = dueFrom ? `&data->>due=gte.${enc(dueFrom)}` : '';
+  const rows = await sbGetAllIn(env, planIds, ID_RE, (list) => `invoices?data->>recurringInvoiceId=in.${list}&deleted=is.false${due}&select=id,user_id,data`);
+  return rows.filter((r) => users.has(String(r.user_id)));
 }
 
 // The TradeReady customer's email (fallback recipient for autopay mail when
@@ -226,8 +291,11 @@ async function fetchCustomerPlans(env, userId, customerId) {
 
 module.exports = {
   sbGet,
+  sbGetAll,
   sbWrite,
   inList,
+  PAGE_SIZE,
+  MAX_PAGES,
   fetchSettings,
   fetchSettingsForUsers,
   fetchStripeAccountId,
@@ -239,14 +307,17 @@ module.exports = {
   fetchActiveEnrollmentsForCustomer,
   fetchEnrollmentsForUser,
   fetchLiveEnrollments,
+  fetchEnrollmentsByIds,
   findReusableStripeCustomer,
   insertEnrollment,
   updateEnrollments,
   fetchChargesForInvoice,
   fetchChargesForUsers,
+  fetchClaimedCharges,
   fetchRecentChargesForUser,
   claimCharge,
   deleteClaim,
+  markChargeSent,
   updateCharge,
   fetchPlansByIds,
   fetchPlanInvoices,
