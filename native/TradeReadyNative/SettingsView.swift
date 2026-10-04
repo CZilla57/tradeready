@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 enum SettingsDestination: Hashable {
-    case business, schedule, pricing, numbering, importData
+    case business, schedule, calendarSync, pricing, numbering, importData, forms
     case payments, booking, appearance, ai, notifications, reviews
     case sync, subscription, account
     case apiAccess  // Phase 23: only reachable through `apiAccessRows` (flag off = no row)
@@ -46,8 +46,10 @@ struct SettingsView: View {
                     settingsGroup("YOUR BUSINESS", rows: [
                         (.business, "building.2.fill", "Business profile", "Name, trade, contact details, logo"),
                         (.schedule, "clock.fill", "Schedule", "Working hours, job length, time off"),
+                        (.calendarSync, "calendar", "Calendar sync", store.calendarSyncHubSubtitle),
                         (.pricing, "tag.fill", "Pricing defaults", "Labor, markup, overhead, and margin"),
                         (.numbering, "number.square.fill", "Invoice numbering", "Prefix and starting number"),
+                        (.forms, "checklist", "Forms & checklists", formsSubtitle),
                         (.importData, "square.and.arrow.down.fill", "Import data", "Bring records over from CSV or the old app")
                     ])
                     settingsGroup("GETTING PAID", rows: [
@@ -135,9 +137,11 @@ struct SettingsView: View {
         switch destination {
         case .business: BusinessProfileSettings()
         case .schedule: NativeScheduleSettingsView()
+        case .calendarSync: NativeCalendarSyncSettingsView()
         case .pricing: PricingSettings()
         case .numbering: InvoiceNumberSettings()
         case .importData: ImportSettings()
+        case .forms: NativeFormTemplatesView()
         case .payments: PaymentsSettings()
         case .booking: NativeBookingSettingsView()
         case .appearance: AppearanceSettings()
@@ -149,6 +153,12 @@ struct SettingsView: View {
         case .subscription: SubscriptionSettings()
         case .account: AccountSettings()
         }
+    }
+
+    /// Phase 20: the owner's saved form templates.
+    private var formsSubtitle: String {
+        let count = store.customFormTemplates.count
+        return count == 0 ? "Checklist and inspection templates" : "\(count) saved template\(count == 1 ? "" : "s")"
     }
 
     private var syncSubtitle: String {
@@ -533,6 +543,12 @@ struct PaymentsSettings: View {
                             }
                         }.disabled(onboardBusy)
                     }
+                    // Phase 28 (tips spec §2): written through the same settings
+                    // save path as the neighbouring toggles; the existing sync
+                    // pushes it to the Worker with the settings blob.
+                    Toggle("Let customers add a tip", isOn: $store.settings.tipsEnabled)
+                    Text("Customers paying an invoice online can add an optional tip (10%, 15%, 20% or their own amount). Tips are recorded separately from the invoice and count as income. Not offered on deposits or automatic payments.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Button { confirmingDisconnect = true } label: {
                         HStack {
                             Text("Disconnect").foregroundStyle(Color.tradeDangerText)

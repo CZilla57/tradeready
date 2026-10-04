@@ -105,9 +105,15 @@ struct NativeMoneySummaryCard: Equatable {
     /// Present only when `income > 0` (RN hides the whole margin block otherwise).
     var marginPercent: Int?
     var marginFraction: Double
+    /// Phase 28 (tips spec §6.3): the tips inside `income` for the window.
+    var tips: Decimal = 0
 
     var isProfitable: Bool { netProfit >= 0 }
     var netProfitTone: NativeMoneyCardTone { isProfitable ? .success : .danger }
+    /// "Includes $Y in tips" under the figures, only when the window has tips.
+    var tipsCaption: String? {
+        tips > 0 ? "Includes \(NativeMoneyFormat.money(tips)) in tips" : nil
+    }
 
     static func make(
         invoices: [Canonical.Invoice],
@@ -117,7 +123,10 @@ struct NativeMoneySummaryCard: Equatable {
         previousRange: NativeDateRange?,
         label: String
     ) -> NativeMoneySummaryCard {
-        let income = NativeCashBasis.collected(invoices: invoices, start: start, end: end)
+        // Phase 28 (tips spec §6.3): income is cash received, tips included;
+        // net profit and the previous-window comparison follow.
+        let income = NativeCashBasis.received(invoices: invoices, start: start, end: end)
+        let tips = NativeCashBasis.tipsCollected(invoices: invoices, start: start, end: end)
         let expenseTotal = Self.expenseTotal(expenses, start: start, end: end)
         let profit = income - expenseTotal
 
@@ -125,7 +134,7 @@ struct NativeMoneySummaryCard: Equatable {
         var previousProfit: Decimal?
         var previousExpenses: Decimal?
         if let previousRange {
-            previousIncome = NativeCashBasis.collected(
+            previousIncome = NativeCashBasis.received(
                 invoices: invoices, start: previousRange.start, end: previousRange.end
             )
             previousExpenses = Self.expenseTotal(
@@ -150,7 +159,8 @@ struct NativeMoneySummaryCard: Equatable {
                 current: profit, previous: previousProfit
             ),
             marginPercent: margin.map { NativeMoneyFormat.round($0) },
-            marginFraction: margin ?? 0
+            marginFraction: margin ?? 0,
+            tips: tips
         )
     }
 
@@ -205,7 +215,7 @@ struct NativeMoneyMonthlyChartCard: Equatable {
                 end: NativeCashBasis.localDate(year: $0.year, month: $0.month + 1, day: 0)
             )
         }
-        let income = NativeCashBasis.collectedByPeriod(invoices: invoices, ranges: ranges)
+        let income = NativeCashBasis.receivedByPeriod(invoices: invoices, ranges: ranges)
         let rows = months.enumerated().map { index, month -> NativeMoneyMonthlyChartRow in
             let monthExpenses = expenses.reduce(Decimal.zero) { total, expense in
                 guard let date = NativeCashBasis.parseLocalDate(expense.date) else { return total }
@@ -487,6 +497,57 @@ struct NativeMoneyLeadSourceCard: Equatable {
             collectedText: collectedText,
             detailText: "\(row.jobsWon)/\(row.estimatesSent) won \u{00B7} \(closeText) close \u{00B7} \(row.newCustomers) new",
             accessibilityLabel: spoken
+        )
+    }
+}
+
+// MARK: - Referrals (Phase 34, spec 2026-10-03-referral-program-design.md §5.7)
+
+struct NativeMoneyReferralRow: Equatable, Identifiable {
+    var id: String
+    var name: String
+    var isCatchAll: Bool
+    /// "2 new · 5 total"
+    var detailText: String
+    /// "$1,800.00"
+    var collectedText: String
+    /// The row's single VoiceOver element.
+    var accessibilityLabel: String
+}
+
+/// `Referrals` — the top five rows of `NativeReferralReport` for the chip's
+/// window, plus the rewards recorded in it. Hidden (nil) unless at least one
+/// customer has a referrer. Opening it shows `NativeReferralsView`.
+struct NativeMoneyReferralCard: Equatable {
+    static let title = "Referrals"
+    static let rowLimit = 5
+
+    var rows: [NativeMoneyReferralRow]
+    /// "Rewards recorded: 2 ($50.00)"
+    var footerText: String
+
+    static func make(
+        customers: [Canonical.Customer],
+        invoices: [Canonical.Invoice],
+        start: Date,
+        end: Date
+    ) -> NativeMoneyReferralCard? {
+        guard NativeReferrals.anyReferrer(in: customers) else { return nil }
+        let report = NativeReferralReport.make(customers: customers, invoices: invoices, start: start, end: end)
+        return NativeMoneyReferralCard(
+            rows: report.rows.prefix(rowLimit).map(row(for:)),
+            footerText: "Rewards recorded: \(report.rewardsRecorded) (\(NativeMoneyFormat.money(report.rewardsAmount)))"
+        )
+    }
+
+    private static func row(for row: NativeReferralReportRow) -> NativeMoneyReferralRow {
+        let collected = NativeMoneyFormat.money(row.collected)
+        let detail = "\(row.newReferred) new \u{00B7} \(row.referredAllTime) total"
+        let spoken = "\(row.name): \(NativeMoneyFormat.plural(row.newReferred, "new referred customer", "new referred customers")), "
+            + "\(row.referredAllTime) referred in total, \(collected) collected"
+        return NativeMoneyReferralRow(
+            id: row.id, name: row.name, isCatchAll: row.isCatchAll,
+            detailText: detail, collectedText: collected, accessibilityLabel: spoken
         )
     }
 }
@@ -1023,6 +1084,8 @@ struct NativeMoneyOverview: Equatable {
     var customerMix: NativeMoneyCustomerMixCard?
     /// Phase 27: hidden (nil) when there are no customers.
     var leadSources: NativeMoneyLeadSourceCard?
+    /// Phase 34: hidden (nil) unless at least one customer has a referrer.
+    var referrals: NativeMoneyReferralCard? = nil
     var invoiceAging: NativeMoneyInvoiceAgingCard
     var receivables: NativeMoneyReceivablesCard
     var funnel: NativeMoneyConversionFunnelCard
@@ -1072,6 +1135,9 @@ struct NativeMoneyOverview: Equatable {
             ),
             leadSources: NativeMoneyLeadSourceCard.make(
                 customers: customers, jobs: jobs, invoices: invoices, start: range.start, end: range.end
+            ),
+            referrals: NativeMoneyReferralCard.make(
+                customers: customers, invoices: invoices, start: range.start, end: range.end
             ),
             invoiceAging: NativeMoneyInvoiceAgingCard.make(invoices: invoices),
             receivables: NativeMoneyReceivablesCard.make(invoices: invoices, jobs: jobs, now: now),

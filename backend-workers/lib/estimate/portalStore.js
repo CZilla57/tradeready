@@ -76,4 +76,38 @@ async function fetchCustomerJobPhotos(env, userId, jobIds) {
   );
 }
 
-module.exports = { lookupCustomerByPortalToken, fetchBusinessName, fetchCustomerJobs, fetchCustomerInvoices, fetchCustomerBookingRequests, fetchCustomerJobPhotos };
+// Phase 24 (§4.9): the customer's maintenance plans and their ACTIVE autopay
+// enrollments, for the portal's "Automatic payments" card, plus whether the
+// owner is connected to Stripe (no connection → no autopay section). All
+// scoped by user_id AND this customer's id; read-only like everything here.
+async function fetchCustomerPlans(env, userId, customerId) {
+  return get(
+    env,
+    `recurringInvoices?user_id=eq.${encodeURIComponent(userId)}&data->>customerId=eq.${encodeURIComponent(customerId)}&deleted=eq.false&select=id,data`
+  );
+}
+
+async function fetchCustomerAutopayEnrollments(env, userId, customerId) {
+  return get(
+    env,
+    `autopay_enrollments?user_id=eq.${encodeURIComponent(userId)}&customer_id=eq.${encodeURIComponent(customerId)}&status=eq.active` +
+      '&select=id,recurring_invoice_id,customer_id,status,card_brand,card_last4,max_amount_cents'
+  );
+}
+
+async function fetchStripeConnected(env, userId) {
+  const rows = await get(env, `stripe_accounts?user_id=eq.${encodeURIComponent(userId)}&select=stripe_account_id`);
+  return rows.length > 0 && !!rows[0].stripe_account_id;
+}
+
+module.exports = {
+  lookupCustomerByPortalToken,
+  fetchBusinessName,
+  fetchCustomerJobs,
+  fetchCustomerInvoices,
+  fetchCustomerBookingRequests,
+  fetchCustomerJobPhotos,
+  fetchCustomerPlans,
+  fetchCustomerAutopayEnrollments,
+  fetchStripeConnected,
+};

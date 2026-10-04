@@ -144,3 +144,47 @@ describe("buildInvoiceEmail", () => {
     expect(email.attachments).toBeUndefined();
   });
 });
+
+// Phase 24 (card-on-file spec §4.10): when an active autopay enrollment will
+// charge the invoice, the email says so and rewords the pay line. The
+// autopay sweep precomputes `autopay`; the builder stays pure.
+describe("buildInvoiceEmail — autopay line", () => {
+  const PAY = "https://gettradereadyapp.com/pay.html?t=p.fake.sig";
+  const MANAGE = "https://gettradereadyapp.com/pay.html?m=m.fake.sig";
+  const autopay = { card: "Visa ending 4242", chargeOn: "2026-09-05", manageUrl: MANAGE };
+
+  test("the pay page is an allowed link host (Worker copy)", () => {
+    const email = buildInvoiceEmail({ invoice: inv({ paymentLinkUrl: PAY, paymentLinkAmount: 500 }), settings });
+    expect(email.text).toContain(`You can pay securely here: ${PAY}`);
+  });
+
+  test("charged-automatically line, manage link, and the reworded pay line", () => {
+    const email = buildInvoiceEmail({ invoice: inv({ paymentLinkUrl: PAY, paymentLinkAmount: 500 }), settings, autopay });
+    expect(email.text).toContain(
+      "This invoice will be charged automatically to your Visa ending 4242 on 2026-09-05. Nothing to do.\n" +
+      `Manage automatic payments: ${MANAGE}`
+    );
+    expect(email.text).toContain(`Prefer to pay now with another card? ${PAY}`);
+    expect(email.text).not.toContain("You can pay securely here");
+  });
+
+  test("a stale pay link drops only the pay line; the autopay line stays", () => {
+    const email = buildInvoiceEmail({ invoice: inv({ paymentLinkUrl: PAY, paymentLinkAmount: 400 }), settings, autopay });
+    expect(email.text).toContain("charged automatically");
+    expect(email.text).not.toContain("Prefer to pay now");
+  });
+
+  test("a non-allowlisted manage URL is dropped, never mailed", () => {
+    const email = buildInvoiceEmail({ invoice: inv(), settings, autopay: { ...autopay, manageUrl: "https://evil.example/pay.html?m=x" } });
+    expect(email.text).toContain("charged automatically");
+    expect(email.text).not.toContain("evil.example");
+    expect(email.text).not.toContain("Manage automatic payments");
+  });
+
+  test("no autopay → unchanged email", () => {
+    const a = buildInvoiceEmail({ invoice: inv(), settings });
+    const b = buildInvoiceEmail({ invoice: inv(), settings, autopay: undefined });
+    expect(b).toEqual(a);
+    expect(a.text).not.toContain("automatically");
+  });
+});

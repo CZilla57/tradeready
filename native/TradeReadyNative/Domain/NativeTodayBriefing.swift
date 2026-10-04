@@ -55,6 +55,9 @@ public enum NativeTodayDestination: Equatable, Hashable {
     case newJob
     /// First-action hero "Add Your First Customer": Customers → AddCustomer.
     case newCustomer
+    /// Phase 33: the `maintenance_due:all` row opens the campaign builder
+    /// with a segment preset (`NativeCampaignSegments.Preset` raw value).
+    case newCampaign(preset: String)
 }
 
 public enum NativeTodayHeroKind: String, Equatable {
@@ -146,6 +149,8 @@ public enum NativeTodayBriefing {
             return .customers
         case .money:
             return .money
+        case .newCampaign(let preset):
+            return .newCampaign(preset: preset)
         }
     }
 
@@ -514,6 +519,29 @@ public enum NativeTodayBriefing {
 
     private static func quoteUpdateLabel(_ request: Canonical.BookingRequest) -> String {
         "\(request.name) asked for an updated estimate"
+    }
+
+    // MARK: - Calendar checks attention row (Phase 26, calendar sync spec §4.5)
+
+    /// The one Today attention row for calendar checks: shown only while
+    /// bookable slots are on and the server says checks are enabled but not
+    /// fresh, so the booking page is taking requests only. It cannot be
+    /// muted; tapping it opens Settings › Calendar sync. The date is the last
+    /// time checks ran, in the device calendar.
+    public static func calendarChecksStaleMessage(
+        slotsOn: Bool,
+        checksEnabled: Bool,
+        fresh: Bool,
+        lastRunAt: Date?,
+        calendar: Calendar = .current
+    ) -> String? {
+        guard slotsOn, checksEnabled, !fresh else { return nil }
+        guard let lastRunAt else {
+            return "Online booking is request-only: calendar checks haven't run yet"
+        }
+        let parts = calendar.dateComponents([.month, .day], from: lastRunAt)
+        let month = monthNamesShort[max(0, min(11, (parts.month ?? 1) - 1))]
+        return "Online booking is request-only: calendar checks haven't run since \(month) \(parts.day ?? 1)"
     }
 
     // MARK: - Private formatting tables

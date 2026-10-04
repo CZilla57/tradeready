@@ -47,6 +47,9 @@ struct NativeEstimatePDFDocument: Equatable, Sendable {
     let customerPhone: String
     let customerEmail: String
     let customerAddress: String
+    /// Phase 21: the job's address when it differs from the customer's
+    /// (empty otherwise), printed as "Service address".
+    let serviceAddress: String
     let jobTitle: String
     let jobDescription: String
     let lineItems: [NativeEstimatePDFLineItem]
@@ -84,6 +87,7 @@ struct NativeEstimatePDFDocument: Equatable, Sendable {
         customerPhone = review.customerPhone
         customerEmail = review.customerEmail
         customerAddress = review.customerAddress
+        serviceAddress = review.serviceAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         jobTitle = review.snapshot.jobTitle
         jobDescription = review.jobDescription
         lineItems = review.snapshot.lineItems.map {
@@ -312,8 +316,18 @@ enum NativeEstimatePDFRenderer {
             let customerContact = [document.customerEmail, document.customerPhone, document.customerAddress]
                 .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                 .joined(separator: "\n")
-            let contactHeight = draw(customerContact, x: margin, y: y, width: 240,
+            var contactHeight = draw(customerContact, x: margin, y: y, width: 240,
                                      font: .systemFont(ofSize: 10), color: secondary)
+            if !document.serviceAddress.isEmpty {
+                // Phase 21: where the work is, when it isn't the customer's address.
+                let top = y + contactHeight + (contactHeight > 0 ? 8 : 0)
+                let labelHeight = draw("SERVICE ADDRESS", x: margin, y: top, width: 240,
+                                       font: .systemFont(ofSize: 9, weight: .bold), color: secondary,
+                                       characterSpacing: 1)
+                let addressHeight = draw(document.serviceAddress, x: margin, y: top + labelHeight + 2, width: 240,
+                                         font: .systemFont(ofSize: 10), color: ink)
+                contactHeight = top - y + labelHeight + 2 + addressHeight
+            }
             // Phase 32: the "Valid until" line appears only on a dated estimate.
             let validityLine = document.validUntilDisplay.map { "\nValid until  \($0)" } ?? ""
             _ = draw("Date  \(document.issueDate)\(validityLine)\nPending approval", x: 330, y: y, width: 234,

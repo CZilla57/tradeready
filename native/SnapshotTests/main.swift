@@ -54,6 +54,13 @@ run("legacy flat snapshot upgrades without loss") {
     guard case let .object(payload)? = root["payload"] else { throw NSError(domain: "SnapshotTests", code: 2) }
     expect(payload["settings"] == .null, "legacy explicit null survives upgrade")
     expect(payload["legacyExtension"] == .object(["enabled": .bool(true)]), "legacy unknown field survives upgrade")
+    // Phase 20: a snapshot written before forms existed has no `forms` key;
+    // it reads as absent (callers default to empty) and stays absent.
+    expect(snapshot.payload.forms == nil && (snapshot.payload.forms ?? []).isEmpty, "a pre-Phase 20 snapshot has no forms")
+    expect(payload["forms"] == nil, "re-encoding an old snapshot does not invent a forms key")
+    // Phase 33: likewise for campaigns.
+    expect(snapshot.payload.campaigns == nil, "a pre-Phase 33 snapshot has no campaigns")
+    expect(payload["campaigns"] == nil, "re-encoding an old snapshot does not invent a campaigns key")
 }
 
 run("current envelope round trip") {
@@ -85,6 +92,8 @@ run("all persisted families remain distinct") {
     expect(payload.pricebook != nil, "pricebook family")
     expect(payload.bookingRequests != nil, "booking requests family")
     expect(payload.jobPhotos != nil, "job photos family")
+    expect(payload.forms != nil, "forms family (Phase 20)")
+    expect(payload.campaigns != nil, "campaigns family (Phase 33)")
     // Settings is present-but-null in this fixture; re-encoding above proves
     // that it is represented independently from absence.
 }
@@ -103,7 +112,9 @@ run("populated model families round trip") {
         trips: [try field("trip", in: rich)],
         pricebook: [try field("pricebookEntry", in: rich)],
         bookingRequests: [try field("bookingRequest", in: rich)],
-        jobPhotos: [try field("jobPhoto", in: rich)]
+        jobPhotos: [try field("jobPhoto", in: rich), try field("formPhoto", in: rich)],
+        forms: [try field("form", in: rich), try field("formTemplate", in: rich)],
+        campaigns: [try field("campaign", in: rich)]
     )
     let first = Canonical.Snapshot(payload: payload)
     let bytes = try Canonical.SnapshotCodec.encode(first)
@@ -118,7 +129,15 @@ run("populated model families round trip") {
     let secondBytes = try Canonical.SnapshotCodec.encode(second)
     expect(bytes == secondBytes, "populated snapshot is a stable round trip")
     expect(second.payload.invoices?.count == 1 && second.payload.jobs?.count == 1, "primary collections survive")
-    expect(second.payload.recurringInvoices?.count == 1 && second.payload.jobPhotos?.count == 1, "auxiliary collections survive")
+    expect(second.payload.recurringInvoices?.count == 1 && second.payload.jobPhotos?.count == 2, "auxiliary collections survive")
+    expect(second.payload.forms?.map(\.kind) == ["instance", "template"]
+           && second.payload.forms?.first?.preservation.unknownFields["futureFormField"] != nil
+           && second.payload.forms?.first?.items[2].preservation.unknownFields["futureItemField"] != nil,
+           "forms survive with unknown keys at both levels")
+    expect(second.payload.jobPhotos?.last?.formItemId == "fi_2", "a form photo keeps its back-reference")
+    expect(second.payload.campaigns?.first?.message.preservation.unknownFields["futureMessageField"] != nil
+           && second.payload.campaigns?.first?.recipients?.count == 3,
+           "a campaign survives with unknown keys and its recipients (Phase 33)")
     expect(second.payload.settings != nil && second.payload.customerNotes?.isEmpty == false, "singleton and map survive")
 }
 

@@ -335,12 +335,16 @@ enum NativeEstimateFollowUp {
     }
 
     /// Phase 32: 9:00 local on `validUntil − expiryReminderLeadDays`.
-    private static func expiryReminderDate(validUntil: String, calendar: Calendar) -> Date? {
+    /// `validUntil` is a Gregorian date, so it is built in a Gregorian
+    /// calendar in `calendar`'s zone whatever the device calendar is (review
+    /// fix 2026-10-03; a Buddhist `Calendar.current` would read 2026 as 1483).
+    private static func expiryReminderDate(validUntil: String, calendar deviceCalendar: Calendar) -> Date? {
         guard let day = NativeQuoteExpiry.addDays(validUntil, -NativeQuoteExpiry.expiryReminderLeadDays) else {
             return nil
         }
         let parts = day.split(separator: "-").compactMap { Int($0) }
         guard parts.count == 3 else { return nil }
+        let calendar = NativeQuoteExpiry.gregorian(in: deviceCalendar.timeZone)
         return calendar.date(from: DateComponents(
             calendar: calendar,
             timeZone: calendar.timeZone,

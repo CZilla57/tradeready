@@ -211,6 +211,13 @@ struct NativeMoneySummaryCardView: View {
                 )
             }
 
+            // Phase 28 (tips spec §6.3): income already includes tips.
+            if let tipsCaption = card.tipsCaption {
+                Text(tipsCaption)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
             if let margin = card.marginPercent {
                 VStack(alignment: .leading, spacing: 4) {
                     NativeMoneyTrack(fraction: card.marginFraction, tone: card.netProfitTone, height: 6)
@@ -625,6 +632,44 @@ struct NativeMoneyLeadSourceCardView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+}
+
+// MARK: - Referrals (Phase 34)
+
+/// The top referrers for the chip's window. The whole card opens the "who
+/// referred whom" screen; each row speaks its own summary, and the name and
+/// amount stack at accessibility text sizes instead of truncating.
+struct NativeMoneyReferralCardView: View {
+    let card: NativeMoneyReferralCard
+    var onOpen: (() -> Void)?
+
+    var body: some View {
+        NativeMoneyCard(title: NativeMoneyReferralCard.title, onOpen: onOpen) {
+            ForEach(card.rows) { row in
+                VStack(alignment: .leading, spacing: 2) {
+                    NativeAccessibilityAdaptiveRow(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(row.name)
+                            .font(.subheadline)
+                            .foregroundStyle(row.isCatchAll ? Color.secondary : Color.primary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(row.collectedText)
+                            .font(.subheadline.monospacedDigit())
+                            .foregroundStyle(Color.tradeSuccessText)
+                            .layoutPriority(1)
+                    }
+                    Text(row.detailText)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(row.accessibilityLabel)
+            }
+            Text(card.footerText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

@@ -5,7 +5,7 @@
 //
 // Auth: Supabase JWT via "Authorization: Bearer <token>"
 
-import Stripe from 'stripe';
+import { makeStripe } from '../../../lib/stripe/client.js';
 import { appCors } from '../../appCors.js';
 
 export async function connectStatusHandler(c) {
@@ -45,10 +45,7 @@ export async function connectStatusHandler(c) {
   if (!stripeAccountId) return c.json({ connected: false }, 200);
 
   try {
-    const stripe = new Stripe(STRIPE_SECRET_KEY, {
-      apiVersion: '2023-10-16',
-      httpClient: Stripe.createFetchHttpClient(),
-    });
+    const stripe = makeStripe(c.env);
     const account = await stripe.accounts.retrieve(stripeAccountId);
 
     return c.json({

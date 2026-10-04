@@ -478,7 +478,24 @@ do {
     expectEqual(insights.count, 1, "several due customers collapse to one row")
     expectEqual(insights.first?.id, "maintenance_due:all", "maintenance_due aggregate id")
     expectEqual(insights.first?.title, "2 customers haven't been serviced in 6+ months", "maintenance_due aggregate title")
-    expectEqual(insights.first?.target, .customers, "maintenance_due aggregate target")
+    // Phase 33 (campaigns spec §5.5): the aggregate row opens the campaign
+    // builder already filtered; the single-customer row keeps `.customer`.
+    expectEqual(insights.first?.target, .newCampaign(preset: "due_for_maintenance"), "maintenance_due aggregate target is the campaign builder")
+}
+
+// Phase 33 (campaigns spec §4.3): a customer who opted out of marketing is
+// skipped, because the row's "Ask coach" drafts a check-in text.
+do {
+    let optedOut = customer(#"{"marketingOptOutOn":"2026-07-01","marketingOptOutVia":"asked"}"#)
+    expectEqual(select(jobs: [historyJob()], customers: [optedOut]).count, 0, "an opted-out customer is skipped")
+    expectEqual(select(jobs: [historyJob()], customers: [customer(#"{"marketingOptOutOn":""}"#)]).count, 1,
+                "a blank opt-out date is not an opt-out")
+    let mixed = select(
+        jobs: [historyJob(), historyJob(#"{"id":"h2","customerId":"c2","scheduledDate":"2025-11-01"}"#)],
+        customers: [customer(), customer(#"{"id":"c2","name":"Bob Reyes","marketingOptOutOn":"2026-01-02"}"#)]
+    )
+    expectEqual(mixed.first?.id, "maintenance_due:c1", "with one of two opted out, the single row remains")
+    expectEqual(mixed.first?.target, .customer(customerId: "c1"), "the single row keeps its customer target")
 }
 
 do {
@@ -609,6 +626,30 @@ do {
     expect(insights.count > 1, "expense_anomaly rides alongside other kinds")
     expectEqual(insights.first?.kind, .laborOverrun, "labor_overrun stays first")
     expectEqual(insights.last?.kind, .expenseAnomaly, "expense_anomaly rides last")
+}
+
+// MARK: - referral_thanks (Phase 34, spec 2026-10-03-referral-program-design.md §5.7)
+
+do {
+    // Aug 4 minus 60 days is Jun 5.
+    let sam = customer(#"{"id":"c_sam","name":"Sam Ortiz"}"#)
+    let alex = customer(#"{"id":"c_alex","name":"Alex Kim","leadSource":"referral","referredByCustomerId":"c_sam"}"#)
+    let paid = invoice(#"{"id":"i_alex","customer":"Alex Kim","customerId":"c_alex","due":"2026-09-30","payments":[{"id":"p1","amount":400,"date":"2026-06-05","method":"cash"}]}"#)
+    let thanks = select(invoices: [paid], customers: [sam, alex]).filter { $0.kind == .referralThanks }
+    expectEqual(thanks.map(\.id), ["referral_thanks:c_alex"], "referral_thanks fires for a first payment 60 days ago")
+    expectEqual(thanks.first?.title, "Thank Sam for referring Alex", "referral_thanks title")
+    expectEqual(thanks.first?.target, .customer(customerId: "c_sam"), "referral_thanks opens the referrer")
+    let tooOld = invoice(#"{"id":"i_alex","customer":"Alex Kim","customerId":"c_alex","due":"2026-09-30","payments":[{"id":"p1","amount":400,"date":"2026-06-04","method":"cash"}]}"#)
+    expect(select(invoices: [tooOld], customers: [sam, alex]).allSatisfy { $0.kind != .referralThanks },
+           "referral_thanks: 61 days ago is outside the window")
+    let thanked = customer(#"{"id":"c_alex","name":"Alex Kim","leadSource":"referral","referredByCustomerId":"c_sam","referralReward":{"kind":"thank_you","recordedOn":"2026-08-01"}}"#)
+    expect(select(invoices: [paid], customers: [sam, thanked]).allSatisfy { $0.kind != .referralThanks },
+           "referral_thanks: a recorded reward clears it")
+    expect(select(invoices: [paid], customers: [alex]).allSatisfy { $0.kind != .referralThanks },
+           "referral_thanks: a dangling referrer suppresses it")
+    let overrunJob = job(#"{"timeSessions":[\#(sessionJSON(3.5))]}"#)
+    let mixed = select(jobs: [overrunJob], invoices: [paid], customers: [sam, alex])
+    expectEqual(mixed.last?.kind, .referralThanks, "referral_thanks runs last")
 }
 
 // MARK: - Phase 32: quote_expiring / quote_expired (spec 2026-10-03 §6.8)
@@ -770,6 +811,45 @@ do {
 }
 
 expect(NativeInsightKind.allCases.map(\.rawValue).suffix(2) == ["quote_expiring", "quote_expired"], "the two Phase 32 kinds are registered")
+
+// MARK: - warranty_expiring (Phase 21, spec 2026-10-02-properties-equipment-design.md §4)
+
+private func warrantyCustomer(_ id: String, _ name: String, expires: String, archived: Bool = false) -> Canonical.Customer {
+    let equipment = #"{"id":"eq_\#(id)","type":"water_heater","warrantyExpires":"\#(expires)"\#(archived ? #","archivedAt":"2026-07-01""# : "")}"#
+    return customer(#"{"id":"\#(id)","name":"\#(name)","properties":[{"id":"pr_\#(id)","primary":true,"equipment":[\#(equipment)]}]}"#)
+}
+
+do {
+    // Aug 4: the window is Aug 4 through Sep 2 (30 local days, today included).
+    let soon = select(customers: [warrantyCustomer("w1", "Ola Park", expires: "2026-08-20")])
+    expectEqual(soon.map(\.kind), [.warrantyExpiring], "warranty_expiring fires inside the window")
+    expectEqual(soon.first?.id, "warranty_expiring:eq_w1:2026-08-20", "warranty_expiring id")
+    expectEqual(soon.first?.title, "Ola Park's water heater warranty ends Aug 20, 2026", "warranty_expiring copy")
+    expectEqual(soon.first?.target, .customer(customerId: "w1"), "warranty_expiring target")
+    expectEqual(select(customers: [warrantyCustomer("w1", "Ola Park", expires: "2026-09-02")]).count, 1, "day 29 is in")
+    expectEqual(select(customers: [warrantyCustomer("w1", "Ola Park", expires: "2026-09-03")]).count, 0, "day 30 is out")
+    expectEqual(select(customers: [warrantyCustomer("w1", "Ola Park", expires: "2026-08-03")]).count, 0, "an expired warranty is silent")
+    expectEqual(select(customers: [warrantyCustomer("w1", "Ola Park", expires: "2026-08-04", archived: true)]).count, 0,
+                "removed equipment is silent")
+
+    let both = select(customers: [
+        warrantyCustomer("w2", "Zed Young", expires: "2026-08-10"),
+        warrantyCustomer("w1", "Ola Park", expires: "2026-08-10"),
+        warrantyCustomer("w3", "Abe Lane", expires: "2026-08-30"),
+    ])
+    expectEqual(both.map(\.id), ["warranty_expiring:eq_w1:2026-08-10"], "one row: the soonest expiry, ties by customer name")
+}
+
+do {
+    // Priority: after maintenance_due, before expense_anomaly.
+    let insights = select(
+        jobs: [historyJob()],
+        customers: [customer(), warrantyCustomer("w1", "Ola Park", expires: "2026-08-20")],
+        expenses: priorEven + [expense(#"{"id":"m","date":"2026-08-02","amount":1600}"#)]
+    )
+    expectEqual(insights.map(\.kind), [.maintenanceDue, .warrantyExpiring, .expenseAnomaly],
+                "warranty_expiring runs after maintenance_due and before expense_anomaly")
+}
 
 // MARK: - month/date pure helpers (FA-039 guards)
 

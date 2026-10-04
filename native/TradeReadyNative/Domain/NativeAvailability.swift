@@ -95,7 +95,12 @@ public enum NativeAvailability {
         }
         for window in extraBusy {
             if window.date != date { continue }
-            guard let s = NativeSchedule.toMinutes(window.start), let e = NativeSchedule.toMinutes(window.end) else { continue }
+            // Phase 26 (spec §4.6): an end of exactly "24:00" blocks to
+            // midnight (1440), as the Worker and RN `toMinutes` already read
+            // it; strict `toMinutes` rejects it and the window used to be
+            // dropped (fail open). Shared vector: `midnightEndVectors`.
+            let end = window.end == "24:00" ? dayMinutes : NativeSchedule.toMinutes(window.end)
+            guard let s = NativeSchedule.toMinutes(window.start), let e = end else { continue }
             raw.append((s, e))
         }
         let padded = raw.compactMap { (s, e) -> (Int, Int)? in

@@ -317,3 +317,43 @@ Nothing here is deployed, published or pushed by the build session.
 | Q2 | **Terms of Service.** Add the optional sentence "Tips your customers add through a TradeReady payment page are paid to you with the payment; TradeReady takes no share." to `terms.html` §4? | **Not required.** The existing §4 covers it. Add it only if you want the no-share point explicit. |
 
 Everything else in this phase is decided by recommendation (§11). It needs no migration, API or SDK bump, new dependency, Stripe setting, or new webhook event.
+
+## 13. Build record (2026-10-03)
+
+### Worker and pages
+
+#### 13.1 Contract for the native client (settled first)
+
+No new app-facing route. The app and the Worker meet in two synced blobs.
+
+**Owner setting: how it reaches the Worker.** The app writes `tipsEnabled` into its existing settings blob, and the existing settings sync pushes it to Supabase `settings.data` (one row per user). The Worker reads that row with the service role at `GET /api/pay/view` and again at `POST /api/pay/checkout` (`W/lib/autopay/store.js` `fetchSettings`). There is no separate endpoint, cache or webhook.
+
+```json
+// settings.data (excerpt)
+{ "businessName": "Rector HVAC", "tipsEnabled": true }
+```
+
+- The key is exactly `tipsEnabled`, a JSON boolean. Only `true` turns tips on. Absent, `false`, `null`, `"true"` or `1` all mean off.
+- Turning it off takes effect on the next page load. A page that was already showing the tip step gets 409 `tips_off` ("Tips are no longer offered. Please reload.") when the customer clicks Pay with a tip. A payment with no tip still goes through.
+- Encode it only when the owner has set it, or always as a boolean. Both are fine. Never encode it as a string.
+
+**Ledger entry with a tip** (`invoices.data.payments[]`, written only by the Stripe webhook, `W/src/routes/stripe/webhook.js` → `W/lib/stripe/recordPayment.js`):
+
+```json
+{
+  "id": "stripe_cs_test_a1B2c3",
+  "amount": 120,
+  "date": "2026-10-03",
+  "method": "stripe",
+  "stripeSessionId": "cs_test_a1B2c3",
+  "tipAmount": 18
+}
+```
+
+- `amount`: the invoice portion only, in dollars. Its meaning is unchanged, and it is the only field the balance, `paid`, `paidAt` and overpaid math reads (`W/lib/paymentMath.js` is unchanged).
+- `tipAmount`: the tip in dollars, a JSON number `> 0` with at most 2 decimal places (it is `tipCents / 100`, for example `18`, `12.34` or `0.5`). It is **absent** when there is no tip. It is never `0` and never `null`. Decode it through the same path as `amount` and round to cents.
+- `id` is `stripe_<Checkout Session id>`, exactly as before (TH-9 unchanged). One Checkout payment is always one entry, and the tip is never a second entry.
+- `date` is the UTC date the webhook ran (unchanged Phase 24 behavior). `method` is `"stripe"`.
+- Voiding (`voidedAt`) voids the tip with the payment. The Worker never writes `voidedAt`.
+- `tipAmount` appears only on pay-page payments (`stripeSessionId` set). It never appears on autopay entries (`channel: "autopay"`), legacy Payment Link entries, or manual entries.
+- The cached `paid` / `paidAt` on the invoice blob are derived from `amount` only. An invoice paid exactly, with a tip on top, is `paid: true` and not overpaid.

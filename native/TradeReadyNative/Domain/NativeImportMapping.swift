@@ -32,6 +32,9 @@ enum NativeImportMapping {
             .init(key: "notes", label: "Notes", required: false),
             // Phase 27 (spec 2026-10-02-lead-source-design.md §4).
             .init(key: "leadSource", label: "Lead source", required: false),
+            // Phase 33 (spec 2026-10-03-campaigns-tags-design.md §3.4).
+            .init(key: "tags", label: "Tags", required: false),
+            .init(key: "marketingOptOut", label: "Marketing opt-out", required: false),
         ],
         .jobs: [
             .init(key: "title", label: "Job title", required: true),
@@ -73,6 +76,11 @@ enum NativeImportMapping {
             // is deliberately broad.
             "leadSource": ["lead source", "source", "referral source", "how did you hear",
                            "how did you hear about us", "marketing source", "lead channel"],
+            // Phase 33. Opt-IN columns ("Receives marketing emails") are not
+            // mapped: their polarity is ambiguous.
+            "tags": ["tags", "tag", "labels", "customer tags", "client tags"],
+            "marketingOptOut": ["do not contact", "do not market", "marketing opt out", "unsubscribed",
+                                "email opt out", "opted out"],
         ],
         .jobs: [
             "title": ["title", "job title", "job name", "service", "job"],

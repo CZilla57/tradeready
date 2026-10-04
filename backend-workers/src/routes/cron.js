@@ -7,6 +7,7 @@
 
 import { runReminders } from '../../lib/sendReminders.js';
 import { runInvoiceEmails } from '../../lib/sendInvoiceEmails.js';
+import { runAutopayCharges } from '../../lib/autopay/runAutopayCharges.js';
 
 export async function cronSendRemindersHandler(c) {
   // Fail closed with a log if the secret is unset (misconfiguration); 401 on a
@@ -52,5 +53,41 @@ export async function cronSendInvoiceEmailsHandler(c) {
   } catch (err) {
     console.error('[send-invoice-emails] fatal', err.message);
     return c.json({ error: 'Invoice email run failed' }, 500);
+  }
+}
+
+// GET /api/cron/run-autopay — manual-run fallback for the autopay sweep
+// (Phase 24 spec §4.6), same guards as above. The PRODUCTION trigger is the
+// */15 cron, which runs the autopay sweep and then the invoice emails. This
+// route runs only the sweep and returns its counts (sets are summarized).
+export async function cronRunAutopayHandler(c) {
+  if (!c.env.CRON_SECRET) {
+    console.error('[run-autopay] CRON_SECRET not configured');
+    return c.json({ error: 'Cron not configured' }, 500);
+  }
+  if (c.req.header('authorization') !== `Bearer ${c.env.CRON_SECRET}`) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+  if (!c.env.SUPABASE_URL || !c.env.SUPABASE_SERVICE_ROLE_KEY || !c.env.STRIPE_SECRET_KEY) {
+    return c.json({ error: 'Server misconfiguration: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, STRIPE_SECRET_KEY required.' }, 500);
+  }
+
+  try {
+    const r = await runAutopayCharges(c.env);
+    return c.json({
+      scanned: r.scanned,
+      charged: r.charged,
+      failed: r.failed,
+      skipped: r.skipped,
+      unknown: r.unknown,
+      deferred: r.deferred,
+      revoked: r.revoked,
+      expired: r.expired,
+      yielded: r.yielded,
+      emailedFallback: r.autopayHandled.size,
+    }, 200);
+  } catch (err) {
+    console.error('[run-autopay] fatal', err.message);
+    return c.json({ error: 'Autopay run failed' }, 500);
   }
 }

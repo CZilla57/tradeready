@@ -345,6 +345,34 @@ private func testLeadSourceBlock() {
     expectEqual(sourced.revenueThisMonth, unsourced.revenueThisMonth, "the aggregate is unchanged by sources")
 }
 
+// MARK: - Referrals (Phase 34)
+
+private func testReferralBlock() {
+    let invoices = [
+        invoice(#"{"id":"i1","customerId":"c_alex","customer":"Alex","amount":1800,"payments":[{"id":"p1","amount":1800,"date":"2026-03-10","method":"cash"}]}"#),
+        // Last year: outside year to date.
+        invoice(#"{"id":"i2","customerId":"c_alex","customer":"Alex","amount":700,"payments":[{"id":"p2","amount":700,"date":"2025-11-10","method":"cash"}]}"#),
+    ]
+    func make(_ customers: [Canonical.Customer]) -> NativeBusinessSnapshot {
+        NativeBusinessSnapshotEngine.make(
+            invoices: invoices, jobs: [], customers: customers, expenses: [], trips: [],
+            values: NativeTaxSettingsValues(), mileageRate: decimal("0.7"), now: july6
+        )
+    }
+    let noReferrer = make([customer(#"{"id":"c_alex","name":"Alex","leadSource":"referral"}"#)])
+    expectEqual(noReferrer.referrals, nil, "no customer has a referrer: the referral block is ABSENT, never zeroed")
+    let referred = make([
+        customer(#"{"id":"c_sam","name":"Sam Ortiz"}"#),
+        customer(#"{"id":"c_alex","name":"Alex","leadSource":"referral","referredByCustomerId":"c_sam","createdAt":"2026-02-01","referralReward":{"kind":"invoice_credit","amount":25,"recordedOn":"2026-04-01"}}"#),
+    ])
+    expectEqual(referred.referrals, NativeReferralSnapshotBlock(
+        newReferred: 1, collected: 1800,
+        topReferrers: [NativeReferralSnapshotRow(name: "Sam Ortiz", referred: 1, collected: 1800)],
+        rewardsRecorded: 1, rewardsAmount: 25
+    ), "year-to-date referral block; last year's payment excluded")
+    expectEqual(referred.leadSources?.rows.first?.collected, 1800, "the referral collected matches the lead-source referral row")
+}
+
 // MARK: - Runner
 
 testRevenueBuckets()
@@ -355,6 +383,7 @@ testEmptyInputs()
 testTaxBlock()
 testSnapshotStampsAndTaxPresence()
 testLeadSourceBlock()
+testReferralBlock()
 
 if failures == 0 {
     print("BusinessSnapshotTests: all checks passed")

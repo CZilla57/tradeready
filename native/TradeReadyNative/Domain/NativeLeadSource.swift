@@ -37,9 +37,15 @@ enum NativeLeadSource {
               aliases: ["booking link", "online booking", "book online"]),
         .init(key: "mailer", displayName: "Flyer or mailer",
               aliases: ["flyer", "flier", "flyers", "door hanger", "postcard", "direct mail"]),
+        // Phase 33 (campaigns spec §9.2, D11): set only on a NEW customer
+        // created through a campaign's booking link. Additive.
+        .init(key: "campaign", displayName: "Text or email campaign",
+              aliases: ["email campaign", "text campaign", "sms campaign", "email blast", "newsletter"]),
     ]
 
     static let bookingLinkKey = "booking_link"
+    /// Phase 33: the preset a campaign-link booking gives a customer it creates.
+    static let campaignKey = "campaign"
     static let unknownBucketKey = "unknown"
     static let unknownDisplayName = "Unknown"
     static let customLabelMaxLength = 40

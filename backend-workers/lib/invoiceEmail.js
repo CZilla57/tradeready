@@ -14,7 +14,11 @@ const { isAllowedPaymentLink, sanitizeFromPhrase, sanitizeSubject } = require(".
 
 const SENDER = "invoices@gettradereadyapp.com";
 
-function buildInvoiceEmail({ invoice, settings, attachment }) {
+// `autopay` (Phase 24 spec §4.10), precomputed by the autopay sweep:
+// { card: 'Visa ending 4242', chargeOn: 'YYYY-MM-DD', manageUrl } when an
+// active enrollment will charge this invoice. Adds the "charged
+// automatically" line and rewords the pay line; the builder stays pure.
+function buildInvoiceEmail({ invoice, settings, attachment, autopay }) {
   const paid = amountPaid(invoice);
   const balance = balanceDue(invoice);
   // A partly-paid invoice (e.g. a deposit) names both numbers so the customer
@@ -48,8 +52,15 @@ function buildInvoiceEmail({ invoice, settings, attachment }) {
     isAllowedPaymentLink(invoice.paymentLinkUrl) &&
     Number.isFinite(linkAmount) &&
     Math.abs(linkAmount - balance) <= PAID_EPSILON;
+  const manageUrl = autopay && autopay.manageUrl && isAllowedPaymentLink(autopay.manageUrl) ? autopay.manageUrl : null;
+  const autopayLine = autopay && autopay.card
+    ? `\nThis invoice will be charged automatically to your ${autopay.card} on ${autopay.chargeOn || invoice.due}. Nothing to do.` +
+      (manageUrl ? `\nManage automatic payments: ${manageUrl}` : "") + "\n"
+    : "";
   const linkLine = linkCurrent
-    ? `\nYou can pay securely here: ${invoice.paymentLinkUrl}\n`
+    ? autopayLine
+      ? `\nPrefer to pay now with another card? ${invoice.paymentLinkUrl}\n`
+      : `\nYou can pay securely here: ${invoice.paymentLinkUrl}\n`
     : "";
   const notes = settings.paymentNotes ? `\n${settings.paymentNotes}\n` : "";
   const forWork = invoice.desc ? ` for ${invoice.desc}` : "";
@@ -59,7 +70,7 @@ function buildInvoiceEmail({ invoice, settings, attachment }) {
 Thanks for your business! Here's your invoice${forWork}.
 
 Invoice ${invoice.number} — ${amount}, due ${invoice.due}.
-${breakdown}${linkLine}
+${breakdown}${autopayLine}${linkLine}
 Questions about this invoice? Just reply to this email or contact ${biz}.
 ${notes}
 Best regards,

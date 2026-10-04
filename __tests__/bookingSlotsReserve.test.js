@@ -268,6 +268,68 @@ describe("reserveCore", () => {
     }
   });
 
+  // Phase 34: the booking page's ?r= referral code rides the same spread.
+  test("referralCode from the booking page lands lowercased in the stored request blob", async () => {
+    const calls = mockBackend({ settingsRows: settingsRow(enabledSettings()) });
+    const r = await runReserve(reserveBody({ referralCode: " VTPVXVR024H36H2N ", leadSource: "nextdoor" }));
+    expect(r.status).toBe(200);
+    expect(calls.requestPosts).toHaveLength(1);
+    expect(calls.requestPosts[0].data).toMatchObject({
+      id: `bk${NOW_MS}_${RAND}`,
+      kind: "booked",
+      name: "Dana Fox",
+      leadSource: "nextdoor",
+      referralCode: "vtpvxvr024h36h2n",
+    });
+  });
+
+  test("a missing or garbage referralCode leaves no key on the stored request and never fails the booking", async () => {
+    const calls = mockBackend({ settingsRows: settingsRow(enabledSettings()) });
+    const bad = [undefined, "0123456789abcdeu", "0123456789abcde", "<i>x</i>", 42, { $ne: "" }, ["0123456789abcdef"], null];
+    for (const referralCode of bad) {
+      const body = referralCode === undefined ? reserveBody() : reserveBody({ referralCode });
+      expect((await runReserve(body)).status).toBe(200);
+    }
+    expect(calls.requestPosts).toHaveLength(bad.length);
+    for (const post of calls.requestPosts) {
+      expect(post.data).not.toHaveProperty("referralCode");
+    }
+  });
+
+  test("valid, unknown, malformed and absent codes get identical reserve responses (no oracle)", async () => {
+    const bodies = [
+      reserveBody({ referralCode: "0123456789abcdef" }),
+      reserveBody({ referralCode: "zzzzzzzzzzzzzzzz" }),
+      reserveBody({ referralCode: "not-a-code" }),
+      reserveBody(),
+    ];
+    const seen = [];
+    for (const body of bodies) {
+      mockBackend({ settingsRows: settingsRow(enabledSettings()) });
+      seen.push(JSON.stringify(await runReserve(body)));
+    }
+    expect(new Set(seen).size).toBe(1);
+  });
+
+  test("on the atomic claim RPC path the code rides in p_request, never in p_reservation", async () => {
+    mockBackend({ settingsRows: settingsRow(enabledSettings()) });
+    const fallback = global.fetch;
+    const rpcBodies = [];
+    global.fetch = jest.fn(async (url, init = {}) => {
+      if (String(url).includes("/rest/v1/rpc/claim_booking_slot")) {
+        rpcBodies.push(JSON.parse(init.body));
+        return jsonRes({ ok: true });
+      }
+      return fallback(url, init);
+    });
+    const r = await runReserve(reserveBody({ referralCode: "0123456789ABCDEF" }));
+    expect(r.status).toBe(200);
+    expect(Object.keys(r.body).sort()).toEqual(["manageToken", "ok", "slot"]);
+    expect(rpcBodies).toHaveLength(1);
+    expect(rpcBodies[0].p_request.referralCode).toBe("0123456789abcdef");
+    expect(rpcBodies[0].p_reservation).not.toHaveProperty("referralCode");
+  });
+
   test("unique-index conflict (racing customer) → 409 slot_taken, no request row", async () => {
     const calls = mockBackend({
       settingsRows: settingsRow(enabledSettings()),
@@ -288,5 +350,107 @@ describe("reserveCore", () => {
     expect(r.status).toBe(500);
     expect(calls.deletes).toHaveLength(1);
     expect(calls.deletes[0]).toContain(`id=eq.rv${NOW_MS}_${RAND}`);
+  });
+
+  // Phase 33: the booking page's ?c= campaign code rides the same spread.
+  // These sit at the end of the block, apart from Phase 34's referral cases,
+  // so the two branches merge without touching each other's lines.
+  test("campaignCode from the booking page lands lowercased in the stored request blob", async () => {
+    const calls = mockBackend({ settingsRows: settingsRow(enabledSettings()) });
+    const r = await runReserve(reserveBody({ campaignCode: " VTPVXVR024H36H2N ", leadSource: "nextdoor" }));
+    expect(r.status).toBe(200);
+    expect(calls.requestPosts).toHaveLength(1);
+    expect(calls.requestPosts[0].data).toMatchObject({
+      id: `bk${NOW_MS}_${RAND}`,
+      kind: "booked",
+      name: "Dana Fox",
+      leadSource: "nextdoor",
+      campaignCode: "vtpvxvr024h36h2n",
+    });
+    expect(calls.reservePosts).toHaveLength(1);
+    expect(calls.reservePosts[0]).not.toHaveProperty("campaignCode");
+  });
+
+  test("a missing or garbage campaignCode leaves no key on the stored request and never fails the booking", async () => {
+    const calls = mockBackend({ settingsRows: settingsRow(enabledSettings()) });
+    const bad = [undefined, "0123456789abcdeu", "0123456789abcde", "K123456789abcdef", "<i>x</i>", 42, { $ne: "" }, ["0123456789abcdef"], null];
+    for (const campaignCode of bad) {
+      const body = campaignCode === undefined ? reserveBody() : reserveBody({ campaignCode });
+      expect((await runReserve(body)).status).toBe(200);
+    }
+    expect(calls.requestPosts).toHaveLength(bad.length);
+    for (const post of calls.requestPosts) {
+      expect(post.data).not.toHaveProperty("campaignCode");
+    }
+  });
+
+  test("valid, unknown, malformed and absent campaign codes get identical reserve responses (no oracle)", async () => {
+    const bodies = [
+      reserveBody({ campaignCode: "0123456789abcdef" }),
+      reserveBody({ campaignCode: "zzzzzzzzzzzzzzzz" }),
+      reserveBody({ campaignCode: "not-a-code" }),
+      reserveBody(),
+    ];
+    const seen = [];
+    for (const body of bodies) {
+      mockBackend({ settingsRows: settingsRow(enabledSettings()) });
+      seen.push(JSON.stringify(await runReserve(body)));
+    }
+    expect(new Set(seen).size).toBe(1);
+  });
+
+  test("on the atomic claim RPC path the campaign code rides in p_request, never in p_reservation", async () => {
+    mockBackend({ settingsRows: settingsRow(enabledSettings()) });
+    const fallback = global.fetch;
+    const rpcBodies = [];
+    global.fetch = jest.fn(async (url, init = {}) => {
+      if (String(url).includes("/rest/v1/rpc/claim_booking_slot")) {
+        rpcBodies.push(JSON.parse(init.body));
+        return jsonRes({ ok: true });
+      }
+      return fallback(url, init);
+    });
+    const r = await runReserve(reserveBody({ campaignCode: "0123456789ABCDEF" }));
+    expect(r.status).toBe(200);
+    expect(Object.keys(r.body).sort()).toEqual(["manageToken", "ok", "slot"]);
+    expect(rpcBodies).toHaveLength(1);
+    expect(rpcBodies[0].p_request.campaignCode).toBe("0123456789abcdef");
+    expect(rpcBodies[0].p_reservation).not.toHaveProperty("campaignCode");
+  });
+
+  test("a referral code beside it never changes the stored campaign code", async () => {
+    const calls = mockBackend({ settingsRows: settingsRow(enabledSettings()) });
+    for (const referralCode of ["vtpvxvr024h36h2n", "garbage", 42]) {
+      expect((await runReserve(reserveBody({ campaignCode: "0123456789ABCDEF", referralCode }))).status).toBe(200);
+    }
+    expect(calls.requestPosts).toHaveLength(3);
+    for (const post of calls.requestPosts) expect(post.data.campaignCode).toBe("0123456789abcdef");
+  });
+
+  test("the owner email gains the campaign line; the push and the response never carry the code", async () => {
+    const code = "vtpvxvr024h36h2n";
+    const line = "Came in through one of your campaign links. Open TradeReady to see which one.";
+    const env = { ...ENV, RESEND_API_KEY: "resend-test" };
+    const run = async (over) => {
+      const calls = mockBackend({ settingsRows: settingsRow(enabledSettings()) });
+      const fallback = global.fetch;
+      const emails = [];
+      global.fetch = jest.fn(async (url, init = {}) => {
+        if (String(url).includes("api.resend.com")) emails.push(JSON.parse(init.body));
+        return fallback(url, init);
+      });
+      const r = await reserveCore(env, { body: reserveBody(over), nowMs: NOW_MS, randHex: RAND, manageToken: MANAGE });
+      return { r, emails, pushes: calls.pushPosts };
+    };
+    const withCode = await run({ campaignCode: code });
+    const without = await run({});
+    expect(withCode.r).toEqual(without.r);
+    expect(JSON.stringify(withCode.r)).not.toContain(code);
+    expect(withCode.emails).toHaveLength(1);
+    const lines = withCode.emails[0].text.split("\n");
+    expect(lines[lines.length - 2]).toBe(line);
+    expect(JSON.stringify(withCode.emails[0])).not.toContain(code);
+    expect(without.emails[0].text).not.toContain(line);
+    expect(withCode.pushes).toEqual(without.pushes);
   });
 });

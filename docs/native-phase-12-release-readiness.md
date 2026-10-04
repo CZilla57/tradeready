@@ -277,9 +277,20 @@ Connect upload prompts for the export-compliance answer manually.
   (`app.json`'s `expo-image-picker.photosPermission`) because Expo's picker uses the
   legacy in-process API; native's modern picker makes that string unnecessary. **Not a
   gap** — recorded so a future reviewer does not "fix" this by adding an unused key.
-- `NSCameraUsageDescription` is the only permission string native declares. No
-  microphone, location, contacts, motion or other sensitive-API usage description
-  exists or is needed (no matching API usage found in `N/`).
+- `NSCalendarsFullAccessUsageDescription` = "TradeReady checks the calendars you choose
+  for busy times so your booking link won't offer them, and can add your jobs to a
+  TradeReady calendar. Only busy start and end times are sent to TradeReady, never event
+  names, notes or guests." (`native/Info.plist`; added 2026-10-03 for Roadmap Phase 26
+  calendar sync, owner decision Q1). The EventKit adapter (`N/NativeEventKitBridge.swift`)
+  asks with `requestFullAccessToEvents()` only when the owner turns on Settings › Calendar
+  sync. **Deliberately absent** (Q2): `NSCalendarsWriteOnlyAccessUsageDescription`
+  (write-only access cannot read events back, so it supports neither busy checks nor the
+  mirror, and leaving it out keeps iOS Settings to None / Full Access) and the legacy
+  `NSCalendarsUsageDescription` (the deployment target is iOS 17.0). Spec:
+  `docs/superpowers/specs/2026-10-03-calendar-sync-design.md` §5.
+- `NSCameraUsageDescription` and `NSCalendarsFullAccessUsageDescription` are the only
+  permission strings native declares. No microphone, location, contacts, motion or other
+  sensitive-API usage description exists or is needed (no matching API usage found in `N/`).
 
 ## 5. OI-1 — App Store privacy-label declarations (approved 2026-09-29; labels not yet entered)
 
@@ -295,12 +306,24 @@ carried-forward concern, §4.2 above):
 | Phone Number | Yes | No | App Functionality | Customer contact fields synced to the backend |
 | Physical Address | Yes | No | App Functionality | Customer/job address fields synced to the backend |
 | Photos | Yes | No | App Functionality | Job photos uploaded to the TradeReady backend |
-| Customer Support / Other User Content | Yes | No | App Functionality | Job notes, messages and other free-text records synced to the backend |
+| Customer Support / Other User Content | Yes | No | App Functionality | Job notes, messages and other free-text records synced to the backend, and, if calendar checks are on, busy start/end times from calendars the user selects |
+
+**Update 2026-10-03 (Roadmap Phase 26, owner decision Q4):** the "Other User Content" row's
+"Why" now includes calendar busy start/end times (no new data type; the manifest records it
+as a comment under the existing `NSPrivacyCollectedDataTypeOtherUserContent` entry, Q3).
+The owner enters the updated text in App Store Connect after the native build ships.
 
 None of these are for tracking (no cross-app/cross-site use; `NSPrivacyTracking` stays
 `false`). This is in addition to, not a replacement for, the already-decided
 analytics/crash types in §4.2 (UserID, Product Interaction, Other Usage Data, Crash
 Data, Performance Data, Other Diagnostic Data, Other Financial Info, Purchase History).
+
+**Update 2026-10-03 (owner decisions 24-Q5 and 28-Q1, applied to `N/PrivacyInfo.xcprivacy`
+in Phase 24):** the manifest now also declares **Payment Info** (linked, not tracking,
+App Functionality), because autopay shows the owner's customers' saved-card brand, last
+four digits and expiry; and **Other Financial Info** gains the App Functionality purpose
+next to Analytics, because payment amounts sync for app functionality. Enter both labels
+in App Store Connect with the rest (`docs/app-store-listing.md` has the rows).
 
 **Owner action:** enter these App Functionality labels in App Store Connect (Stage C
 entry per the evidence index prerequisites table) and approve a `N/PrivacyInfo.xcprivacy`
@@ -335,7 +358,10 @@ review):**
 > below); Restore Purchases is available if the paywall reappears. Booking-link and
 > portal flows can be exercised from Settings › Booking link using the seeded sample
 > customer. No push notifications are sent in this release (booking alerts arrive by
-> email only, per a dated waiver) — this is expected, not a defect.
+> email only, per a dated waiver) — this is expected, not a defect. Settings › Calendar
+> sync is optional: when turned on, it reads the calendars the user chooses for busy times
+> (only start and end times are sent, so the booking page skips them) and can add the
+> user's jobs to a "TradeReady" calendar on the device.
 
 **Demo account TEMPLATE (fields only — no real credentials; the owner fills this in a
 credential manager, never in this repo or this doc):**

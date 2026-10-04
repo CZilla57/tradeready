@@ -1,7 +1,7 @@
 # Quote Expiration Dates (Roadmap Phase 32) — Design Spec
 
 **Date:** 2026-10-03
-**Status:** BUILT 2026-10-03 in the working tree of local `feat/quote-expiration` (native + Worker) and, for `estimate.html`/`portal.html`, uncommitted in `tradeready-legal`. Nothing committed, pushed, deployed or applied; see §12 for the build record. Scoped as: builds on `feat/quote-expiration`, stacked on `feat/lead-source` (owner go-ahead 2026-10-03: "continue working until all features on the roadmap are properly completed … implemented in the most beneficial way to the user"). Code map verified 2026-10-03 against `feat/lead-source` at HEAD `2909fe5` plus its uncommitted lead-source work.
+**Status:** BUILT 2026-10-03 and committed 2026-10-04 on local `feat/quote-expiration` (native + Worker) and, for `estimate.html`/`portal.html`, uncommitted in `tradeready-legal`. Verified 2026-10-04 (gate green against the master baseline: accessibility-audit and layout-metrics fail on master too). Nothing pushed, deployed or applied; see §12 for the build record. Scoped as: builds on `feat/quote-expiration`, stacked on `feat/lead-source` (owner go-ahead 2026-10-03: "continue working until all features on the roadmap are properly completed … implemented in the most beneficial way to the user"). Code map verified 2026-10-03 against `feat/lead-source` at HEAD `2909fe5` plus its uncommitted lead-source work.
 **Origin:** `docs/post-launch-feature-roadmap.md` Phase 32, build order #3 ("New services needed: None")
 **Builds on:** estimate approval loop (`2026-07-17-estimate-approval-loop-design.md`), good/better/best options (`2026-10-02-quote-options-design.md`, Phase 25), portal requests (`2026-08-07-portal-completion-design.md`), estimate follow-up policy (`NativeEstimateFollowUp`), Today insights (`NativeTodayInsights`)
 **Build target (owner, 2026-10-02):** native SwiftUI app, the Worker, and `estimate.html` / `portal.html` in `CZilla57/tradeready-legal` (stacked on that repo's `feat/quote-options` work). **No React Native changes.** The dormant Vercel twin (`backend/`) and the owner web app (`web/`) are not changed.
@@ -697,3 +697,49 @@ All Swift runners ran one at a time with a scratch `TMPDIR`.
 - The three privacy-prompt runners (`run-analytics-event-tests.sh`, `run-error-redaction-tests.sh`, `run-save-rollback-tests.sh`) run in the owner's final gate.
 - Owner items from §11 are unchanged: the legal text (32-B, `terms.html`/`privacy.html` untouched), the enforced 30-day default, the new notification, and the "estimate" wording.
 - Deploys follow §9 and are the owner's: the Worker first, then the `tradeready-legal` pages (to be committed in that repo), then the native build.
+
+### 12.6 Review fixes (2026-10-03)
+
+A review of `aa1bbbf` + `127e06c` found three confirmed Phase 32 bugs and one plausible issue. The same review's Phase 20 findings are handled separately. Each confirmed bug got a failing test before its fix.
+
+| # | Finding | Verdict | Fix |
+|---|---|---|---|
+| 1 | Every Phase 32 "today" read `Calendar.current`, which follows the iPhone's Calendar setting. On a Buddhist or Japanese calendar the default date was `2569-11-02` or `0008-11-02`: `create-link` answered 400, the PDF and messages showed the wrong year, and Today never fired | Confirmed. Under `-AppleLocale en_US@calendar=buddhist`, today read `2569-10-03` and the picker built 1483 | `NativeQuoteExpiry.today` now reads only the zone of the calendar it is given and always counts Gregorian days. It gains `localCalendar` (Gregorian, device zone) and `gregorian(in:)`. `AppStore.estimateValidityToday` uses `localCalendar`, and `estimateReviewDraft`, `markEstimateSent` and `createEstimateApprovalLink` now read today through it. `NativeValidUntilPicker` defaults to `localCalendar` and builds and reads Gregorian days. The `est_exp_` reminder builds its 9:00 instant in a Gregorian calendar in the given zone |
+| 2 | Changing the date in the review sheet rebuilt the draft from the current job. A price that synced in meanwhile was swapped in silently and stamped as sent | Confirmed | New `AppStore.estimateReviewDraft(_:changingValidUntilTo:now:)` replaces only the snapshot's `validUntil` and zone on the reviewed draft (`NativeEstimateReviewDraft.withValidity`). The sheet's `applyValidity` calls it, so sending a stale review returns `.preservedNewerState` again |
+| 3 | A failed "Update approval link" left the job's date ahead of the link's. The job-detail editor then treated saving that date as a no-op | Confirmed | `createEstimateApprovalLink`: while the job has an undecided link, the pre-sync stamp keeps the job's current date. The reviewed date is written together with the approval mirror after the mint, and the pulled-date guard compares against the stamped date. The editor asks the store instead: `isEstimateValidityUnchanged(jobID:validUntil:)` also requires the open link to show the date, and `estimateLinkValidityNote(jobID:)` adds a note to the sheet |
+| P3 | A customer decline that lands between the device's pull and `create-link` keeps `decision: 'declined'`, while `planApprovalWrite` swaps in a snapshot the customer never saw | Real (scratch repro of the planner), **not fixed**. Recorded as a known residual below | None |
+
+**Other `.current` calendars in the Phase 32 diff:**
+- `NativeEstimateFollowUp.message` and the 3-day reminder's "expires/expired" copy read today through `NativeQuoteExpiry.today`, so the same change fixes them.
+- `extensionDraft`'s `calendar` only feeds the pre-existing `sentDate` parse. That parse must keep reading `estimateSentAt` in the calendar that wrote it (see residuals).
+- `TimeZone.current` uses are zones, not calendars, and are unchanged.
+
+**Decisions:**
+- **Finding 2:** a date change keeps the reviewed snapshot instead of refusing the change. A stale review is still caught where it always was, at send time, and the owner can still move the date freely. A new date freezes the device's current zone, the same as building a draft (§2.5).
+- **Finding 3:** the date is deferred only while an undecided link exists. A first link, or a send without a link, stamps the reviewed date up front as before. A composer-confirmed re-send still stamps the reviewed date, because the message went out with it. The review sheet's existing note and the editor's new note cover the gap until the link is updated.
+- **Editor note (new copy):** "The customer’s approval link still shows {Nov 2, 2026 | no valid-until date}. Save to update the link to match."
+- **Extension alert after a repair:** saving the job's own date to refresh the link reports "Valid-until date changed", because the job's date did not move.
+
+**Known residuals:**
+- **P3, the decline race.** Re-sending a declined approval under the same token with a new snapshot is the documented contract: rules 2 and 3 of the trigger in `supabase/migrations/20261002_job_approval_preserve.sql`, and `CanonicalUIAdapters.estimateApprovalAfterLink`. Changing only the planner can't close it. If `planApprovalWrite` froze a declined approval, `create-link` would still answer 200, the device would push its mirror with the new snapshot, and trigger rule 2 keeps that snapshot.
+  - A real fix needs all of the following:
+    - `create-link` answers 409 for a declined approval
+    - a device mapping for that 409
+    - the same change on the change-order path (`planChangeOrderLink`)
+    - the same change in the legacy `backend/lib/estimateStore.js`
+    - a rewrite of the trigger's contract text
+  - The window is the device's pull-to-mint round trip. For an extension, the swapped-in snapshot differs from the declined one only in its date, because the extension check requires that.
+- **App-wide `Calendar.current` (pre-existing, outside Phase 32).** `Date.dateOnlyString` in `Models.swift` still reads `Calendar.current`. It writes `estimateSentAt` and other date-only stamps. So do other date paths, such as the PDF's issue date and `NativeTodayBriefing`.
+  - On a Buddhist device `estimateSentAt` reads `2569-…`, and Phase 32's Today line "You sent '…' on {date}" reads it as Gregorian.
+  - `NativeEstimateFollowUp.sentDate` reads `estimateSentAt` back in `Calendar.current`. It is left alone so it keeps matching that writer.
+  - This needs one app-wide pass, not a Phase 32 patch.
+
+**Tests.** Each new test failed before its fix and passes after:
+- **`run-quote-expiry-tests.sh`:** Buddhist and Japanese calendars handed to `today` and the picker bridge. The binary now also runs under `-AppleLocale en_US@calendar=buddhist` and `…japanese`, so the defaults see a non-Gregorian `Calendar.current`. 16 failures before the fix.
+- **`run-estimate-follow-up-tests.sh`:** the `est_exp_` fire time and the copy under both calendars. 6 failures before the fix.
+- **`run-quote-expiry-store-tests.sh`:** 17 failures before the fix.
+  - `testDeviceCalendar`, which also runs alone under Buddhist and under Japanese (8 failures each before)
+  - `testDateChangeKeepsReviewedSnapshot` (finding 2)
+  - `testFailedLinkUpdateKeepsLinkDate` (finding 3)
+  - `testEditorRepairsLinkDateMismatch` (finding 3)
+- **Results:** RESULTS-PENDING

@@ -67,6 +67,15 @@ struct Customer: Identifiable, Codable, Hashable {
     /// Phase 27: the stored lead source (preset key or custom label), first
     /// touch. `nil` is Unknown.
     var leadSource: String?
+    /// Phase 34: who referred this customer, set from the editor's "Referred
+    /// by" picker. Meaningful only while `leadSource` is `referral` (R1). The
+    /// other referral fields are canonical-only.
+    var referredByCustomerId: String?
+    /// Phase 33: normalized tags (`NativeCustomerTags`); `nil` when none.
+    var tags: [String]?
+    /// Phase 33: "Do not contact for marketing" date and reason (O1).
+    var marketingOptOutOn: String?
+    var marketingOptOutVia: String?
 }
 
 struct Job: Identifiable, Codable, Hashable {
@@ -86,6 +95,9 @@ struct Job: Identifiable, Codable, Hashable {
     var invoiceId: String?
     var createdAt = Date()
     var archivedAt: String?
+    /// Phase 21: the customer property the job is at (`Canonical.Job.propertyId`).
+    /// `address` stays the service address of record.
+    var propertyId: String?
 }
 
 extension Job {
@@ -101,6 +113,9 @@ struct Payment: Identifiable, Codable, Hashable {
     var method = "Card"
     var note = ""
     var voidedAt: Date?
+    /// Phase 28 (tips spec §6.1): the tip booked with this payment, read-only
+    /// in the UI. Edits merge from the canonical baseline, so it survives them.
+    var tip: Double?
 }
 
 struct Invoice: Identifiable, Codable, Hashable {
@@ -250,6 +265,7 @@ private extension Payment {
         case "cash": .cash
         case "check", "cheque": .check
         case "card": .card
+        case "stripe": .stripe
         case "ach", "bank transfer", "bank_transfer": .bankTransfer
         default: .other
         }
@@ -259,7 +275,8 @@ private extension Payment {
             date: date.dateOnlyString,
             method: ledgerMethod,
             note: note.isEmpty ? nil : note,
-            voidedAt: voidedAt?.dateOnlyString
+            voidedAt: voidedAt?.dateOnlyString,
+            tip: tip.map { FinancialDecimal.value(String($0)) }
         )
     }
 
@@ -270,7 +287,8 @@ private extension Payment {
             date: Invoice.date(fromDay: ledger.date) ?? .distantPast,
             method: ledger.method.displayName,
             note: ledger.note ?? "",
-            voidedAt: ledger.voidedAt.flatMap(Invoice.date(fromDay:))
+            voidedAt: ledger.voidedAt.flatMap(Invoice.date(fromDay:)),
+            tip: ledger.tip.map { NSDecimalNumber(decimal: $0).doubleValue }
         )
     }
 }
@@ -382,6 +400,9 @@ struct BusinessSettings: Codable, Hashable {
     /// Phase 32: days a new estimate stays valid after it is sent (0…365;
     /// 0 = estimates don't expire). Canonical absent reads as 30.
     var estimateValidityDays = 30
+    /// Phase 28 (tips spec §2): "Let customers add a tip" on the pay page.
+    /// Canonical absent = off.
+    var tipsEnabled = false
     var appearance: Appearance = .system
 
     init(
@@ -437,6 +458,7 @@ struct BusinessSettings: Codable, Hashable {
         reviewRequestDelayHours = try c.decodeIfPresent(Int.self, forKey: .reviewRequestDelayHours) ?? reviewRequestDelayHours
         reviewRequestTemplate = try c.decodeIfPresent(String.self, forKey: .reviewRequestTemplate) ?? reviewRequestTemplate
         estimateValidityDays = try c.decodeIfPresent(Int.self, forKey: .estimateValidityDays) ?? estimateValidityDays
+        tipsEnabled = try c.decodeIfPresent(Bool.self, forKey: .tipsEnabled) ?? tipsEnabled
         appearance = try c.decodeIfPresent(Appearance.self, forKey: .appearance) ?? appearance
         paymentProvider = try c.decodeIfPresent(String.self, forKey: .paymentProvider) ?? paymentProvider
         paymentProviderKey = try c.decodeIfPresent(String.self, forKey: .paymentProviderKey) ?? paymentProviderKey

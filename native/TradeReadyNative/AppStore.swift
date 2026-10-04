@@ -200,6 +200,29 @@ extension NativeEstimateReviewDraft {
     /// The IANA zone the date is evaluated in (the device zone when the draft
     /// was built). Meaningful only with a `validUntil`.
     var validUntilTimeZone: String { snapshot.validUntilTimeZone ?? TimeZone.current.identifier }
+
+    /// The same reviewed draft with only the snapshot's validity replaced:
+    /// the date with the device zone (spec §2.5), or neither key for
+    /// "Doesn't expire". See `AppStore.estimateReviewDraft(_:changingValidUntilTo:now:)`.
+    func withValidity(_ validUntil: String?) -> NativeEstimateReviewDraft {
+        var frozen = snapshot
+        frozen.validUntil = validUntil
+        frozen.validUntilTimeZone = validUntil == nil ? nil : TimeZone.current.identifier
+        return NativeEstimateReviewDraft(
+            jobID: jobID,
+            expectedStatus: expectedStatus,
+            snapshot: frozen,
+            customerEmail: customerEmail,
+            customerPhone: customerPhone,
+            customerAddress: customerAddress,
+            businessContactName: businessContactName,
+            businessPhone: businessPhone,
+            businessEmail: businessEmail,
+            businessAddress: businessAddress,
+            businessLogoReference: businessLogoReference,
+            jobDescription: jobDescription
+        )
+    }
 }
 
 enum NativeChangeOrderApprovalLinkOutcome: Equatable {
@@ -378,6 +401,13 @@ final class AppStore: ObservableObject {
     @Published private(set) var stripeConnectStatus: NativeStripeConnectStatus?
     @Published private(set) var stripeConnectLoading = false
     @Published private(set) var stripeConnectError: String?
+    /// Phase 24 §6.3: the Worker's autopay enrollments and charge rows for
+    /// this owner, in memory only (server-owned, never persisted or synced).
+    /// nil until the first successful read; a failed read keeps the last one.
+    @Published private(set) var autopayStatus: NativeAutopayStatusSnapshot?
+    @Published private(set) var autopayStatusError: String?
+    /// Enrollments with a remove request in flight (no double submit).
+    @Published private(set) var autopayRemovalsInFlight: Set<String> = []
     /// Phase 12 (12.00b.1, I2; owner decision D3): the changes the server
     /// refused that are waiting for Retry or Discard in Settings › Cloud Sync.
     @Published private(set) var rejectedChanges: [NativeRejectedChange] = []
@@ -403,6 +433,16 @@ final class AppStore: ObservableObject {
     /// Task 10.12 (D4/D5): owner-bound setup-checklist store (10.03's
     /// `NativeSetupChecklistStore`).
     private let setupChecklistStore: NativeSetupChecklistStore
+    /// Phase 26 (calendar sync): device-local state, never in the canonical
+    /// snapshot. Inert (no calendar access, no transport, in-memory state)
+    /// until `installCalendarSync`: the production convenience init installs
+    /// EventKit, the Worker transport and standard defaults; host tests
+    /// install fakes. The API lives in `NativeCalendarSyncStore.swift`.
+    private(set) lazy var calendarSync: NativeCalendarSyncCoordinator = {
+        let coordinator = NativeCalendarSyncCoordinator()
+        coordinator.host = self
+        return coordinator
+    }()
     /// Phase 12 (12.00b.1, I2): the owner-scoped, bounded, file-protected
     /// store of refused changes (`NativeRejectedChangeStore`).
     private let rejectedChangeStore: NativeRejectedChangeStore
@@ -519,6 +559,8 @@ final class AppStore: ObservableObject {
             // Coalesced to one write per main-actor turn, after the save has
             // run.
             scheduleWidgetMirrorRefresh()
+            // Phase 26: the TradeReady calendar mirror (debounced 2 s).
+            calendarSync.snapshotDidChange()
         }
     }
     private var isApplyingProjection = false
@@ -615,6 +657,13 @@ final class AppStore: ObservableObject {
     private let injectedEstimateApprovalLinkService: (any NativeEstimateApprovalLinking)?
     private let injectedChangeOrderApprovalLinkService: (any NativeChangeOrderApprovalLinking)?
     private let injectedInvoiceDeliveryService: (any NativeInvoiceDelivering)?
+    private let injectedAutopayService: (any NativeAutopayServing)?
+    private var autopayStatusFetchedAt: Date?
+    /// Every status read and every local removal takes the next number; a
+    /// read applies only while it is still the newest, so a read that began
+    /// before a removal can't bring the removed card back.
+    private var autopayReadSequence: UInt64 = 0
+    private var autopayReadsInFlight = 0
     /// Advisory receipt-OCR / pricebook-suggestion transport. Injected so tests
     /// and previews never touch the network; defaults to the live client-key +
     /// backend-bearer implementation.
@@ -732,6 +781,7 @@ final class AppStore: ObservableObject {
             crashReporting: crashReporting,
             recordsNativeRun: true
         )
+        installLiveCalendarSync()
     }
 
     /// Injectable persistence location for integration tests and previews.
@@ -752,6 +802,7 @@ final class AppStore: ObservableObject {
         estimateApprovalLinkService: (any NativeEstimateApprovalLinking)? = nil,
         changeOrderApprovalLinkService: (any NativeChangeOrderApprovalLinking)? = nil,
         invoiceDeliveryService: (any NativeInvoiceDelivering)? = nil,
+        autopayService: (any NativeAutopayServing)? = nil,
         advisoryAITransport: (any NativeAdvisoryAITransport)? = nil,
         coachTransport: NativeCoachTransport? = nil,
         analytics: NativeAnalytics = NativeNoOpAnalytics(),
@@ -783,6 +834,7 @@ final class AppStore: ObservableObject {
         self.injectedEstimateApprovalLinkService = estimateApprovalLinkService
         self.injectedChangeOrderApprovalLinkService = changeOrderApprovalLinkService
         self.injectedInvoiceDeliveryService = invoiceDeliveryService
+        self.injectedAutopayService = autopayService
         self.advisoryAITransport = advisoryAITransport ?? NativeAITransport.live()
         self.coachTransport = coachTransport ?? NativeCoachTransport(backendBaseURL: BuildEnvironment.backendBaseURL)
         self.migrationJournal = Canonical.MigrationJournal(
@@ -1357,7 +1409,7 @@ final class AppStore: ObservableObject {
             customerID: job.customerId,
             customerName: job.customerName
         )
-        let today = NativeQuoteExpiry.today(now: now, calendar: .current)
+        let today = estimateValidityToday(now: now)
         let validUntil: String?
         switch choice {
         case nil:
@@ -1407,7 +1459,10 @@ final class AppStore: ObservableObject {
                 businessEmail: settings.email,
                 businessAddress: settings.address,
                 businessLogoReference: snapshot.payload.settings?.logoPhoto,
-                jobDescription: job.description
+                jobDescription: job.description,
+                serviceAddress: NativePropertiesEquipment.serviceAddressLine(
+                    jobAddress: job.address, customerAddress: customer?.address ?? ""
+                ) ?? ""
             )
         } catch {
             migrationMessage = "The estimate could not be prepared. Nothing was changed."
@@ -1748,8 +1803,10 @@ final class AppStore: ObservableObject {
                 return nil
             }
             let changeOrderDelta = JobInvoiceDomain.approvedChangeOrderTotal(changeOrderMirrors(job))
-            let amount = changeOrderDelta != 0 ? billableBreakdown(for: job).total : existing.amount
-            return NativeInvoiceFromJobDraft(
+            // Phase 34: a re-derived amount keeps the credits already applied.
+            let appliedCredit = JobInvoiceDomain.referralCreditTotal(Self.lineDrafts(of: existing))
+            let amount = changeOrderDelta != 0 ? billableBreakdown(for: job).total + appliedCredit : existing.amount
+            var draft = NativeInvoiceFromJobDraft(
                 jobID: jobID, mode: .finalize, existingInvoiceID: invoiceID,
                 customer: existing.customer, customerID: existing.customerId ?? "",
                 number: existing.number, amount: amount, due: JobInvoiceDomain.defaultDueDate(),
@@ -1757,12 +1814,15 @@ final class AppStore: ObservableObject {
                 billedFromTracked: false, finalizeChangeOrderDelta: changeOrderDelta,
                 prefillReferenceAmount: 0
             )
+            draft.referralCreditAvailable = invoiceLineDrafts(for: job).isEmpty
+                ? 0 : referralCreditOwed(customerId: existing.customerId, name: existing.customer)
+            return draft
         }
 
         let customer = NativeCustomerIdentity.resolve(customers: customers, customerID: job.customerId, customerName: job.customerName)
         let breakdown = billableBreakdown(for: job)
         let changeOrderTotal = JobInvoiceDomain.approvedChangeOrderTotal(changeOrderMirrors(job))
-        return NativeInvoiceFromJobDraft(
+        var draft = NativeInvoiceFromJobDraft(
             jobID: jobID, mode: mode, existingInvoiceID: nil,
             customer: job.customerName, customerID: customer?.id ?? job.customerId,
             number: nextInvoiceNumber(), amount: breakdown.total, due: JobInvoiceDomain.defaultDueDate(),
@@ -1773,6 +1833,11 @@ final class AppStore: ObservableObject {
             // job estimate" banner quotes, not the tracked-time-aware `amount`.
             prefillReferenceAmount: job.estimateTotal + changeOrderTotal
         )
+        // Phase 34 (spec §5.6): offered on a full invoice only, never a deposit.
+        if mode == .create, !invoiceLineDrafts(for: job).isEmpty {
+            draft.referralCreditAvailable = referralCreditOwed(customerId: customer?.id ?? job.customerId, name: job.customerName)
+        }
+        return draft
     }
 
     /// Commits a create/requestDeposit/finalize invoice draft atomically with
@@ -1804,7 +1869,30 @@ final class AppStore: ObservableObject {
                 return false
             }
 
-            let lineItems = try CanonicalUIAdapters.invoiceLineItems(from: invoiceLineDrafts(for: job))
+            // Phase 34 (spec §5.6): a finalize recompute keeps applied
+            // referral credits, and a credit the owner turned on is re-checked
+            // against what is owed now.
+            let jobLineDrafts = invoiceLineDrafts(for: job)
+            let existingInvoice = draft.mode == .finalize
+                ? updated.payload.invoices?.first(where: { $0.id == draft.existingInvoiceID }) : nil
+            if draft.referralCreditToApply != 0 {
+                let owed = referralCreditOwed(
+                    customerId: draft.customerID.isEmpty ? existingInvoice?.customerId : draft.customerID,
+                    name: draft.customer
+                )
+                guard draft.mode != .requestDeposit, !jobLineDrafts.isEmpty, draft.referralCreditToApply > 0,
+                      draft.amount > 0, draft.referralCreditToApply <= owed
+                else {
+                    migrationMessage = "The referral credit changed while this invoice was open. Review it again before saving."
+                    return false
+                }
+            }
+            let lineItems = try CanonicalUIAdapters.invoiceLineItems(from: jobLineDrafts.isEmpty ? [] :
+                JobInvoiceDomain.appendingReferralCredit(
+                    jobLineDrafts,
+                    existingInvoiceLines: existingInvoice.map(Self.lineDrafts(of:)) ?? [],
+                    credit: draft.referralCreditToApply
+                ))
             var invoiceRecords = updated.payload.invoices ?? []
             let resultInvoice: Canonical.Invoice
             let invoicePaid: Bool
@@ -2276,6 +2364,168 @@ final class AppStore: ObservableObject {
         }
     }
 
+    // MARK: - Phase 24 autopay status and controls (spec §6.3)
+
+    private func configuredAutopayService() -> (any NativeAutopayServing)? {
+        if let injectedAutopayService { return injectedAutopayService }
+        guard let status = try? BuildEnvironment.endpoint("api/autopay/status", sendsUserData: true),
+              let manage = try? BuildEnvironment.endpoint("api/autopay/manage", sendsUserData: true)
+        else { return nil }
+        return NativeAutopayService(statusEndpoint: status, manageEndpoint: manage)
+    }
+
+    /// The owner identity an autopay read or write belongs to. Rechecked
+    /// across every await so one owner's cards never land under another.
+    private struct AutopayOwnerFence: Equatable {
+        let subject: String?
+        let binding: String?
+        let boundary: UInt64
+    }
+
+    private var autopayOwnerFence: AutopayOwnerFence {
+        AutopayOwnerFence(subject: authenticatedUserSubject, binding: verifiedAccountBinding, boundary: accountBoundaryGeneration)
+    }
+
+    /// Reads autopay status: on foreground at most every 10 minutes (and
+    /// not while another read runs), on opening the plans list, and after a
+    /// remove. Skipped without plans, a sign-in or a configured backend. One
+    /// verified session-refresh retry on a rejected session. Returns whether
+    /// a fresh status was applied.
+    @discardableResult
+    func refreshAutopayStatus(trigger: NativeAutopayRefreshTrigger, now: Date = Date()) async -> Bool {
+        guard !(trigger == .foreground && autopayReadsInFlight > 0),
+              !recurringInvoiceRules.isEmpty,
+              NativeAutopay.shouldRefresh(trigger, lastFetchedAt: autopayStatusFetchedAt, now: now),
+              authenticatedUserSubject != nil,
+              let service = configuredAutopayService(),
+              let credentials = currentSyncCredentials()
+        else { return false }
+        autopayReadsInFlight += 1
+        defer { autopayReadsInFlight -= 1 }
+        autopayReadSequence &+= 1
+        let sequence = autopayReadSequence
+        let fence = autopayOwnerFence
+        func isCurrent() -> Bool { autopayOwnerFence == fence && autopayReadSequence == sequence }
+        let unavailable = "Autopay status couldn't be loaded. Plans show their own settings until it can."
+        do {
+            let fresh = try await service.status(sessionBytes: credentials.sessionBytes)
+            guard isCurrent() else { return false }
+            applyAutopayStatus(fresh, at: now)
+            return true
+        } catch NativeAutopayServiceError.rejectedSession {
+            guard await refreshSyncSession(), isCurrent(), let retry = currentSyncCredentials() else {
+                if isCurrent() { autopayStatusError = "Your session expired. Sign in again to see autopay status." }
+                return false
+            }
+            do {
+                let fresh = try await service.status(sessionBytes: retry.sessionBytes)
+                guard isCurrent() else { return false }
+                applyAutopayStatus(fresh, at: now)
+                return true
+            } catch {
+                if isCurrent() { autopayStatusError = unavailable }
+                return false
+            }
+        } catch {
+            if isCurrent() { autopayStatusError = unavailable }
+            return false
+        }
+    }
+
+    private func applyAutopayStatus(_ fresh: NativeAutopayStatusSnapshot, at now: Date) {
+        autopayStatus = fresh
+        autopayStatusError = nil
+        autopayStatusFetchedAt = now
+    }
+
+    enum AutopayRemoveOutcome: Equatable {
+        case removed
+        /// A remove for this card is already running; nothing was sent.
+        case alreadyInProgress
+        case failed(String)
+    }
+
+    /// "Remove saved card": revokes the enrollment as the owner on the
+    /// Worker (which detaches the card on Stripe and emails the customer),
+    /// marks it removed in memory at once, then rereads status.
+    func removeAutopayCard(enrollmentID: String) async -> AutopayRemoveOutcome {
+        guard !autopayRemovalsInFlight.contains(enrollmentID) else { return .alreadyInProgress }
+        guard let service = configuredAutopayService(), let credentials = currentSyncCredentials() else {
+            return .failed("Removing a saved card needs an internet connection and an active sign-in.")
+        }
+        autopayRemovalsInFlight.insert(enrollmentID)
+        defer { autopayRemovalsInFlight.remove(enrollmentID) }
+        let fence = autopayOwnerFence
+        let failure = "The card couldn't be removed. Check your connection and try again."
+        func finish() async -> AutopayRemoveOutcome {
+            guard autopayOwnerFence == fence else { return .failed(failure) }
+            // Discard any read that began before the removal, show the card
+            // removed at once, then confirm with a fresh read.
+            autopayReadSequence &+= 1
+            autopayStatus = autopayStatus?.markingRemoved(enrollmentID: enrollmentID, at: Date())
+            await refreshAutopayStatus(trigger: .afterRemove)
+            return .removed
+        }
+        do {
+            try await service.removeCard(enrollmentID: enrollmentID, sessionBytes: credentials.sessionBytes)
+            return await finish()
+        } catch NativeAutopayServiceError.rejectedSession {
+            guard await refreshSyncSession(), autopayOwnerFence == fence, let retry = currentSyncCredentials() else {
+                return .failed("Your session expired. Sign in again to remove the card.")
+            }
+            do {
+                try await service.removeCard(enrollmentID: enrollmentID, sessionBytes: retry.sessionBytes)
+                return await finish()
+            } catch {
+                return .failed(failure)
+            }
+        } catch NativeAutopayServiceError.notFound {
+            if autopayOwnerFence == fence { await refreshAutopayStatus(trigger: .afterRemove) }
+            return .failed("This card is no longer on file. The list has been refreshed.")
+        } catch {
+            return .failed(failure)
+        }
+    }
+
+    /// The plan facts autopay status reads.
+    private static func autopayPlanFacts(_ rule: Canonical.RecurringInvoice) -> NativeAutopayPlanFacts {
+        NativeAutopayPlanFacts(id: rule.id, customerId: rule.customerId, autopayEnabled: rule.autopayEnabled == true)
+    }
+
+    private func autopayInvoiceFacts(_ record: Canonical.Invoice) -> NativeAutopayInvoiceFacts {
+        NativeAutopayInvoiceFacts(
+            id: record.id,
+            recurringInvoiceId: record.recurringInvoiceId,
+            due: record.due,
+            balanceDue: Self.ledgerBalance(record),
+            customerName: record.customer,
+            isImported: record.importBatchId != nil)
+    }
+
+    /// One plan's autopay status for its list row and actions.
+    func autopayPlanStatus(planID: String) -> NativeAutopayPlanStatus {
+        guard let rule = recurringInvoiceRules.first(where: { $0.id == planID }) else { return .off }
+        let planInvoices = (snapshot.payload.invoices ?? [])
+            .filter { $0.recurringInvoiceId == planID }
+            .map(autopayInvoiceFacts)
+        return NativeAutopay.planStatus(plan: Self.autopayPlanFacts(rule), invoices: planInvoices, snapshot: autopayStatus)
+    }
+
+    /// The plan's active enrollment (a saved card), if any.
+    func autopayActiveEnrollment(planID: String) -> NativeAutopayEnrollment? {
+        autopayStatus?.activeEnrollment(planID: planID)
+    }
+
+    /// The invoice-detail banner for a plan invoice, or nil.
+    func autopayInvoiceBanner(invoiceID: String, now: Date = Date()) -> NativeAutopayInvoiceBanner? {
+        guard let record = snapshot.payload.invoices?.first(where: { $0.id == invoiceID }),
+              let planID = record.recurringInvoiceId
+        else { return nil }
+        let plan = recurringInvoiceRules.first(where: { $0.id == planID }).map(Self.autopayPlanFacts)
+        return NativeAutopay.invoiceBanner(
+            invoice: autopayInvoiceFacts(record), plan: plan, snapshot: autopayStatus, now: now)
+    }
+
     /// A bulk settlement's result. P12-008 review (fix round 1, R41):
     /// `failure` says why nothing was settled when the commit did not happen
     /// (writes are blocked, or the save failed), so the Invoices list never
@@ -2412,16 +2662,23 @@ final class AppStore: ObservableObject {
         guard let service = configuredInvoiceDeliveryService(), let credentials = currentSyncCredentials() else {
             throw NativeInvoiceDeliveryError.invalidConfiguration
         }
-        // Recheck the request across the network await so a concurrent
-        // payment cannot leave a stale-amount link persisted as current.
+        // Phase 24 §6.1: a request may be the full balance or a deposit below
+        // it, never above it. Refused before the mint, so nothing is created
+        // on the owner's Stripe account for a request that can't be used.
+        let epsilon = NativeInvoicePaymentLinks.epsilon
+        let balanceBefore = NSDecimalNumber(decimal: PaymentLedger.balanceDue(Self.ledgerInvoice(record))).doubleValue
+        guard requested <= balanceBefore + epsilon else { throw NativeInvoiceDeliveryError.invalidAmount }
+        // Recheck across the network await: a payment that arrived meanwhile
+        // (the balance moved) refuses the link, so a stale-amount link is
+        // never persisted as current. The old check compared the request to
+        // the latest balance, which refused every deposit after minting it.
         let owner = authenticatedUserSubject
         let url = try await service.createPaymentLink(invoice: record, amount: amount, sessionBytes: credentials.sessionBytes)
         guard authenticatedUserSubject == owner,
               let latest = snapshot.payload.invoices?.first(where: { $0.id == invoiceID })
         else { throw NativeInvoiceDeliveryError.rejectedSession }
-        let latestBalance = PaymentLedger.balanceDue(Self.ledgerInvoice(latest))
-        let latestBalanceDouble = NSDecimalNumber(decimal: latestBalance).doubleValue
-        guard abs(latestBalanceDouble - requested) <= NativeInvoicePaymentLinks.epsilon else {
+        let latestBalance = NSDecimalNumber(decimal: PaymentLedger.balanceDue(Self.ledgerInvoice(latest))).doubleValue
+        guard abs(latestBalance - balanceBefore) <= epsilon, requested <= latestBalance + epsilon else {
             throw NativeInvoiceDeliveryError.invalidAmount
         }
         var updated = latest
@@ -2628,7 +2885,7 @@ final class AppStore: ObservableObject {
     ) -> Bool {
         guard expectedStatus == .lead else { return false }
         if let validUntil,
-           !NativeQuoteExpiry.isSelectable(validUntil, today: NativeQuoteExpiry.today(now: date, calendar: .current)) {
+           !NativeQuoteExpiry.isSelectable(validUntil, today: estimateValidityToday(now: date)) {
             migrationMessage = "The valid-until date has passed. Choose a new date before marking the estimate sent."
             return false
         }
@@ -2749,14 +3006,25 @@ final class AppStore: ObservableObject {
         // is born expired (the Worker would refuse it); reopening the review
         // proposes a fresh date.
         if let validUntil = review.validUntil,
-           !NativeQuoteExpiry.isSelectable(validUntil, today: NativeQuoteExpiry.today(now: date, calendar: .current)) {
+           !NativeQuoteExpiry.isSelectable(validUntil, today: estimateValidityToday(now: date)) {
             return .failure(.estimateChanged)
         }
+
+        // Review fix 2026-10-03: while the customer holds an undecided link,
+        // the job keeps the date that link enforces until the new link is
+        // minted, and the reviewed date is written with the approval mirror
+        // (as `extendEstimateValidity` does). A failed "Update approval link"
+        // therefore never leaves the job showing a date the link doesn't
+        // have. Without an open link there is nothing to disagree with, so
+        // the reviewed date is stamped up front.
+        let localJob = snapshot.payload.jobs?.first(where: { $0.id == review.jobID })
+        let hasUndecidedLink = localJob?.approval != nil && localJob?.approval?.decision == nil
+        let stampedValidUntil = hasUndecidedLink ? localJob?.estimateValidUntil : review.validUntil
 
         guard stampEstimateSent(
             id: review.jobID,
             from: review.expectedStatus,
-            validUntil: review.validUntil,
+            validUntil: stampedValidUntil,
             on: date
         ) else { return .failure(.jobNotSynced) }
 
@@ -2776,11 +3044,11 @@ final class AppStore: ObservableObject {
         // fresh canonical state before minting so another device's pricing,
         // customer, or business-profile edit cannot be hidden behind the
         // already-open review sheet.
-        // Phase 32: the pulled job must also carry the reviewed date (another
-        // device's send or extension in between fails closed).
+        // Phase 32: the pulled job must also carry the date just stamped
+        // (another device's send or extension in between fails closed).
         guard let currentJob = snapshot.payload.jobs?.first(where: { $0.id == review.jobID }),
               currentJob.status == JobStatus.estimateSent.rawValue,
-              currentJob.estimateValidUntil == review.validUntil
+              currentJob.estimateValidUntil == stampedValidUntil
         else { return .failure(.estimateChanged) }
         let currentCustomer = NativeCustomerIdentity.resolve(
             customers: customers,
@@ -2844,6 +3112,8 @@ final class AppStore: ObservableObject {
             guard let index = records.firstIndex(where: { $0.id == review.jobID }),
                   records[index].status == JobStatus.estimateSent.rawValue
             else { return .failure(.estimateChanged) }
+            // The link now shows the reviewed date, so the job does too.
+            records[index].estimateValidUntil = review.validUntil
             records[index].approval = try CanonicalUIAdapters.estimateApprovalAfterLink(
                 existing: records[index].approval,
                 snapshot: review.snapshot,
@@ -2868,9 +3138,11 @@ final class AppStore: ObservableObject {
     // MARK: Phase 32 — estimate validity (spec 2026-10-03 §6.5)
 
     /// Today's local calendar date: the "today" every validity rule reads,
-    /// in the same zone as `estimateSentAt` and Today (FA-039 safe).
+    /// in the same zone as `estimateSentAt` and Today (FA-039 safe). Always
+    /// the Gregorian date (review fix 2026-10-03): a Buddhist or Japanese
+    /// device Calendar setting must not write 2569 or Reiwa 8.
     func estimateValidityToday(now: Date = .now) -> String {
-        NativeQuoteExpiry.today(now: now, calendar: .current)
+        NativeQuoteExpiry.today(now: now, calendar: NativeQuoteExpiry.localCalendar)
     }
 
     /// The sent estimate's validity for job detail; `nil` unless the job is
@@ -2900,6 +3172,55 @@ final class AppStore: ObservableObject {
     func canChangeEstimateValidity(jobID: String) -> Bool {
         guard let job = snapshot.payload.jobs?.first(where: { $0.id == jobID }) else { return false }
         return job.status == JobStatus.estimateSent.rawValue && job.approval?.decision == nil
+    }
+
+    /// Phase 32 (spec §3, §6.4), review fix 2026-10-03: the review sheet's
+    /// date change. Only the frozen snapshot's `validUntil` and zone change;
+    /// prices, names, contact details and the expected status stay exactly
+    /// what the owner reviewed, so `recordEstimateDelivery` and
+    /// `createEstimateApprovalLink` still compare a newer canonical estimate
+    /// against them and preserve it. A date outside today…today+365 returns
+    /// `nil` with `.invalidDate`'s message.
+    func estimateReviewDraft(
+        _ draft: NativeEstimateReviewDraft,
+        changingValidUntilTo choice: NativeEstimateValidUntilChoice,
+        now: Date = .now
+    ) -> NativeEstimateReviewDraft? {
+        switch choice {
+        case .doesNotExpire:
+            return draft.withValidity(nil)
+        case .date(let date):
+            guard NativeQuoteExpiry.isSelectable(date, today: estimateValidityToday(now: now)) else {
+                migrationMessage = NativeEstimateExtensionError.invalidDate.errorDescription
+                return nil
+            }
+            return draft.withValidity(date)
+        }
+    }
+
+    /// Phase 32 (spec §6.5), review fix 2026-10-03: whether saving
+    /// `validUntil` from the job-detail editor changes nothing. The job must
+    /// already store it, and the customer's undecided approval link (if any)
+    /// must already show it. A link showing another date (a re-send recorded
+    /// without "Update approval link", or an older failed update) makes Save
+    /// refresh the link through `extendEstimateValidity`.
+    func isEstimateValidityUnchanged(jobID: String, validUntil: String?) -> Bool {
+        guard estimateValidUntil(jobID: jobID) == validUntil else { return false }
+        guard let approval = activeEstimateApproval(jobID: jobID), approval.decision == nil else { return true }
+        return approval.snapshot.validUntil == validUntil
+    }
+
+    /// The job-detail editor's note while the customer's undecided link
+    /// shows a different date than the job; `nil` when they agree or there
+    /// is no open link.
+    func estimateLinkValidityNote(jobID: String) -> String? {
+        guard canChangeEstimateValidity(jobID: jobID),
+              let approval = activeEstimateApproval(jobID: jobID),
+              approval.snapshot.validUntil != estimateValidUntil(jobID: jobID)
+        else { return nil }
+        let shown = approval.snapshot.validUntil
+            .map { NativeQuoteExpiry.displayDate($0, style: .medium) } ?? "no valid-until date"
+        return "The customer’s approval link still shows \(shown). Save to update the link to match."
     }
 
     /// Phase 32 (spec §6.7): the "Let the customer know" draft after an
@@ -4612,6 +4933,15 @@ final class AppStore: ObservableObject {
         return try? Data(contentsOf: url, options: [.mappedIfSafe])
     }
 
+    /// Phase 20 review fix: the file of a job photo's bytes on this device, or
+    /// nil when they are not here. The form PDF reads it off the main thread.
+    func jobPhotoFileURL(photoID: String) -> URL? {
+        guard let url = try? NativeJobPhotoStorage.photoURL(root: repository.liveMediaDirectoryURL, photoID: photoID),
+              FileManager.default.fileExists(atPath: url.path)
+        else { return nil }
+        return url
+    }
+
     /// Captures already-normalized image bytes for a job: validates/converts to
     /// the JPEG `<= 6 MiB` transfer contract, mints a `p<digits>_<base36>` ID,
     /// atomically writes `<media-root>/job-photos/<id>.jpg` (local bytes win;
@@ -4619,15 +4949,42 @@ final class AppStore: ObservableObject {
     /// `Canonical.JobPhoto` (fail-closed `customerVisible: false`) before
     /// publishing and enqueuing the `jobPhotos` upsert. Returns the committed
     /// record, or nil when validation or persistence fails.
+    ///
+    /// Phase 20: with `formID` and `formItemID` (both or neither) the photo is
+    /// captured from a form item. The form must be an in-progress instance of
+    /// this job and the item answerable with room for another photo; that is
+    /// checked before any bytes are written. The photo is stamped with
+    /// `formId`/`formItemId` (so it also shows in the job's Photos section)
+    /// and its id is appended to the item's `photoIds`, both records in one
+    /// durable commit and one queue batch (`jobPhotos` then `forms`).
     @discardableResult
     func createJobPhoto(
         jobID: String,
         sourceData: Data,
         width: Int? = nil,
         height: Int? = nil,
+        formID: String? = nil,
+        formItemID: String? = nil,
         on date: Date = .now
     ) -> Canonical.JobPhoto? {
         guard ensurePersistenceWritable() else { return nil }
+        let formTarget: (formID: String, itemID: String)?
+        switch (formID, formItemID) {
+        case (nil, nil):
+            formTarget = nil
+        case let (formID?, itemID?):
+            guard let form = formRecords.first(where: { $0.id == formID }),
+                  form.jobId == jobID,
+                  (try? NativeJobForms.canAttachPhoto(form, itemID: itemID)) != nil
+            else {
+                migrationMessage = Self.formPhotoRefusedMessage
+                return nil
+            }
+            formTarget = (formID, itemID)
+        default:
+            migrationMessage = Self.formPhotoRefusedMessage
+            return nil
+        }
         let mediaRoot = repository.liveMediaDirectoryURL
         let existingIDs = Set((snapshot.payload.jobPhotos ?? []).map(\.id))
         let captured: NativeJobPhotoImport.CapturedPhoto
@@ -4652,17 +5009,33 @@ final class AppStore: ObservableObject {
                 migrationMessage = "The photo could not be saved. Nothing was changed."
                 return nil
             }
-            let effect = try NativeJobPhotoMutations.create(snapshot: snapshot, photo: captured.photo)
-            try repository.save(effect.snapshot)
-            try apply(effect.snapshot)
+            var photo = captured.photo
+            photo.formId = formTarget?.formID
+            photo.formItemId = formTarget?.itemID
+            let effect = try NativeJobPhotoMutations.create(snapshot: snapshot, photo: photo)
+            var committed = effect.snapshot
+            var drafts = [effect.draft]
+            if let formTarget {
+                var forms = committed.payload.forms ?? []
+                guard let index = forms.firstIndex(where: { $0.id == formTarget.formID }) else {
+                    throw NativeJobForms.FormError.notFound
+                }
+                let form = try NativeJobForms.addPhoto(forms[index], itemID: formTarget.itemID, photoID: photo.id)
+                try NativeJobForms.validate(form)
+                forms[index] = form
+                committed.payload.forms = forms
+                drafts.append(.init(table: "forms", op: .upsert, recordId: form.id, payload: try Self.mutationPayload(form)))
+            }
+            try repository.save(committed)
+            try apply(committed)
             do {
-                try mutationQueue.enqueueBatch([effect.draft])
+                try mutationQueue.enqueueBatch(drafts)
                 scheduleSyncAfterLocalChange()
             } catch {
                 print("TradeReadyMutationQueue stage=enqueue table=jobPhotos")
                 recordLocalSyncFailure("queue/enqueue-job-photos")
             }
-            return captured.photo
+            return photo
         } catch {
             migrationMessage = "The photo could not be saved. Nothing was changed."
             return nil
@@ -4735,6 +5108,323 @@ final class AppStore: ObservableObject {
     func isJobPhotoCustomerVisible(photoID: String) -> Bool {
         guard let photo = snapshot.payload.jobPhotos?.first(where: { $0.id == photoID }) else { return false }
         return NativeJobPhotoImport.isCustomerVisible(photo)
+    }
+
+    // MARK: - Job forms (Phase 20) primitives
+    //
+    // The forms API lives in `NativeJobFormsStore.swift`. Only the pieces that
+    // need this file's private state (the snapshot, the repository, the queue
+    // and the deletion undo) live here.
+
+    private static let formPhotoRefusedMessage =
+        "The photo could not be added to this form item. Nothing was changed."
+
+    /// Every stored `forms` row: custom templates and job instances.
+    var formRecords: [Canonical.Form] { snapshot.payload.forms ?? [] }
+
+    /// Phase 20 review fix: form text a closing screen could not save, by form
+    /// id, until the form opens again (`NativeJobFormsStore.swift`). Memory
+    /// only; cleared with the snapshot at an account boundary.
+    @Published var heldFormText: [String: NativeJobFormsPresentation.HeldText] = [:]
+
+    /// Whether the canonical job is on this device. A deleted job's form
+    /// instances stay stored but hidden (spec §8, no cascade).
+    func canonicalJobExists(id: String) -> Bool {
+        snapshot.payload.jobs?.contains { $0.id == id } ?? false
+    }
+
+    enum FormCommitMode {
+        /// A new row: refused when the id is already stored.
+        case insert
+        /// A changed row: refused when a pull has removed it meanwhile, so a
+        /// stale screen never resurrects a deleted form.
+        case replace
+    }
+
+    /// Phase 34 (`NativeReferralsStore.swift`): durably saves already-stored
+    /// customer rows changed by one referral action, publishes them, then
+    /// queues one `customers` upsert each. Nothing is written when a row is
+    /// no longer stored.
+    func commitCanonicalCustomers(_ changed: [Canonical.Customer], failureMessage: String) -> Bool {
+        guard !changed.isEmpty else { return true }
+        guard ensurePersistenceWritable() else { return false }
+        var updated = snapshot
+        var records = updated.payload.customers ?? []
+        for record in changed {
+            guard let index = records.firstIndex(where: { $0.id == record.id }) else { return false }
+            records[index] = record
+        }
+        updated.payload.customers = records
+        do {
+            try repository.save(updated)
+            try apply(updated)
+        } catch {
+            migrationMessage = failureMessage
+            return false
+        }
+        for record in changed { enqueueUpsert(table: "customers", recordId: record.id, record: record) }
+        return true
+    }
+
+    /// Durably commits one `forms` row and enqueues its upsert: durable save,
+    /// then publish, then the queue (a queue failure never rolls back the
+    /// save). A row that fails `NativeJobForms.validate` (the spec §2 caps) is
+    /// refused before anything is written.
+    func commitFormRecord(
+        _ form: Canonical.Form,
+        mode: FormCommitMode
+    ) -> Result<Canonical.Form, NativeJobForms.FormError> {
+        do { try NativeJobForms.validate(form) } catch {
+            return .failure((error as? NativeJobForms.FormError) ?? .notSaved)
+        }
+        guard ensurePersistenceWritable() else { return .failure(.notSaved) }
+        var updated = snapshot
+        var records = updated.payload.forms ?? []
+        let index = records.firstIndex { $0.id == form.id }
+        switch (mode, index) {
+        case (.insert, nil): records.append(form)
+        case let (.replace, index?): records[index] = form
+        case (.insert, _?): return .failure(.duplicateFormID)
+        case (.replace, nil): return .failure(.notFound)
+        }
+        updated.payload.forms = records
+        do {
+            try repository.save(updated)
+            try apply(updated)
+        } catch {
+            migrationMessage = "The form could not be saved. Nothing was changed."
+            return .failure(.notSaved)
+        }
+        enqueueUpsert(table: "forms", recordId: form.id, record: form)
+        return .success(form)
+    }
+
+    /// Soft-deletes one form (an instance or a custom template) through the
+    /// normal `forms` delete, with the same 8 s undo as jobs, invoices and
+    /// customers. Photos captured from it stay in the job's Photos section.
+    @discardableResult
+    func deleteForm(id: String) -> Bool {
+        guard ensurePersistenceWritable() else { return false }
+        do {
+            let result = try NativeRecordDeletion.deleteForm(snapshot: snapshot, recordID: id)
+            try commitRecordDeletion(result)
+            pendingCustomerMergeUndo = nil
+            pendingRecordDeleteUndo = result.undo
+            scheduleRecordDeleteUndoExpiration(id: result.undo.id)
+            return true
+        } catch NativeRecordDeletionError.recordNotFound {
+            return false
+        } catch {
+            migrationMessage = "The form could not be deleted safely. Nothing was changed."
+            return false
+        }
+    }
+
+    // MARK: - Properties & equipment (Phase 21) primitives
+    //
+    // The API lives in `NativePropertiesEquipmentStore.swift`. Only what needs
+    // this file's private state (the snapshot, repository, queue and deletion
+    // undo) lives here.
+
+    var canonicalRecurringJobs: [Canonical.RecurringJob] { snapshot.payload.recurringJobs ?? [] }
+
+    /// Durably commits one customer whose `properties` changed, plus any jobs
+    /// linked in the same step, then enqueues them as one batch (customers
+    /// first). Every record must still be stored: a pull that removed one
+    /// meanwhile refuses the whole change. A list that fails
+    /// `NativePropertiesEquipment.validate` is refused before anything is
+    /// written.
+    func commitPropertyChange(
+        customer: Canonical.Customer,
+        jobs changedJobs: [Canonical.Job] = []
+    ) -> Result<Canonical.Customer, NativePropertiesEquipment.PropertyError> {
+        do { try NativePropertiesEquipment.validate(customer.properties) } catch {
+            return .failure((error as? NativePropertiesEquipment.PropertyError) ?? .notSaved)
+        }
+        guard ensurePersistenceWritable() else { return .failure(.notSaved) }
+        var updated = snapshot
+        var customers = updated.payload.customers ?? []
+        guard let customerIndex = customers.firstIndex(where: { $0.id == customer.id }) else {
+            return .failure(.customerNotFound)
+        }
+        customers[customerIndex] = customer
+        updated.payload.customers = customers
+        var jobRecords = updated.payload.jobs ?? []
+        for job in changedJobs {
+            guard let index = jobRecords.firstIndex(where: { $0.id == job.id }) else { return .failure(.jobNotFound) }
+            jobRecords[index] = job
+        }
+        if !changedJobs.isEmpty { updated.payload.jobs = jobRecords }
+        let drafts: [Canonical.MutationDraft]
+        do {
+            drafts = try [Canonical.MutationDraft(
+                table: "customers", op: .upsert, recordId: customer.id, payload: Self.mutationPayload(customer)
+            )] + changedJobs.map {
+                Canonical.MutationDraft(table: "jobs", op: .upsert, recordId: $0.id, payload: try Self.mutationPayload($0))
+            }
+            try repository.save(updated)
+            try apply(updated)
+        } catch {
+            migrationMessage = "The property change could not be saved. Nothing was changed."
+            return .failure(.notSaved)
+        }
+        do {
+            try mutationQueue.enqueueBatch(drafts)
+            scheduleSyncAfterLocalChange()
+        } catch {
+            print("TradeReadyMutationQueue stage=enqueue table=customers")
+            recordLocalSyncFailure("queue/enqueue-properties")
+        }
+        return .success(customer)
+    }
+
+    /// Deletes a non-primary property (a customer upsert) with the shared
+    /// 8 s undo. Jobs linked to it keep their own address (P3).
+    @discardableResult
+    func deleteProperty(customerID: String, propertyID: String) -> Bool {
+        commitNestedDeletion("property") {
+            try NativeRecordDeletion.deleteProperty(
+                snapshot: snapshot, customerID: customerID, propertyID: propertyID,
+                primaryID: newPrimaryPropertyID(customerID: customerID)
+            )
+        }
+    }
+
+    /// Deletes one equipment entry made by mistake, with the shared 8 s undo.
+    /// Removed or replaced equipment is archived instead (history).
+    @discardableResult
+    func deleteEquipment(customerID: String, propertyID: String, equipmentID: String) -> Bool {
+        commitNestedDeletion("equipment") {
+            try NativeRecordDeletion.deleteEquipment(
+                snapshot: snapshot, customerID: customerID, propertyID: propertyID, equipmentID: equipmentID,
+                primaryID: newPrimaryPropertyID(customerID: customerID)
+            )
+        }
+    }
+
+    /// A fresh id for a primary the next write may have to materialize.
+    func newPrimaryPropertyID(customerID: String, now: Date = .now) -> String {
+        let customer = canonicalCustomers.first { $0.id == customerID }
+        return NativePropertiesEquipment.makeUniqueID(
+            prefix: "pr", now: now, existingIDs: customer.map(NativePropertiesEquipment.allIDs(in:)) ?? []
+        )
+    }
+
+    private func commitNestedDeletion(_ noun: String, _ plan: () throws -> NativeRecordDeletionResult) -> Bool {
+        guard ensurePersistenceWritable() else { return false }
+        do {
+            let result = try plan()
+            try commitRecordDeletion(result)
+            pendingCustomerMergeUndo = nil
+            pendingRecordDeleteUndo = result.undo
+            scheduleRecordDeleteUndoExpiration(id: result.undo.id)
+            return true
+        } catch NativeRecordDeletionError.recordNotFound {
+            return false
+        } catch {
+            migrationMessage = "The \(noun) could not be deleted safely. Nothing was changed."
+            return false
+        }
+    }
+
+    // MARK: - Campaigns (Phase 33) primitives
+    //
+    // The campaigns, tags and opt-out API lives in `NativeCampaignsStore.swift`.
+    // Only what needs this file's private state (the snapshot, the repository,
+    // the queue, the deletion undo and the AI transport) lives here.
+
+    /// Every stored `campaigns` row.
+    var campaignRecords: [Canonical.Campaign] { snapshot.payload.campaigns ?? [] }
+
+    enum CampaignCommitMode {
+        /// A new campaign: refused when the id is already stored.
+        case insert
+        /// A changed campaign: refused when a pull removed it meanwhile.
+        case replace
+    }
+
+    /// Durably commits changed customers and at most one campaign in one save,
+    /// then enqueues their upserts as one batch (customers first): durable
+    /// save, then publish, then the queue (a queue failure never rolls back
+    /// the save). A customer that is no longer stored, or a campaign that does
+    /// not fit `mode`, is refused before anything is written.
+    func commitMarketingRecords(
+        customers changed: [Canonical.Customer],
+        campaign: Canonical.Campaign?,
+        mode: CampaignCommitMode = .replace
+    ) -> Bool {
+        guard ensurePersistenceWritable() else { return false }
+        var updated = snapshot
+        var customers = updated.payload.customers ?? []
+        for record in changed {
+            guard let index = customers.firstIndex(where: { $0.id == record.id }) else { return false }
+            customers[index] = record
+        }
+        if !changed.isEmpty { updated.payload.customers = customers }
+        if let campaign {
+            var records = updated.payload.campaigns ?? []
+            switch (mode, records.firstIndex(where: { $0.id == campaign.id })) {
+            case (.insert, nil): records.append(campaign)
+            case let (.replace, index?): records[index] = campaign
+            default: return false
+            }
+            updated.payload.campaigns = records
+        }
+        var drafts: [Canonical.MutationDraft] = []
+        do {
+            for record in changed {
+                drafts.append(.init(table: "customers", op: .upsert, recordId: record.id, payload: try Self.mutationPayload(record)))
+            }
+            if let campaign {
+                drafts.append(.init(table: "campaigns", op: .upsert, recordId: campaign.id, payload: try Self.mutationPayload(campaign)))
+            }
+            try repository.save(updated)
+            try apply(updated)
+        } catch {
+            return false
+        }
+        do {
+            try mutationQueue.enqueueBatch(drafts)
+            scheduleSyncAfterLocalChange()
+        } catch {
+            print("TradeReadyMutationQueue stage=enqueue table=campaigns")
+            recordLocalSyncFailure("queue/enqueue-campaigns")
+        }
+        return true
+    }
+
+    /// Deletes one campaign through the normal `campaigns` delete, with the
+    /// shared 8 s undo. Jobs it booked keep their `campaignId`.
+    @discardableResult
+    func deleteCampaign(id: String) -> Bool {
+        guard ensurePersistenceWritable() else { return false }
+        do {
+            let result = try NativeRecordDeletion.deleteCampaign(snapshot: snapshot, recordID: id)
+            try commitRecordDeletion(result)
+            pendingCustomerMergeUndo = nil
+            pendingRecordDeleteUndo = result.undo
+            scheduleRecordDeleteUndoExpiration(id: result.undo.id)
+            return true
+        } catch NativeRecordDeletionError.recordNotFound {
+            return false
+        } catch {
+            migrationMessage = "The campaign could not be deleted safely. Nothing was changed."
+            return false
+        }
+    }
+
+    /// Campaign drafting (spec §6.2): the coach transport with a dedicated
+    /// system prompt, never `sendCoachMessage`, so no BUSINESS DATA block is
+    /// sent. Provider order and auth are the coach's (user key, else the
+    /// backend `/api/ai-chat`); no new provider or model.
+    func sendCampaignDraftRequest(systemPrompt: String, userMessage: String) async throws -> String {
+        try await coachTransport.sendMessage(
+            messages: [NativeCoachMessage(role: .user, text: userMessage)],
+            systemPrompt: systemPrompt,
+            anthropicKey: effectiveAdvisoryAnthropicKey ?? "",
+            groqKey: effectiveAdvisoryGroqKey ?? "",
+            sessionBytes: scheduleBookingSessionBytes(explicit: nil)
+        )
     }
 
     /// Applies only the direct, one-step lifecycle actions whose dependent
@@ -5451,6 +6141,8 @@ final class AppStore: ObservableObject {
         wipeAIProviderKeysForAccountBoundary()
         // Phase 12 (12.00b.1): the refused changes belong to the old owner.
         scrubRejectedChangesForAccountBoundary()
+        // Phase 26 (§4.7): so does the device-local calendar sync state.
+        calendarSync.scrubForAccountBoundary()
         guard let activator = authenticatedIdentityActivator else {
             authenticationGateState = .signedOut
             return
@@ -5929,6 +6621,9 @@ final class AppStore: ObservableObject {
         // scrub, the RevenueCat logout await or any later event can run. The
         // teardown's own boundary below is then a no-op.
         applyAnalyticsIdentityBoundary()
+        // Phase 26 (§4.7): the server row cascades; the TradeReady calendar is
+        // removed too when the mirror was on (best effort, before the scrub).
+        calendarSync.removeMirrorCalendarForAccountDeletion()
         // Task 11.01: see `signOut` — suspend the mirror across the wipe.
         widgetMirrorSuspendedForAccountBoundary = true
         do {
@@ -6121,6 +6816,7 @@ final class AppStore: ObservableObject {
         // sign-out and a retried scrub all end here — reset first.
         applyAnalyticsIdentityBoundary()
         syncCoordinator?.reset()
+        calendarSync.resetForAccountBoundary()
         // Task 10.09 (B1): account boundary — clear the owner-scoped cached
         // snapshot only; observer registrations survive (the 11.01 widget
         // mirror registers once at launch and must keep receiving the next
@@ -6157,6 +6853,11 @@ final class AppStore: ObservableObject {
         stripeConnectStatus = nil
         stripeConnectLoading = false
         stripeConnectError = nil
+        // Phase 24: another owner's cards and charges never outlive the boundary.
+        autopayStatus = nil
+        autopayStatusError = nil
+        autopayStatusFetchedAt = nil
+        autopayRemovalsInFlight = []
         deepLinkedOutreachInvoiceID = nil
         authenticatedAccountState = .noMigratedSession
         authenticationGateState = .signedOut
@@ -6336,6 +7037,9 @@ final class AppStore: ObservableObject {
         // reschedule proofs) belongs to the scrubbed account and can never be
         // inherited by the next one.
         try pendingScheduleBookingWorkStore().removeAll()
+        // Phase 26 (§4.7): device-local calendar sync state (install id,
+        // checks, exclusions, mirror). The server row stays and goes stale.
+        calendarSync.scrubForAccountBoundary()
     }
 
     private func performLocalAccountScrub(
@@ -7774,6 +8478,7 @@ final class AppStore: ObservableObject {
     }
 
     private func applyEmptySnapshot() {
+        heldFormText = [:]
         do { try apply(Canonical.Snapshot(payload: .init())) }
         catch { migrationMessage = "Could not initialize data: \(error.localizedDescription)" }
     }
@@ -8687,6 +9392,7 @@ final class AppStore: ObservableObject {
     /// see this period's mark. Called by `TradeReadyNativeApp` on
     /// `.background`.
     func sceneDidEnterBackground() {
+        calendarSync.appDidEnterBackground()
         pullMarkPeriod &+= 1
         scheduleBookingRecoveryPullMark = nil
         bookingIntakePullMark = nil
@@ -8717,6 +9423,9 @@ final class AppStore: ObservableObject {
         refreshRecurringJobs()
         refreshRecurringInvoices()
         rescheduleInvoiceDeliveries()
+        // Phase 24 §6.3: autopay status, at most every 10 minutes. Detached so
+        // a slow Worker read never holds up the rest of the refresh.
+        Task { [weak self] in await self?.refreshAutopayStatus(trigger: .foreground) }
         // Phase 12 (12.00b.2-K, P12-016): customer bookings the pull brought
         // become lead jobs and customers (RN: `syncIfOnline`, then
         // `applyBookingRequests`, `context/AuthContext.tsx:118-120`). Only
@@ -8736,6 +9445,9 @@ final class AppStore: ObservableObject {
         // refresh's pull did not commit (offline, or a failed settings or
         // customers table), mirrors are not read and wait for a later pass.
         await recoverScheduleBookingPendingWorkIfPossible()
+        // Phase 26: calendar busy times and the TradeReady calendar, on every
+        // foreground (offline too: the push then waits for the next trigger).
+        await calendarSync.run(.foreground)
         guard synced else { return }
         let photos = await performJobPhotoTransfer()
         if photos.uploadedCount > 0 {
@@ -9105,6 +9817,9 @@ final class AppStore: ObservableObject {
         if photos.uploadedCount > 0 {
             guard await syncNowAndWait(trigger: .periodic) != nil else { return .failed }
         }
+
+        // Phase 26: keep the booking page's busy times fresh (48 h TTL).
+        await calendarSync.run(.background)
 
         // Match the React Native task order: cloud sync first, then safely
         // commit/acknowledge any exact-owner widget or Siri actions. Offline
@@ -9569,6 +10284,8 @@ final class AppStore: ObservableObject {
         if let v = try rebase("trips", \Canonical.Trip.id, b.trips, p.trips, l.trips) { result.payload.trips = v }
         if let v = try rebase("bookingRequests", \Canonical.BookingRequest.id, b.bookingRequests, p.bookingRequests, l.bookingRequests) { result.payload.bookingRequests = v }
         if let v = try rebase("jobPhotos", \Canonical.JobPhoto.id, b.jobPhotos, p.jobPhotos, l.jobPhotos) { result.payload.jobPhotos = v }
+        if let v = try rebase("forms", \Canonical.Form.id, b.forms, p.forms, l.forms) { result.payload.forms = v }
+        if let v = try rebase("campaigns", \Canonical.Campaign.id, b.campaigns, p.campaigns, l.campaigns) { result.payload.campaigns = v }
 
         // Settings and customer notes have no cursor: every pass refetches them.
         if try protectedKeys.contains("settings/\(settingsMutationRecordID)") || !sameEncoding(l.settings, b.settings) {
@@ -9678,6 +10395,8 @@ final class AppStore: ObservableObject {
             + (payload.pricebook?.count ?? 0)
             + (payload.bookingRequests?.count ?? 0)
             + (payload.jobPhotos?.count ?? 0)
+            + (payload.forms?.count ?? 0)
+            + (payload.campaigns?.count ?? 0)
     }
 
     private static func performanceOutcome(_ result: NativeSyncPullResult) -> NativePerformanceOutcome {
@@ -9992,6 +10711,13 @@ final class AppStore: ObservableObject {
         )
     }
 
+    /// An invoice's stored lines as drafts (Phase 34 credit carry-over).
+    private static func lineDrafts(of invoice: Canonical.Invoice) -> [JobInvoiceLineDraft] {
+        (invoice.lineItems ?? []).map {
+            JobInvoiceLineDraft(description: $0.description, amount: $0.amount, category: $0.category)
+        }
+    }
+
     /// A job's invoice line items, recomputed fresh from its current
     /// canonical record — see `commitInvoiceFromJob`.
     private func invoiceLineDrafts(for job: Canonical.Job) -> [JobInvoiceLineDraft] {
@@ -10112,7 +10838,17 @@ final class AppStore: ObservableObject {
         "payload", "schemaVersion", "legacySnapshot",
         "invoices", "jobs", "customers", "settings", "expenses",
         "customerNotes", "recurringJobs", "recurringInvoices", "trips",
-        "pricebook", "bookingRequests", "jobPhotos",
+        "pricebook", "bookingRequests", "jobPhotos", "forms",
+        // Phase 20: form and form-item keys (key names only, never values).
+        "kind", "jobId", "templateId", "items", "label", "required", "photoRequired",
+        "checked", "result", "text", "photoIds", "completedAt", "archivedAt", "formId", "formItemId",
+        // Phase 21: property and equipment keys (key names only, never values).
+        "properties", "propertyId", "primary", "equipment", "type", "make", "model", "serial",
+        "installDate", "warrantyExpires",
+        // Phase 33: campaign and customer marketing keys (key names only).
+        "campaigns", "code", "segment", "channelPlan", "message", "recipients", "frozenOn",
+        "manualExclusions", "endedAt", "channel", "skipReason", "sentAt", "tags",
+        "marketingOptOutOn", "marketingOptOutVia", "campaignId", "campaignCode",
         "id", "name", "email", "phone", "address", "notes", "createdAt",
         "customerId", "customerName", "customer", "title", "description",
         "status", "scheduledAt", "scheduledEnd", "estimateTotal", "laborHours",
@@ -10421,6 +11157,31 @@ extension AppStore {
         NativeSchedule.resolveSchedule(snapshot.payload.settings?.schedule)
     }
 
+    // MARK: Phase 26 calendar sync primitives
+    //
+    // The calendar sync API lives in `NativeCalendarSyncStore.swift`; only
+    // the reads that need this file's private state live here.
+
+    /// The owner calendar sync may act for: the exact signed-in workspace,
+    /// writable, with a verified binding and server subject. Nil otherwise
+    /// (signed out, an account boundary, or writes blocked).
+    func calendarSyncOwner() -> NativeCalendarSyncOwner? {
+        guard hasExactSignedInWorkspace, !persistenceWritesBlocked,
+              let binding = verifiedAccountBinding, !binding.isEmpty,
+              let subject = authenticatedUserSubject, !subject.isEmpty
+        else { return nil }
+        return NativeCalendarSyncOwner(binding: binding, subject: subject)
+    }
+
+    /// The current Supabase session for `POST /api/calendar/busy`, with the
+    /// booking transports' one-refresh hook.
+    func calendarSyncCredentials() -> NativeCalendarSyncCredentials? {
+        guard let bytes = scheduleBookingSessionBytes(explicit: nil) else { return nil }
+        return NativeCalendarSyncCredentials(sessionBytes: bytes, refresh: { [weak self] in
+            await self?.scheduleBookingRefreshedSession(excluding: bytes)
+        })
+    }
+
     /// Builds a schedule-only draft pinned to the CURRENT canonical record,
     /// or nil when the record is gone (the editor shows its missing state).
     func scheduleOnlyDraft(jobID: String) -> NativeScheduleBookingPolicy.ScheduleOnlyDraft? {
@@ -10692,6 +11453,7 @@ extension AppStore {
             requests: requests,
             jobs: snapshot.payload.jobs ?? [],
             customers: snapshot.payload.customers ?? [],
+            campaigns: snapshot.payload.campaigns ?? [],
             settings: settings,
             makeCustomerID: makeCustomerID ?? Self.intakeCustomerID,
             nowISO: { stamp }
@@ -13147,9 +13909,10 @@ extension AppStore {
     /// to persist it under.
     func applyInsightMute(_ insight: NativeTodayInsight, days: Int?) {
         guard let mutes = insightMutes, let binding = verifiedAccountBinding else { return }
-        if let days {
+        // Phase 34: `referral_thanks` is not in the §9.5 catalog, so it sends nothing.
+        if insight.kind.isInAnalyticsCatalog, let days {
             emitAnalytics(.insightSnoozed(insight.kind, insightID: insight.id, days: days))
-        } else {
+        } else if insight.kind.isInAnalyticsCatalog {
             emitAnalytics(.insightDismissed(insight.kind, insightID: insight.id))
         }
         let now = Date()
@@ -13300,18 +14063,25 @@ extension AppStore {
         lastShownInsightIDsKey = key
         // Task 11.08: typed string arrays (the 11.07 handoff), not
         // comma-joined strings.
-        emitAnalytics(.insightShown(kinds: insights.map(\.kind), ids: insights.map(\.id)))
+        // Phase 34: kinds outside the §9.5 catalog (`referral_thanks`) are
+        // left out rather than failing the whole event at the transport.
+        let cataloged = insights.filter(\.kind.isInAnalyticsCatalog)
+        guard !cataloged.isEmpty else { return }
+        emitAnalytics(.insightShown(kinds: cataloged.map(\.kind), ids: cataloged.map(\.id)))
     }
 
     func trackInsightTapped(_ insight: NativeTodayInsight) {
+        guard insight.kind.isInAnalyticsCatalog else { return }
         emitAnalytics(.insightTapped(insight.kind))
     }
 
     func trackInsightCoachOpened(_ insight: NativeTodayInsight) {
+        guard insight.kind.isInAnalyticsCatalog else { return }
         emitAnalytics(.insightCoachOpened(insight.kind))
     }
 
     func trackInsightReasonViewed(_ insight: NativeTodayInsight) {
+        guard insight.kind.isInAnalyticsCatalog else { return }
         emitAnalytics(.insightReasonViewed(insight.kind))
     }
 
@@ -13622,6 +14392,8 @@ extension AppStore {
         case presentCalendar
         case presentSearch
         case presentSettings
+        /// Phase 33: the campaign builder with a segment preset.
+        case presentNewCampaign(preset: String)
         case none
     }
 
@@ -13710,6 +14482,8 @@ extension AppStore {
             return .presentNewJobEditor
         case .newCustomer:
             return .presentNewCustomerEditor
+        case .newCampaign(let preset):
+            return .presentNewCampaign(preset: preset)
         }
     }
 
