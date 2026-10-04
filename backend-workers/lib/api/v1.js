@@ -291,20 +291,26 @@ async function handleV1(req, env, { nowMs = Date.now(), failureGuard }) {
   // checked on every request). Any other hash from a blocked address gets a
   // small RPC budget per window, so a flood of distinct random well-formed
   // keys cannot reach the database unbounded.
+  let spentBudget = false;
   if (!failureGuard.isKnownKey(keyHash, nowMs)) {
     const blockedFor = failureGuard.blockedFor(ipKey, nowMs);
-    if (blockedFor > 0 && !failureGuard.takeIpBudget(ipKey, nowMs)) {
-      return fail('rate_limited', { 'Retry-After': String(blockedFor) });
+    if (blockedFor > 0) {
+      if (!failureGuard.takeIpBudget(ipKey, nowMs)) return fail('rate_limited', { 'Retry-After': String(blockedFor) });
+      spentBudget = true;
     }
   }
+  // Only unknown/revoked/expired answers keep the credit.
+  const refund = () => { if (spentBudget) failureGuard.refundIpBudget(ipKey); };
 
   let auth;
   try {
     auth = await authorizeKey(env, { keyHash, route: route.template, ip: req.ip || null });
   } catch (err) {
     console.error('[api/v1] authorize failed:', err.message);
+    refund();
     return fail('unavailable');
   }
+  if (auth.kind !== 'denied') refund();
   if (auth.kind === 'unavailable') return fail('unavailable');
   if (auth.kind === 'denied') {
     failureGuard.fail(ipKey, nowMs);

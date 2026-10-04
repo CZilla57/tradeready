@@ -437,17 +437,51 @@ describe('keys and scopes', () => {
       expect((await api('/v1/jobs', { key: KEY_JOBS_ONLY, ip: '198.51.100.21' })).status).toBe(200);
     });
 
-    test('a never-seen valid key from a blocked IP succeeds within the budget and gets 429 beyond it', async () => {
+    test('valid never-seen keys from a blocked IP do not consume the budget (or each other\'s); unknown keys do', async () => {
       for (let i = 0; i < 20; i++) await api('/v1/customers', { key: null, ip: IP }); // block the address
       expect((await api('/v1/customers', { key: null, ip: IP })).status).toBe(429);
-      const keys = Array.from({ length: 7 }, (_, i) => fresh('valid', i));
+      const keys = Array.from({ length: 12 }, (_, i) => fresh('valid', i));
       keys.forEach(addValid);
-      const statuses = [];
-      for (const key of keys) statuses.push((await api('/v1/customers', { key, ip: IP })).status);
-      expect(statuses).toEqual([200, 200, 200, 200, 200, 429, 429]);
-      expect(rpcCount()).toBe(5);
-      // The budget resets with the window, and the block itself has lapsed by then.
-      expect((await api('/v1/customers', { key: keys[5], ip: IP, nowMs: NOW + 61_000 })).status).toBe(200);
+      for (const key of keys) expect((await api('/v1/customers', { key, ip: IP })).status).toBe(200);
+      expect(rpcCount()).toBe(12);
+      // Unknown keys spend the budget (5 per window) ...
+      for (let i = 0; i < 5; i++) expect((await api('/v1/customers', { key: fresh('junk', i), ip: IP })).status).toBe(401);
+      expect((await api('/v1/customers', { key: fresh('junk', 5), ip: IP })).status).toBe(429);
+      // ... and with it spent, a never-seen valid key waits for the next window (the accepted residual) ...
+      const late = fresh('late', 0);
+      addValid(late);
+      expect((await api('/v1/customers', { key: late, ip: IP })).status).toBe(429);
+      // ... while keys the isolate already knows are unaffected.
+      expect((await api('/v1/customers', { key: keys[0], ip: IP })).status).toBe(200);
+      expect((await api('/v1/customers', { key: late, ip: IP, nowMs: NOW + 61_000 })).status).toBe(200);
+    });
+
+    test('a key that authorized 30 minutes ago still passes during a flood (60-minute positive cache)', async () => {
+      expect((await api('/v1/customers', { key: KEY, ip: IP, nowMs: NOW })).status).toBe(200);
+      const later = NOW + 30 * 60_000;
+      for (let i = 0; i < 100; i++) await api('/v1/customers', { key: fresh('junk', i), ip: IP, nowMs: later });
+      expect(guard.blockedFor(IP, later)).toBeGreaterThan(0);
+      const before = rpcCount();
+      expect((await api('/v1/customers', { key: KEY, ip: IP, nowMs: later })).status).toBe(200);
+      expect(rpcCount()).toBe(before + 1); // still checked by the RPC
+      // Each success refreshes the 60-minute TTL; once it lapses the key is an ordinary never-seen key again.
+      expect(guard.isKnownKey(sha(KEY), later + 59 * 60_000)).toBe(true);
+      expect(guard.isKnownKey(sha(KEY), later + 61 * 60_000)).toBe(false);
+    });
+
+    test('a budget 429 never outlasts the block, and requests during a block do not extend it', async () => {
+      for (let i = 0; i < 20; i++) await api('/v1/customers', { key: null, ip: IP }); // block opens at NOW for 60 s
+      const t = NOW + 30_000;
+      for (let i = 0; i < 5; i++) expect((await api('/v1/customers', { key: fresh('junk', i), ip: IP, nowMs: t })).status).toBe(401);
+      for (let i = 5; i < 30; i++) {
+        const res = await api('/v1/customers', { key: fresh('junk', i), ip: IP, nowMs: t });
+        expect(res.status).toBe(429);
+        expect(res.headers['Retry-After']).toBe('30');
+      }
+      expect((await api('/v1/customers', { key: null, ip: IP, nowMs: t })).status).toBe(429);
+      // One window after the block began it is over, whatever was sent meanwhile.
+      expect((await api('/v1/customers', { key: null, ip: IP, nowMs: NOW + 60_000 })).status).toBe(401);
+      expect((await api('/v1/customers', { key: fresh('junk', 99), ip: IP, nowMs: NOW + 60_000 })).status).toBe(401);
     });
 
     test('the positive cache never skips the RPC: a revoked key is refused and forgotten', async () => {
@@ -748,6 +782,6 @@ describe('in-memory guards stay bounded and hold hashes only', () => {
     for (let i = 0; i < 100; i++) g.knownKey(sha(`k${i}`), NOW + i);
     expect(g.sizes().knownKeys).toBe(20);
     expect(g.isKnownKey(sha('k99'), NOW + 100)).toBe(true);
-    expect(g.isKnownKey(sha('k99'), NOW + 100 + 300_000)).toBe(false);
+    expect(g.isKnownKey(sha('k99'), NOW + 100 + 3_600_000)).toBe(false);
   });
 });

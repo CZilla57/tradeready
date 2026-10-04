@@ -304,11 +304,15 @@ describe('per-key-hash memory guards (§6)', () => {
     assert.equal(g.takeIpBudget('ip', 20), true);
     assert.equal(g.takeIpBudget('ip', 30), false);
     assert.equal(g.takeIpBudget('other', 30), true, 'per address');
+    g.refundIpBudget('ip');
+    assert.equal(g.takeIpBudget('ip', 31), true, 'a refunded credit can be spent again');
+    assert.equal(g.takeIpBudget('ip', 32), false);
+    g.refundIpBudget('never-seen');
     g.fail('ip', 40); // a budgeted RPC that failed must not extend the block
     assert.equal(g.blockedFor('ip', 1000), 0, 'block ends one window after it began');
     g.knownKey(H1, 0);
-    assert.equal(g.isKnownKey(H1, 299_999), true);
-    assert.equal(g.isKnownKey(H1, 300_000), false, 'five-minute TTL');
+    assert.equal(g.isKnownKey(H1, 3_599_999), true);
+    assert.equal(g.isKnownKey(H1, 3_600_000), false, 'sixty-minute TTL');
     g.knownKey(H2, 0);
     g.forgetKey(H2);
     assert.equal(g.isKnownKey(H2, 1), false);

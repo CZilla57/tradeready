@@ -124,10 +124,13 @@ async function logApiRequest(env, { userId, keyId, route, status, ip }) {
 //      behind a shared egress IP must keep working), but while their IP is
 //      blocked a key hash NOT in the positive cache may reach the authorize
 //      RPC only `ipBudget` times per window per IP; beyond that, 429 from
-//      memory. A flood of distinct random well-formed keys therefore costs
+//      memory. Only a request whose key turns out unknown, revoked or
+//      expired keeps its credit (a valid answer refunds it). A flood of
+//      distinct random well-formed keys therefore costs
 //      the database at most `limit` + `ipBudget` RPCs per window per IP.
 //   3. Positive cache: sha256 hashes that authorized (or were rate limited,
-//      which only a live key can be) in the last `knownTtlMs`. A hash in it
+//      which only a live key can be) in the last `knownTtlMs` (60 minutes,
+//      cap 1,000). A hash in it
 //      is never held to the IP budget. It does NOT skip the RPC: revocation
 //      and expiry are checked on every request, and a denial removes the hash.
 //      Accepted trade-off: a valid key this isolate has not seen recently,
@@ -161,8 +164,8 @@ function createAuthFailureGuard({
   windowMs = 60_000,
   unknownLimit = 5,
   ipBudget = 5,
-  knownTtlMs = 300_000,
-  maxKnownKeys = 500,
+  knownTtlMs = 3_600_000,
+  maxKnownKeys = 1000,
   maxEntries = GUARD_MAX_ENTRIES,
 } = {}) {
   const failures = new Map(); // ip -> { start, count }
@@ -202,6 +205,14 @@ function createAuthFailureGuard({
       if (cur.count >= ipBudget) return false;
       setBounded(budgets, ip, { start: cur.start, count: cur.count + 1 }, maxEntries, windowExpired(now));
       return true;
+    },
+
+    // Give back a credit taken for a request whose key turned out valid (or
+    // that never produced a verdict): only unknown/revoked/expired answers
+    // consume the budget, so valid keys never use it up for each other.
+    refundIpBudget(ip) {
+      const w = budgets.get(ip);
+      if (w && w.count > 0) w.count -= 1;
     },
 
     // Positive cache (never skips the RPC; it only exempts from the IP budget).
