@@ -50,6 +50,7 @@ const { makeStripe, isUnknownOutcome } = require('../stripe/client.js');
 const { recordStripePayment } = require('../stripe/recordPayment.js');
 const { balanceDue, amountPaid, PAID_EPSILON } = require('../paymentMath.js');
 const store = require('./store.js');
+const { OPEN_SESSION_LOOKBACK_SEC, SESSION_LIST_MAX_PAGES, listAllSessions, completedInvoiceSessions } = require('./sessions.js');
 const { selectInvoicesToCharge, selectHousekeeping, liveVerdict, planGoneFor, planKey, WINDOW_DAYS } = require('./selectInvoicesToCharge.js');
 const { revokeEnrollment } = require('./revoke.js');
 const { isHardFailure, normalizeFailureReason } = require('./reasons.js');
@@ -61,12 +62,6 @@ const { mintInvoicePayToken, mintManageToken, payPageUrl, ID_RE } = require('../
 const UNKNOWN_LIST_AFTER_MS = 6 * 60 * 60 * 1000;
 // A claim younger than this belongs to a run that may still be working on it.
 const RESUME_AFTER_MS = 5 * 60 * 1000;
-// Open sessions live at most 41 min (pay page) or 24 h (legacy Payment
-// Link sessions). A completed session's webhook can lag by up to Stripe's
-// 3-day retry schedule; 8 days covers that plus the whole 7-day window.
-const OPEN_SESSION_LOOKBACK_SEC = 86400;
-const COMPLETE_SESSION_LOOKBACK_SEC = 8 * 86400;
-const SESSION_LIST_MAX_PAGES = 20;
 const DAY_MS = 86_400_000;
 // Stand-down reasons after which a found-but-failed PaymentIntent gets no
 // customer pay-link email: there is nothing left to pay.
@@ -302,25 +297,6 @@ async function handleIntent(ctx, item, pi, card) {
   ctx.result.unknown++;
 }
 
-// Every session matching `params` on the owner's account, read to the end.
-// Throws on a Stripe error and when the list can't be finished within
-// SESSION_LIST_MAX_PAGES: a partial list is never treated as complete.
-async function listAllSessions(stripe, accountId, params) {
-  const out = [];
-  let startingAfter;
-  for (let page = 0; page < SESSION_LIST_MAX_PAGES; page++) {
-    const list = await stripe.checkout.sessions.list(
-      { ...params, limit: 100, ...(startingAfter ? { starting_after: startingAfter } : {}) },
-      { stripeAccount: accountId }
-    );
-    const data = (list && list.data) || [];
-    out.push(...data);
-    if (!list || !list.has_more || !data.length) return out;
-    startingAfter = data[data.length - 1].id;
-  }
-  throw new Error(`checkout session list (${params.status}) longer than ${SESSION_LIST_MAX_PAGES} pages`);
-}
-
 // Expire every open Checkout Session for this invoice on the owner's account
 // (last 24 h). → 'clear', or 'completed' when an expire is refused because
 // the session already completed (the customer paid on the pay page). Throws
@@ -337,14 +313,6 @@ async function expireOpenSessions(stripe, accountId, invoiceId, nowSec) {
     }
   }
   return 'clear';
-}
-
-// This invoice's COMPLETE Checkout Sessions (last 8 days). liveVerdict
-// stands down while one of them has no stripe_<session id> ledger entry yet
-// (paid on the pay page, webhook not landed). Throws like listAllSessions.
-async function completedInvoiceSessions(stripe, accountId, invoiceId, nowSec) {
-  const done = await listAllSessions(stripe, accountId, { status: 'complete', created: { gte: nowSec - COMPLETE_SESSION_LOOKBACK_SEC } });
-  return done.filter((s) => s && s.status === 'complete' && s.metadata && s.metadata.invoiceId === invoiceId);
 }
 
 // The autopay PaymentIntent for this claim, if Stripe has one (no charge is

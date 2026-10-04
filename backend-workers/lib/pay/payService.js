@@ -9,6 +9,9 @@
 //     paymentMath.js at click time. A paid invoice can't be paid again.
 //   - At most one open Checkout Session per invoice: older open sessions
 //     (including legacy Payment Link sessions) are expired first.
+//   - A checkout is also refused (409 in_flight) while a COMPLETED Checkout
+//     Session for the invoice has no stripe_<session id> ledger entry yet
+//     (paid, webhook not landed), so a second payment can't stack on it.
 //   - A checkout is refused while an autopay charge for the invoice is in
 //     flight (claimed), and re-checks for a fresh claim after creating its
 //     session (mutual exclusion with the sweep, which expires open sessions
@@ -37,6 +40,7 @@ const { buildAutopayOffEmail, ownerAutopayOffAlert } = require('../autopay/email
 const { alertOwner, sendCustomerEmail } = require('../ownerAlert.js');
 const { isPlausibleEmail } = require('../selectInvoicesToRemind.js');
 const store = require('../autopay/store.js');
+const { completedInvoiceSessions } = require('../autopay/sessions.js');
 
 const MESSAGES = {
   bad_request: 'This link is incomplete.',
@@ -46,7 +50,7 @@ const MESSAGES = {
   unavailable: "Online payment isn't available.",
   expired: 'This setup link has expired.',
   paid: 'This invoice is already paid.',
-  in_flight: 'An automatic payment for this invoice is being processed. Please check back in a few minutes.',
+  in_flight: 'A payment for this invoice is being processed. Please check back in a few minutes.',
   changed: 'This page is out of date. Please reload.',
   maybe_paid: 'This invoice may have just been paid. Reload.',
   busy: 'Please try again in a moment.',
@@ -243,6 +247,13 @@ class CheckoutConflict extends Error {}
 // and are left for Stripe's idempotent replay. An expire error means the
 // session completed meanwhile → CheckoutConflict (409 "may have just been
 // paid").
+// A session minted under `idemKey` itself or under one of its re-mint keys
+// (`<idemKey>:r...`, see createSession) is the caller's own.
+function isOwnSession(session, idemKey) {
+  const k = session.metadata && session.metadata.tr_idem;
+  return !!k && (k === idemKey || k.startsWith(`${idemKey}:r`));
+}
+
 async function expireOtherOpenSessions(stripe, accountId, invoiceId, idemKey, nowSec) {
   let startingAfter;
   for (let page = 0; page < 10; page++) {
@@ -253,7 +264,7 @@ async function expireOtherOpenSessions(stripe, accountId, invoiceId, idemKey, no
     const data = (list && list.data) || [];
     for (const s of data) {
       if (!s.metadata || s.metadata.invoiceId !== invoiceId) continue;
-      if (s.metadata.tr_idem && s.metadata.tr_idem === idemKey) continue;
+      if (isOwnSession(s, idemKey)) continue;
       try {
         await stripe.checkout.sessions.expire(s.id, {}, { stripeAccount: accountId });
       } catch (err) {
@@ -314,16 +325,44 @@ async function ensurePendingEnrollment(env, { userId, accountId, planRow, stripe
   });
 }
 
+const REMINT_MAX = 3;
+
+// Create the Checkout Session, and make sure what comes back is payable.
+//
+// Stripe replays the CACHED original response for a repeated idempotency
+// key, and that response says `open` even after the session was expired
+// (the customer switched tip A -> B -> A inside one 10-minute bucket, or
+// another tab / the autopay sweep expired it). So an `open` create response
+// is checked against the session's live status. An expired session is
+// replaced under a key that names the dead session
+// (`<key>:r<last 12 chars of its id>`; short because Stripe caps keys at 255
+// characters): deterministic, so two identical requests racing on the same
+// dead session still share one new session, and distinct per dead session,
+// so a later replay of the SAME base key never lands on a session this chain
+// already killed. A completed one is returned as-is
+// (the caller answers 409 "may have just been paid").
 async function createSession(stripe, params, { accountId, idemKey }) {
-  let session = await stripe.checkout.sessions.create(params, { stripeAccount: accountId, idempotencyKey: idemKey });
-  if (session && session.status === 'expired') {
-    // The replayed session was expired by another tab since; mint a fresh one.
-    session = await stripe.checkout.sessions.create(
-      { ...params, metadata: { ...params.metadata, tr_idem: `${idemKey}:r` } },
-      { stripeAccount: accountId, idempotencyKey: `${idemKey}:r` }
-    );
+  let key = idemKey;
+  let session;
+  for (let attempt = 0; attempt <= REMINT_MAX; attempt++) {
+    const send = attempt === 0 ? params : { ...params, metadata: { ...params.metadata, tr_idem: key } };
+    session = await stripe.checkout.sessions.create(send, { stripeAccount: accountId, idempotencyKey: key });
+    if (!session) return session;
+    let status = session.status;
+    if (status === 'open') {
+      try {
+        const live = await stripe.checkout.sessions.retrieve(session.id, {}, { stripeAccount: accountId });
+        if (live && live.status) status = live.status;
+      } catch (err) {
+        // Can't confirm: fall back to the create response rather than
+        // blocking a payment the customer may be able to make.
+        console.warn(`[pay/checkout] live status of ${session.id} unavailable: ${err.message}`);
+      }
+    }
+    if (status !== 'expired') return status === session.status ? session : { ...session, status };
+    key = `${key}:r${session.id.slice(-12)}`;
   }
-  return session;
+  throw new Error(`checkout session still expired after ${REMINT_MAX} re-mints (${idemKey})`);
 }
 
 async function checkoutInvoice(env, { stripe, body, ip, userAgent, nowMs }) {
@@ -390,6 +429,15 @@ async function checkoutInvoice(env, { stripe, body, ip, userAgent, nowMs }) {
     if (err instanceof CheckoutConflict) return fail('maybe_paid', biz);
     throw err;
   }
+
+  // A payment that completed on Stripe but isn't in the ledger yet (the
+  // webhook lags) hasn't reduced the balance this click was priced from, so
+  // a second session would take the customer's money twice. Listed AFTER the
+  // open-session pass above (a session completing between the two is still
+  // seen as complete), with the same helper the autopay sweep uses.
+  const booked = new Set((invoice.payments || []).map((p) => p && p.id));
+  const completed = await completedInvoiceSessions(stripe, ctx.accountId, invoiceId, nowSec);
+  if (completed.some((s) => !booked.has(`stripe_${s.id}`))) return fail('in_flight', biz);
 
   let enrollment = null;
   let stripeCustomerId = null;
