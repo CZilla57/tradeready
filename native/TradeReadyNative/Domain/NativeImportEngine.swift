@@ -99,6 +99,16 @@ enum NativeImportEngine {
         return parts.joined(separator: " ")
     }
 
+    /// Phase 33: every non-empty cell whose column maps to `key`, one entry
+    /// per column (tags split per cell, never across cells).
+    static func fieldValues(_ row: [String], _ mapping: [String?], _ key: String) -> [String] {
+        mapping.indices.compactMap { index in
+            guard mapping[index] == key else { return nil }
+            let value = (index < row.count ? row[index] : "").trimmingCharacters(in: .whitespaces)
+            return value.isEmpty ? nil : value
+        }
+    }
+
     static func normalizeName(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespaces).lowercased()
     }
@@ -108,6 +118,9 @@ enum NativeImportEngine {
     /// `upsertCustomerInList`: backfill only BLANK contact fields, never clobber.
     /// `leadSource` (Phase 27) is normalized and follows the same first-touch
     /// rule: set on a created record, filled only when a match's is blank.
+    /// Phase 33 (spec §3.4): `tags` union into a match's through
+    /// `NativeCustomerTags.merged`; `marketingOptOutOn` (the import date, via
+    /// `imported`) fills only when the record has none and never clears one.
     static func upsertCustomer(
         _ customers: [Canonical.Customer],
         name: String,
@@ -115,12 +128,16 @@ enum NativeImportEngine {
         phone: String = "",
         address: String = "",
         leadSource: String? = nil,
+        tags: [String]? = nil,
+        marketingOptOutOn: String? = nil,
         createdAt: String,
         newID: () -> String
     ) -> (customer: Canonical.Customer?, customers: [Canonical.Customer], changed: Bool) {
         let key = normalizeName(name)
         if key.isEmpty { return (nil, customers, false) }
         let source = NativeLeadSource.normalize(leadSource)
+        let importedTags = NativeCustomerTags.normalizeList(tags)
+        let optOutDay = marketingOptOutOn.flatMap { $0.isEmpty ? nil : $0 }
 
         if let index = customers.firstIndex(where: { normalizeName($0.name) == key }) {
             let existing = customers[index]
@@ -134,8 +151,16 @@ enum NativeImportEngine {
             let existingSourceBlank = (existing.leadSource ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             let fillsSource = existingSourceBlank && source != nil
             if fillsSource, let source { merged["leadSource"] = .string(source) }
+            let mergedTags = NativeCustomerTags.merged(winner: existing.tags, loser: importedTags)
+            let tagsChanged = importedTags != nil && mergedTags != existing.tags
+            if tagsChanged, let mergedTags { merged["tags"] = .array(mergedTags.map { .string($0) }) }
+            let fillsOptOut = !existing.isMarketingOptedOut && optOutDay != nil
+            if fillsOptOut, let optOutDay {
+                merged["marketingOptOutOn"] = .string(optOutDay)
+                merged["marketingOptOutVia"] = .string(NativeMarketingOptOut.Via.imported.rawValue)
+            }
             let changed = mergedEmail != existing.email || mergedPhone != existing.phone
-                || mergedAddress != existing.address || fillsSource
+                || mergedAddress != existing.address || fillsSource || tagsChanged || fillsOptOut
             guard changed, let updated = decode(Canonical.Customer.self, merged) else {
                 return (existing, customers, false)
             }
@@ -154,6 +179,11 @@ enum NativeImportEngine {
             "createdAt": .string(createdAt),
         ]
         if let source { createdFields["leadSource"] = .string(source) }
+        if let importedTags { createdFields["tags"] = .array(importedTags.map { .string($0) }) }
+        if let optOutDay {
+            createdFields["marketingOptOutOn"] = .string(optOutDay)
+            createdFields["marketingOptOutVia"] = .string(NativeMarketingOptOut.Via.imported.rawValue)
+        }
         let created = decode(Canonical.Customer.self, createdFields)!
         return (created, customers + [created], true)
     }
@@ -184,6 +214,9 @@ enum NativeImportEngine {
                 phone: fieldValue(row, mapping, "phone"),
                 address: fieldValue(row, mapping, "address"),
                 leadSource: fieldValue(row, mapping, "leadSource"),
+                tags: fieldValues(row, mapping, "tags").flatMap(NativeCustomerTags.split),
+                marketingOptOutOn: fieldValues(row, mapping, "marketingOptOut").lazy
+                    .compactMap { NativeMarketingOptOut.importOptOutDay($0, importDay: environment.today()) }.first,
                 createdAt: environment.today(),
                 newID: environment.newCustomerID
             )

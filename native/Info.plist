@@ -28,6 +28,7 @@
     <key>GIDClientID</key><string>$(TRADEREADY_GOOGLE_IOS_CLIENT_ID)</string>
     <key>GIDServerClientID</key><string>$(TRADEREADY_GOOGLE_SERVER_CLIENT_ID)</string>
     <key>NSCameraUsageDescription</key><string>TradeReady uses the camera to add job photos.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key><string>TradeReady checks the calendars you choose for busy times so your booking link won't offer them, and can add your jobs to a TradeReady calendar. Only busy start and end times are sent to TradeReady, never event names, notes or guests.</string>
     <key>LSRequiresIPhoneOS</key><true/>
     <key>ITSAppUsesNonExemptEncryption</key><false/>
     <key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>

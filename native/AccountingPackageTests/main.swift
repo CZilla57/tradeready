@@ -81,6 +81,17 @@ private func testBuilders() {
     expectEqual(itemLines.count, 4, "header + 2 line items + trailing")
     expectEqual(itemLines[1], "INV-1,Labor,labor,600.00", "line item row")
 
+    // Phase 34 (spec §5.6, §5.9): a referral credit is a negative line with
+    // category `referral_credit`; the invoice row's amount, paid and balance
+    // follow the lowered amount, and no payment row is invented for it.
+    let credited = invoice(#"{"id":"inv\#(march1Ms)","customer":"Sam","number":"INV-3","desc":"Job","amount":975,"due":"2026-03-01","paid":false,"email":"","phone":"","lineItems":[{"description":"Labor","category":"labor","amount":1000},{"description":"Referral credit \#u{2014} thank you!","category":"referral_credit","amount":-25}],"payments":[{"id":"p1","amount":975,"date":"2026-03-02","method":"cash"}]}"#)
+    let creditItems = NativeAccountingPackage.buildLineItemsCsv([credited], start: jan1, end: dec31).components(separatedBy: "\r\n")
+    expectEqual(creditItems[2], "INV-3,Referral credit \u{2014} thank you!,referral_credit,-25.00", "the credit line exports verbatim")
+    let creditInvoice = NativeAccountingPackage.buildInvoicesCsv([credited], start: jan1, end: dec31).components(separatedBy: "\r\n")
+    expect(creditInvoice[1].contains("975.00,975.00,0.00,paid"), "the credited invoice exports its lowered amount, paid and balance")
+    let creditActivity = NativeAccountingPackage.buildPaymentActivityCsv([credited], start: jan1, end: dec31).components(separatedBy: "\r\n")
+    expectEqual(creditActivity.count, 3, "the credit adds no payment row")
+
     let activity = NativeAccountingPackage.buildPaymentActivityCsv([paid], start: jan1, end: dec31).components(separatedBy: "\r\n")
     expectEqual(activity.count, 4, "header + 2 payments + trailing")
     expectEqual(activity[1], "2026-03-01,Acme,INV-1,cash,,400.00,No,,device", "device payment row")
@@ -119,12 +130,46 @@ private func testBuilders() {
         customer(#"{"id":"c4","name":"Dot","email":"","phone":"","address":"","notes":""}"#),
     ]
     let sourcedCsv = NativeAccountingPackage.buildCustomersCsv(sourced).components(separatedBy: "\r\n")
-    expectEqual(sourcedCsv[0], "Name,Email,Phone,Address,Notes,Created,Archived,Lead source", "customers header gains a trailing Lead source")
-    expectEqual(sourcedCsv[1], "Acme,,,,,2026-01-01,,Thumbtack / Angi", "preset key exports its display name")
-    expectEqual(sourcedCsv[2], "Bree,,,,,,,\"Home show, spring\"", "custom label verbatim (normalized, CSV-escaped)")
-    expectEqual(sourcedCsv[3], "Cole,,,,,,2026-02-01,", "a blank source exports empty")
-    expectEqual(sourcedCsv[4], "Dot,,,,,,,", "no source exports empty")
+    // Phase 34 appends `Referred by` after `Lead source`; Phase 33 (campaigns
+    // spec §3.4) appends `Tags` and `Marketing opt-out` after it. All three
+    // are empty for these customers.
+    expectEqual(sourcedCsv[0], "Name,Email,Phone,Address,Notes,Created,Archived,Lead source,Referred by,Tags,Marketing opt-out",
+                "customers header gains a trailing Lead source, then Referred by (Phase 34), then Tags and Marketing opt-out")
+    expectEqual(sourcedCsv[1], "Acme,,,,,2026-01-01,,Thumbtack / Angi,,,", "preset key exports its display name")
+    expectEqual(sourcedCsv[2], "Bree,,,,,,,\"Home show, spring\",,,", "custom label verbatim (normalized, CSV-escaped)")
+    expectEqual(sourcedCsv[3], "Cole,,,,,,2026-02-01,,,,", "a blank source exports empty")
+    expectEqual(sourcedCsv[4], "Dot,,,,,,,,,,", "no source exports empty")
     expectEqual(sourcedCsv.count, 6, "header + 4 rows + trailing CRLF")
+
+    // Phase 33: tags joined with "; " (CSV-escaped like any field) and the
+    // local opt-out date; a blank opt-out date exports empty.
+    let marketing = [
+        customer(#"{"id":"m1","name":"Ana","email":"","phone":"","address":"","notes":"","tags":["AC","VIP"],"marketingOptOutOn":"2026-02-03","marketingOptOutVia":"asked"}"#),
+        customer(#"{"id":"m2","name":"Ben","email":"","phone":"","address":"","notes":"","tags":["Gate, side"],"marketingOptOutOn":" "}"#),
+    ]
+    let marketingCsv = NativeAccountingPackage.buildCustomersCsv(marketing).components(separatedBy: "\r\n")
+    expectEqual(marketingCsv[1], "Ana,,,,,,,,,AC; VIP,2026-02-03", "tags and the opt-out date export")
+    expectEqual(marketingCsv[2], "Ben,,,,,,,,,\"Gate, side\",", "a tag with a comma is escaped; a blank opt-out is empty")
+
+    // Phase 34 (spec §5.9): `Referred by` holds the referrer's name, "Former
+    // customer" when that record is gone, or blank. Codes and rewards are
+    // never exported.
+    let referred = [
+        customer(#"{"id":"c1","name":"Sam, Jr.","email":"","phone":"","address":"","notes":"","referralCode":"0123456789abcdef"}"#),
+        customer(#"{"id":"c2","name":"Alex","email":"","phone":"","address":"","notes":"","leadSource":"referral","referredByCustomerId":"c1","referralReward":{"kind":"invoice_credit","amount":25,"recordedOn":"2026-03-01"}}"#),
+        customer(#"{"id":"c3","name":"Bea","email":"","phone":"","address":"","notes":"","leadSource":"Word of mouth","referredByCustomerId":"c_gone"}"#),
+        customer(#"{"id":"c4","name":"Cal","email":"","phone":"","address":"","notes":"","leadSource":"google","referredByCustomerId":"c1"}"#),
+        customer(#"{"id":"c5","name":"Dee","email":"","phone":"","address":"","notes":"","leadSource":"referral","referredByCustomerId":"c5"}"#),
+    ]
+    let referredText = NativeAccountingPackage.buildCustomersCsv(referred)
+    let referredCsv = referredText.components(separatedBy: "\r\n")
+    expectEqual(referredCsv[1], "Alex,,,,,,,Referral / word of mouth,\"Sam, Jr.\",,", "the referrer's name, CSV-escaped")
+    expectEqual(referredCsv[2], "Bea,,,,,,,Referral / word of mouth,Former customer,,", "a deleted referrer reads Former customer")
+    expectEqual(referredCsv[3], "Cal,,,,,,,Google,,,", "a referrer that breaks R1 (not a referral) exports blank")
+    expectEqual(referredCsv[4], "Dee,,,,,,,Referral / word of mouth,,,", "a self-reference exports blank")
+    expectEqual(referredCsv[5], "\"Sam, Jr.\",,,,,,,,,,", "no referrer exports blank")
+    expect(!referredText.contains("0123456789abcdef") && !referredText.contains("invoice_credit"),
+           "codes and rewards are not exported")
 
     let mapping = NativeAccountingPackage.buildCategoryMappingCsv().components(separatedBy: "\r\n")
     expectEqual(mapping.count, 10, "category mapping: header + 8 + trailing")
@@ -186,6 +231,7 @@ private func testSummaryAndPackage() {
       "range_start": "2026-01-01",
       "range_end": "2026-12-31",
       "cash_collected": 1000,
+      "tips_collected": 0,
       "voided_amount": 0,
       "expenses_total": 250.5,
       "net_cash": 749.5,
@@ -217,13 +263,29 @@ private func testSummaryAndPackage() {
     // (12 bytes) plus one empty field per customer row (1 byte each). The
     // stored ZIP's headers are fixed-width, so the archive grows by exactly
     // that; the CRC-32 is re-pinned to the native bytes.
+    // Phase 34 (referrals, spec §5.9) appends `Referred by` the same way:
+    // `,Referred by` on the header (12 bytes) plus one more empty field per row.
+    // Phase 33 (campaigns spec §3.4) appends `,Tags,Marketing opt-out` the
+    // same way (23 header bytes plus two empty fields, 2 bytes, per row).
+    //
+    // Phase 28 (tips, spec §6.3) deliberately adds two more things for every
+    // package, with or without tips: the always-present `tips_collected` key in
+    // summary.json and one README note. The stored ZIP grows by exactly those
+    // bytes and the CRC-32 is re-pinned again.
     let leadSourceHeaderBytes = ",Lead source".utf8.count
-    expectEqual(first.bytes.count, 3931 + leadSourceHeaderBytes + 1, "package byte length is the RN oracle plus the lead-source column")
-    expectEqual(NativeZipArchive.crc32(first.bytes), 2_615_559_630, "package CRC-32 (RN oracle + lead-source column)")
+    let referredByHeaderBytes = ",Referred by".utf8.count
+    let marketingHeaderBytes = ",Tags,Marketing opt-out".utf8.count
+    let tipsSummaryBytes = "  \"tips_collected\": 0,\n".utf8.count
+    let tipsReadmeBytes = "  - Tips appear as separate rows with Note \"Tip\". They are income but not invoice payments, so invoices.csv Amount Paid excludes them.\n".utf8.count
+    let tipsBytes = tipsSummaryBytes + tipsReadmeBytes
+    expectEqual(first.bytes.count, 3931 + leadSourceHeaderBytes + 1 + referredByHeaderBytes + 1 + marketingHeaderBytes + 2 + tipsBytes,
+                "package byte length is the RN oracle plus the lead-source, referred-by and Phase 33 columns and the tips lines")
+    expectEqual(NativeZipArchive.crc32(first.bytes), 1_143_637_122, "package CRC-32 (RN oracle + lead-source, referred-by and Phase 33 columns + tips lines)")
 
     let emptyPackage = NativeAccountingPackage.buildAccountingPackage(NativePackageInput(), start: jan1, end: dec31)
-    expectEqual(emptyPackage.bytes.count, 3626 + leadSourceHeaderBytes, "empty package byte length is the RN oracle plus the lead-source header")
-    expectEqual(NativeZipArchive.crc32(emptyPackage.bytes), 3_621_479_273, "empty package CRC-32 (RN oracle + lead-source header)")
+    expectEqual(emptyPackage.bytes.count, 3626 + leadSourceHeaderBytes + referredByHeaderBytes + marketingHeaderBytes + tipsBytes,
+                "empty package byte length is the RN oracle plus the three header additions and the tips lines")
+    expectEqual(NativeZipArchive.crc32(emptyPackage.bytes), 3_973_003_993, "empty package CRC-32 (RN oracle + the three header additions + tips lines)")
 
     let expectedOrder = [
         "invoices.csv", "invoice-line-items.csv", "active-payments.csv", "payment-activity.csv",

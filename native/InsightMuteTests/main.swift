@@ -41,6 +41,21 @@ private func testMakeMute() {
                 "2026-08-05", "a 1-day snooze runs to tomorrow")
     expectEqual(NativeInsightMutes.makeMute(id: "x", now: august4, days: 0).until, nil,
                 "a zero-day snooze is a dismiss")
+
+    // Phase 21 (spec 2026-10-02-properties-equipment-design.md §4): the
+    // warranty insight's 14-day snooze, on an id scoped to the expiry date.
+    let warranty = NativeInsightMutes.makeMute(id: "warranty_expiring:eq_1:2026-08-20", now: august4, days: 14)
+    expectEqual(warranty.until, "2026-08-18", "a 14-day warranty snooze runs to today + 14")
+    expect(NativeInsightMutes.isMuteActive(warranty, today: "2026-08-17"), "the warranty snooze holds through day 13")
+    expect(!NativeInsightMutes.isMuteActive(warranty, today: "2026-08-18"), "and lifts on day 14, before the expiry")
+    expectEqual(
+        NativeInsightMutes.filterMuted(
+            ["warranty_expiring:eq_1:2026-08-20", "warranty_expiring:eq_1:2026-09-30"],
+            mutes: [warranty], now: august4, id: { $0 }
+        ),
+        ["warranty_expiring:eq_1:2026-09-30"],
+        "a corrected expiry date is a new id, so it is not hidden by the old snooze"
+    )
 }
 
 private func testIsMuteActive() {

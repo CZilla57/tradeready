@@ -165,6 +165,9 @@ struct AnalyticsEventTests {
     static let everyEvent: [NativeAnalyticsEvent] = [
         .aiChatSent(.insightPrefill, provider: "backend"),
         .aiChatSent(.organic, provider: "anthropic"),
+        // Phase 23 (open API §9): scope count only.
+        .apiKeyCreated(scopeCount: 4),
+        .apiKeyRevoked(scopeCount: 5),
         .appointmentConfirmOpened,
         .appointmentConfirmSent,
         .bookingRequestOpened,
@@ -247,7 +250,8 @@ struct AnalyticsEventTests {
             expect(false, "catalog: the embedded §9.5 fixture parses")
             return
         }
-        expectEqual(catalog.events.count, 52, "catalog: 52 events")
+        // 54: Phase 23 adds api_key_created and api_key_revoked.
+        expectEqual(catalog.events.count, 54, "catalog: 54 events")
         expectEqual(Set(everyEvent.map(\.name)), Set(catalog.events.keys),
                     "catalog: a typed constructor exists for every event name, and no other name")
 

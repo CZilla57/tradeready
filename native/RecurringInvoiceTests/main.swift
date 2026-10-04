@@ -122,7 +122,8 @@ do {
 // nothing. The destructive target is its own state and survives the dismissal.
 do {
     let tapped = rule(nextDue: "2026-09-01")
-    for kind in [NativeRecurringPlanActionState<Canonical.RecurringInvoice>.DestructiveKind.cancelPlan, .deletePlan] {
+    let kinds: [NativeRecurringPlanActionState<Canonical.RecurringInvoice>.DestructiveKind] = [.cancelPlan, .deletePlan, .removeSavedCard]
+    for kind in kinds {
         var state = NativeRecurringPlanActionState<Canonical.RecurringInvoice>()
         state.showActions(for: tapped)
         expect(state.isDialogPresented && state.isPresentingAnything, "I1 \(kind): the plan actions open")
@@ -131,7 +132,7 @@ do {
         state.dismissActions()
         expect(!state.isDialogPresented, "I1 \(kind): the dialog is dismissed")
         expect(state.isConfirming(kind), "I1 \(kind): the confirmation alert is presented")
-        expect(!state.isConfirming(kind == .cancelPlan ? .deletePlan : .cancelPlan), "I1 \(kind): only its own alert")
+        expect(kinds.filter { $0 != kind }.allSatisfy { !state.isConfirming($0) }, "I1 \(kind): only its own alert")
         expect(state.pendingDestructive?.rule.id == tapped.id,
                "I1 \(kind): the confirm action receives the tapped plan after the dialog dismissed")
         state.endConfirmation()
@@ -186,6 +187,55 @@ do {
            "L286.2: the Cancel plan button passes the dialog's captured rule explicitly")
     expect(view.contains("requestDestructive(.deletePlan, for: rule)"),
            "L286.2: the Delete plan button passes the dialog's captured rule explicitly")
+    // Phase 24 §6.3: "Remove saved card" uses the same hand-off.
+    expect(view.contains("requestDestructive(.removeSavedCard, for: rule)"),
+           "P24: Remove saved card passes the dialog's captured rule explicitly")
+    expect(view.contains("planActions.isConfirming(.removeSavedCard)"),
+           "P24: the remove confirmation is driven by the action state")
+    // Phase 24 §6.2: every editor save carries the plan's autopay choice.
+    expect(view.components(separatedBy: "autopayEnabled: autopay").count - 1 == 2,
+           "P24: both the create and the edit save pass autopayEnabled")
+}
+
+// Phase 24 §6.2: the manual initializer carries `autopayEnabled` (now a typed
+// field, so it no longer rides `preservation`) and keeps unknown keys.
+do {
+    let source = decodeRule("""
+    {"id":"rule-ap","customerId":"c1","customerName":"Acme","description":"Maintenance","amount":150,"dueDays":30,"cadence":"monthly","endCondition":"never","occurrenceCount":2,"nextDueDate":"2026-10-01","isActive":true,"createdAt":"2026-08-01","autoSendEnabled":false,"autopayEnabled":true,"futurePlanField":{"kept":1}}
+    """)
+    expect(source.autopayEnabled == true, "P24: autopayEnabled decodes")
+    func rebuilt(_ rule: Canonical.RecurringInvoice, autopay: Bool?) -> Canonical.RecurringInvoice {
+        Canonical.RecurringInvoice(
+            id: rule.id, customerId: rule.customerId, customerName: rule.customerName,
+            description: rule.description, amount: rule.amount, dueDays: rule.dueDays,
+            cadence: rule.cadence, endCondition: rule.endCondition, endCount: rule.endCount,
+            endDate: rule.endDate, occurrenceCount: rule.occurrenceCount,
+            lastGeneratedDate: rule.lastGeneratedDate, nextDueDate: rule.nextDueDate,
+            isActive: rule.isActive, createdAt: rule.createdAt, autoSendEnabled: rule.autoSendEnabled,
+            autopayEnabled: autopay, preservation: rule.preservation)
+    }
+    func jsonObject(_ rule: Canonical.RecurringInvoice) -> NSDictionary? {
+        (try? JSONEncoder().encode(rule)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? NSDictionary }
+    }
+    let sourceJSON = jsonObject(source)
+    let same = jsonObject(rebuilt(source, autopay: source.autopayEnabled))
+    expect(sourceJSON != nil && same == sourceJSON, "P24: an edit that keeps the choice re-encodes the plan exactly")
+    let off = jsonObject(rebuilt(source, autopay: false))
+    expect(off?["autopayEnabled"] as? Bool == false && off?["futurePlanField"] != nil,
+           "P24: turning autopay off writes false and keeps unknown keys")
+    let fresh = jsonObject(Canonical.RecurringInvoice(
+        id: "rule-new", customerId: "c1", customerName: "Acme", description: "", amount: 90, dueDays: 30,
+        cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil, occurrenceCount: 0,
+        lastGeneratedDate: nil, nextDueDate: "2026-10-01", isActive: true, createdAt: "2026-10-01",
+        autoSendEnabled: false, autopayEnabled: nil))
+    expect(fresh != nil && fresh?["autopayEnabled"] == nil, "P24: a new plan without autopay writes no key (absent means off)")
+
+    // Generation never changes the plan's choice and never copies it to invoices.
+    let generated = run(rules: [source], today: "2026-10-01")
+    expect(generated.updatedRules.first?.autopayEnabled == true, "P24: generation keeps autopayEnabled on the advanced plan")
+    let invoiceJSON = generated.newInvoices.first.flatMap { try? JSONEncoder().encode($0) }
+        .flatMap { try? JSONSerialization.jsonObject(with: $0) as? NSDictionary }
+    expect(invoiceJSON != nil && invoiceJSON?["autopayEnabled"] == nil, "P24: a generated invoice carries no autopay stamp")
 }
 
 print(failures == 0 ? "PASS: native recurring invoice tests" : "FAILED: \(failures) native recurring invoice test(s)")

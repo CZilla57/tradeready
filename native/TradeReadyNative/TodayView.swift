@@ -32,6 +32,8 @@ struct TodayView: View {
     /// Task 10.12: the setup-checklist card's one-shot deep-link
     /// (`store.pendingSettingsDestination`) mirrored into local sheet state.
     @State private var settingsDestination: SettingsDestination?
+    /// Phase 33: the `maintenance_due:all` row opens the campaign builder.
+    @State private var campaignRequest: NativeCampaignPresetRequest?
 
     var body: some View {
         NavigationStack {
@@ -75,6 +77,15 @@ struct TodayView: View {
                         NativeTodayBookingAttentionRow(row: row) { bookingAlertRow = row }
                     }
 
+                    // Phase 26: online booking is request-only while calendar
+                    // checks are stale. Not mutable; opens Calendar sync.
+                    if let message = store.calendarChecksStaleMessage {
+                        NativeTodayCalendarChecksRow(message: message) {
+                            settingsDestination = .calendarSync
+                            showingSettings = true
+                        }
+                    }
+
                     overdueSection
                     awaitingEstimatesRow
                     followUpSection
@@ -113,6 +124,7 @@ struct TodayView: View {
                 CustomerEditor(customer: Customer(), mode: .create)
             }
             .sheet(item: $invoiceFromJobDraft) { NativeCreateInvoiceFromJobView(draft: $0) }
+            .sheet(item: $campaignRequest) { NativeCampaignListView(initialPreset: $0.preset) }
             .confirmationDialog(
                 bookingAlertRow.map { NativeTodayBriefing.bookingRowPresentation($0).title } ?? "",
                 isPresented: bookingAlertPresented,
@@ -308,6 +320,8 @@ struct TodayView: View {
             showingGlobalSearch = true
         case .presentSettings:
             showingSettings = true
+        case .presentNewCampaign(let preset):
+            campaignRequest = NativeCampaignSegments.Preset(rawValue: preset).map(NativeCampaignPresetRequest.init(preset:))
         }
     }
 

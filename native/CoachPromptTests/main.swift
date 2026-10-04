@@ -69,7 +69,8 @@ private func snapshot(
     totalCustomers: Int = 0,
     avgCompletedJobValue: Decimal = 0,
     tax: NativeTaxSnapshotBlock? = nil,
-    leadSources: NativeLeadSourceSnapshotBlock? = nil
+    leadSources: NativeLeadSourceSnapshotBlock? = nil,
+    referrals: NativeReferralSnapshotBlock? = nil
 ) -> NativeBusinessSnapshot {
     NativeBusinessSnapshot(
         asOf: asOf,
@@ -80,7 +81,8 @@ private func snapshot(
             topCustomers: topCustomers, avgCompletedJobValue: avgCompletedJobValue
         ),
         tax: tax,
-        leadSources: leadSources
+        leadSources: leadSources,
+        referrals: referrals
     )
 }
 
@@ -275,6 +277,40 @@ private func testLeadSourcesBlock() {
                 "lead sources with no rows: the prompt is unchanged")
 }
 
+// MARK: - Referrals block (Phase 34, spec 2026-10-03-referral-program-design.md §5.8)
+
+private let referralRows = NativeReferralSnapshotBlock(
+    newReferred: 3, collected: Decimal(string: "2400.4")!,
+    topReferrers: [NativeReferralSnapshotRow(name: "Sam Ortiz", referred: 2, collected: 1800),
+                   NativeReferralSnapshotRow(name: "Ana Lee", referred: 1, collected: Decimal(string: "599.5")!)],
+    rewardsRecorded: 1, rewardsAmount: 25
+)
+
+private let referralsText =
+    "REFERRALS (year to date): 3 new referred customers; $2400 collected from referred customers. " +
+    "Top referrers: Sam Ortiz (2 referred, $1800 collected); Ana Lee (1 referred, $600 collected). " +
+    "Rewards recorded: 1 ($25). These referral figures are computed from the owner's records. " +
+    "Cite them exactly; never estimate figures for a referrer who isn't listed. " +
+    "Rewards are recorded by the owner; never promise, calculate or send a reward on the owner's behalf."
+
+private func testReferralsBlock() {
+    var withBoth = fullSnapshot
+    withBoth.leadSources = leadSourceRows
+    withBoth.referrals = referralRows
+    let base = NativeCoachPrompt.buildSystemPrompt(settings: settings(), snapshot: fullSnapshot)
+    expectEqual(NativeCoachPrompt.buildSystemPrompt(settings: settings(), snapshot: withBoth),
+                base + "\n" + leadSourcesText + "\n" + referralsText,
+                "referrals: LEAD SOURCES, then REFERRALS, each on its own line, whole dollars")
+    var referralsOnly = fullSnapshot
+    referralsOnly.referrals = referralRows
+    expectEqual(NativeCoachPrompt.buildSystemPrompt(settings: settings(), snapshot: referralsOnly),
+                base + "\n" + referralsText, "referrals without lead sources: directly after the tax block")
+    var nilReferrals = withBoth
+    nilReferrals.referrals = nil
+    expectEqual(NativeCoachPrompt.buildSystemPrompt(settings: settings(), snapshot: nilReferrals),
+                base + "\n" + leadSourcesText, "referrals nil: the existing exact prompt is unchanged")
+}
+
 // MARK: - getQuickPrompts fixtures
 
 private func expectPromptIDs(_ prompts: [NativeCoachQuickPrompt], _ expected: [String], _ label: String) {
@@ -328,6 +364,7 @@ testSnapshotAllEmptyZero()
 testSnapshotSingleOverdueInvoiceSingular()
 testKeyNeverEntersPrompt()
 testLeadSourcesBlock()
+testReferralsBlock()
 testQuickPromptsNoSnapshot()
 testQuickPromptsOverdueAndAvgJob()
 testQuickPromptsSingleOverdueSingular()

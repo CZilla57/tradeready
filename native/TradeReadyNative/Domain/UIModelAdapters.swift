@@ -124,6 +124,10 @@ struct NativeEstimateReviewDraft: Identifiable {
     let businessAddress: String
     let businessLogoReference: String?
     let jobDescription: String
+    /// Phase 21 (spec §3): the job address when it differs from the
+    /// customer's, printed as "Service address" under the customer block;
+    /// empty otherwise (`NativePropertiesEquipment.serviceAddressLine`).
+    var serviceAddress: String = ""
 
     var id: String { jobID }
 }
@@ -154,6 +158,14 @@ struct NativeInvoiceFromJobDraft: Identifiable {
     /// The job's current billable total, shown in the "pre-filled from job
     /// estimate" banner (create/requestDeposit only; 0 hides the banner).
     let prefillReferenceAmount: Decimal
+    /// Phase 34 (spec §5.6): the referral credit owed to this job's customer
+    /// when the sheet opened (create/finalize only, and only when the job
+    /// produced a line); 0 hides the "Referral credit" section.
+    var referralCreditAvailable: Decimal = 0
+    /// The credit the owner turned on: 0 or exactly `referralCreditAvailable`
+    /// (partial application is not in v1). `amount` already has it
+    /// subtracted; commit adds the matching negative line.
+    var referralCreditToApply: Decimal = 0
 
     var id: String { jobID }
 }
@@ -170,6 +182,10 @@ enum CanonicalUIAdapters {
         ]
         if let archivedAt = value.archivedAt { fields["archivedAt"] = .string(archivedAt) }
         if let leadSource = value.leadSource { fields["leadSource"] = .string(leadSource) }
+        if let referrer = value.referredByCustomerId { fields["referredByCustomerId"] = .string(referrer) }
+        if let tags = value.tags { fields["tags"] = .array(tags.map { .string($0) }) }
+        if let optOut = value.marketingOptOutOn { fields["marketingOptOutOn"] = .string(optOut) }
+        if let via = value.marketingOptOutVia { fields["marketingOptOutVia"] = .string(via) }
         return try decode(fields)
     }
 
@@ -185,6 +201,7 @@ enum CanonicalUIAdapters {
         ]
         if let invoiceId = value.invoiceId { fields["invoiceId"] = .string(invoiceId) }
         if let archivedAt = value.archivedAt { fields["archivedAt"] = .string(archivedAt) }
+        if let propertyId = value.propertyId { fields["propertyId"] = .string(propertyId) }
         if let start = value.scheduledAt {
             fields["scheduledDate"] = .string(day(start, calendar: calendar))
             fields["scheduledStartTime"] = .string(time(start, calendar: calendar))
@@ -215,6 +232,8 @@ enum CanonicalUIAdapters {
             "isActive": .bool(true), "createdAt": .string(createdAt)
         ]
         if let costs = job.jobCosts { fields["jobCosts"] = try json(costs) }
+        // Phase 21: occurrences of the rule are at the source job's property.
+        if let propertyId = job.propertyId { fields["propertyId"] = .string(propertyId) }
         if let endCount { fields["endCount"] = .number(Decimal(endCount)) }
         if let endDate { fields["endDate"] = .string(endDate) }
         return try decode(fields)
@@ -228,13 +247,16 @@ enum CanonicalUIAdapters {
     /// (tiers and add-ons keep their nested metadata; the options container
     /// starts clean). The copy is unaccepted, so invariant M1 re-mirrors the
     /// recommended tier's full pricing into the duplicate's top level.
+    ///
+    /// Phase 21: `propertyId` is on the whitelist (the copy is at the same
+    /// property, beside the same `address`).
     static func duplicateJob(
         _ source: Canonical.Job,
         id: String,
         createdAt: Date,
         calendar: Calendar = .current
     ) throws -> NativeJobDuplicateDraft {
-        let fields: [String: Canonical.JSONValue] = [
+        var fields: [String: Canonical.JSONValue] = [
             "id": .string(id),
             "customerId": .string(source.customerId),
             "customerName": .string(source.customerName),
@@ -253,6 +275,7 @@ enum CanonicalUIAdapters {
             "invoiceId": .null,
             "createdAt": .string(timestamp(createdAt))
         ]
+        if let propertyId = source.propertyId { fields["propertyId"] = .string(propertyId) }
         var canonical: Canonical.Job = try decode(fields)
         if let sourceOptions = source.quoteOptions {
             let options = Canonical.QuoteOptions(
@@ -632,9 +655,19 @@ enum CanonicalUIAdapters {
     ) -> Bool {
         if !ignoringValidity {
             guard lhs.validUntil == rhs.validUntil,
-                  lhs.validUntilTimeZone == rhs.validUntilTimeZone
+                  lhs.validUntilTimeZone == rhs.validUntilTimeZone,
+                  lhs.esign?.timeZone == rhs.esign?.timeZone
             else { return false }
         }
+        // Phase 19 (spec §3.4): what is read and signed compares exactly; the
+        // certificate's zone (`esign.timeZone`) is a zone like
+        // `validUntilTimeZone`, so `ignoringValidity` ignores it too.
+        var lhsESign = lhs.esign, rhsESign = rhs.esign
+        lhsESign?.timeZone = nil; rhsESign?.timeZone = nil
+        guard lhs.scope == rhs.scope, lhs.terms == rhs.terms,
+              lhs.businessContact == rhs.businessContact,
+              lhs.signature == rhs.signature, lhsESign == rhsESign
+        else { return false }
         guard lhs.businessName == rhs.businessName,
               lhs.customerName == rhs.customerName,
               lhs.jobTitle == rhs.jobTitle,
@@ -670,6 +703,9 @@ enum CanonicalUIAdapters {
             && lhs.ip == rhs.ip
             && lhs.userAgent == rhs.userAgent
             && lhs.selection == rhs.selection
+            && lhs.signatureRecordId == rhs.signatureRecordId
+            && lhs.recordDigest == rhs.recordDigest
+            && lhs.signatureMethod == rhs.signatureMethod
             && lhs.preservation == rhs.preservation
     }
 
@@ -877,6 +913,8 @@ enum CanonicalUIAdapters {
             "googleReviewLink": .string(value.googleReviewLink),
             "reviewRequestDelayHours": .number(Decimal(value.reviewRequestDelayHours)),
             "estimateValidityDays": .number(Decimal(value.estimateValidityDays)),
+            // Phase 28: absent = off, so a new record writes the key only when on.
+            "tipsEnabled": value.tipsEnabled ? .bool(true) : .null,
             // Native-only preferences stay inside the canonical record's
             // preservation bag instead of a second persisted model.
             "appearance": .string(value.appearance.rawValue),
@@ -887,6 +925,9 @@ enum CanonicalUIAdapters {
         if let method = value.vehicleDeductionMethod, !method.isEmpty {
             complete["vehicleDeductionMethod"] = .string(method)
         }
+        // Phase 19: no terms stays absent; the pad is written only when off.
+        if !value.estimateTerms.isEmpty { complete["estimateTerms"] = .string(value.estimateTerms) }
+        if !value.signatureDrawPad { complete["signatureDrawPad"] = .bool(false) }
         return try decode(complete)
     }
 
@@ -926,6 +967,10 @@ enum CanonicalUIAdapters {
         if edit.value.createdAt != original.createdAt { fields["createdAt"] = .string(timestamp(edit.value.createdAt)) }
         updateOptional(&fields, "archivedAt", edit.value.archivedAt, original.archivedAt)
         updateOptional(&fields, "leadSource", edit.value.leadSource, original.leadSource)
+        updateOptional(&fields, "referredByCustomerId", edit.value.referredByCustomerId, original.referredByCustomerId)
+        updateOptionalStringArray(&fields, "tags", edit.value.tags, original.tags)
+        updateOptional(&fields, "marketingOptOutOn", edit.value.marketingOptOutOn, original.marketingOptOutOn)
+        updateOptional(&fields, "marketingOptOutVia", edit.value.marketingOptOutVia, original.marketingOptOutVia)
         return try decode(fields)
     }
 
@@ -953,6 +998,7 @@ enum CanonicalUIAdapters {
         update(&fields, "notes", edit.value.notes, original.notes)
         updateOptional(&fields, "invoiceId", edit.value.invoiceId, original.invoiceId)
         updateOptional(&fields, "archivedAt", edit.value.archivedAt, original.archivedAt)
+        updateOptional(&fields, "propertyId", edit.value.propertyId, original.propertyId)
         if edit.value.createdAt != original.createdAt { fields["createdAt"] = .string(timestamp(edit.value.createdAt)) }
         if edit.value.scheduledAt != original.scheduledAt || edit.value.scheduledEnd != original.scheduledEnd {
             if let start = edit.value.scheduledAt {
@@ -1066,6 +1112,11 @@ enum CanonicalUIAdapters {
         if edit.value.reviewRequestDelayHours != original.reviewRequestDelayHours { fields["reviewRequestDelayHours"] = .number(Decimal(edit.value.reviewRequestDelayHours)) }
         // Phase 32: absent reads as 30, so an untouched default never writes the key.
         if edit.value.estimateValidityDays != original.estimateValidityDays { fields["estimateValidityDays"] = .number(Decimal(edit.value.estimateValidityDays)) }
+        // Phase 28: absent reads as off, so an untouched default never writes the key.
+        updateBool(&fields, "tipsEnabled", edit.value.tipsEnabled, original.tipsEnabled)
+        // Phase 19: cleared terms remove the key; the pad (absent = on) writes once changed.
+        updateOptional(&fields, "estimateTerms", optional(edit.value.estimateTerms), optional(original.estimateTerms))
+        updateBool(&fields, "signatureDrawPad", edit.value.signatureDrawPad, original.signatureDrawPad)
         if edit.value.appearance != original.appearance { fields["appearance"] = .string(edit.value.appearance.rawValue) }
         if edit.value.bookingEnabled != original.bookingEnabled { fields["bookingEnabled"] = .bool(edit.value.bookingEnabled) }
 
@@ -1089,7 +1140,9 @@ enum CanonicalUIAdapters {
         Customer(id: value.id, name: value.name, email: value.email, phone: value.phone,
                  address: value.address, notes: value.notes,
                  createdAt: try parsed(value.createdAt ?? "1970-01-01", field: "customer.createdAt", calendar: calendar),
-                 archivedAt: value.archivedAt, leadSource: value.leadSource)
+                 archivedAt: value.archivedAt, leadSource: value.leadSource,
+                 referredByCustomerId: value.referredByCustomerId, tags: value.tags,
+                 marketingOptOutOn: value.marketingOptOutOn, marketingOptOutVia: value.marketingOptOutVia)
     }
 
     static func job(from value: Canonical.Job, calendar: Calendar = .current) throws -> Job {
@@ -1102,7 +1155,7 @@ enum CanonicalUIAdapters {
                    estimateTotal: double(value.estimateTotal), laborHours: double(value.laborHours),
                    laborRate: double(value.laborRate), notes: value.notes, invoiceId: value.invoiceId,
                    createdAt: try parsed(value.createdAt, field: "job.createdAt", calendar: calendar),
-                   archivedAt: value.archivedAt)
+                   archivedAt: value.archivedAt, propertyId: value.propertyId)
     }
 
     static func payment(from value: Canonical.Payment, calendar: Calendar = .current) throws -> Payment {
@@ -1113,7 +1166,7 @@ enum CanonicalUIAdapters {
         return Payment(id: value.id, amount: double(value.amount), date: try parsed(value.date, field: "payment.date", calendar: calendar),
                 method: displayPaymentMethod(value.method), note: value.note ?? "",
                 voidedAt: try value.voidedAt.map { try parsed($0, field: "payment.voidedAt", calendar: calendar) },
-                channel: channel)
+                channel: channel, tip: value.tipAmount.map(double))
     }
 
     static func invoice(from value: Canonical.Invoice, calendar: Calendar = .current) throws -> Invoice {
@@ -1174,6 +1227,8 @@ enum CanonicalUIAdapters {
         result.reviewRequestDelayHours = value.reviewRequestDelayHours; result.reviewRequestTemplate = value.reviewRequestTemplate
         // Phase 32: absent = 30; a malformed stored value is clamped into 0…365.
         result.estimateValidityDays = min(max(value.estimateValidityDays ?? 30, 0), 365)
+        result.tipsEnabled = value.tipsEnabled ?? false
+        result.estimateTerms = value.estimateTerms ?? ""; result.signatureDrawPad = value.signatureDrawPad ?? true
         if case let .string(raw)? = value.preservation.unknownFields["appearance"] {
             result.appearance = Appearance(rawValue: raw) ?? .system
         }
@@ -1219,6 +1274,12 @@ private extension CanonicalUIAdapters {
     }
     static func updateOptional(_ fields: inout [String: Canonical.JSONValue], _ key: String, _ value: String?, _ old: String?) {
         guard value != old else { return }; if let value { fields[key] = .string(value) } else { fields.removeValue(forKey: key) }
+    }
+    /// Phase 33 (tags): like `updateOptional`, for a string array. An
+    /// unchanged value keeps the baseline bytes; `nil` removes the key.
+    static func updateOptionalStringArray(_ fields: inout [String: Canonical.JSONValue], _ key: String, _ value: [String]?, _ old: [String]?) {
+        guard value != old else { return }
+        if let value { fields[key] = .array(value.map { .string($0) }) } else { fields.removeValue(forKey: key) }
     }
     static func updateNumber(_ fields: inout [String: Canonical.JSONValue], _ key: String, _ value: Double, _ old: Double) {
         if value != old { fields[key] = .number(Decimal(string: String(value)) ?? 0) }
@@ -1295,6 +1356,10 @@ private extension CanonicalUIAdapters {
         }
         return result
     }
+    /// Phase 24: `stripe` (pay-link, pay-page and autopay payments booked by
+    /// the Worker) shows as "Stripe", matching RN `PaymentHistoryList`'s
+    /// METHOD_LABELS; it read "Other" before. The two maps round-trip it, so
+    /// a re-canonicalized Stripe payment never becomes `other`.
     static func displayPaymentMethod(_ value: String) -> String {
         switch value.lowercased() {
         case "cash": return "Cash"; case "check", "cheque": return "Check"; case "card": return "Card"
@@ -1322,12 +1387,15 @@ private extension CanonicalUIAdapters {
         return try decode(fields)
     }
     static func newCanonicalPayment(_ value: Payment, calendar: Calendar) throws -> Canonical.Payment {
-        let fields: [String: Canonical.JSONValue] = [
+        var fields: [String: Canonical.JSONValue] = [
             "id": .string(value.id), "amount": .number(Decimal(string: String(value.amount)) ?? 0),
             "date": .string(day(value.date, calendar: calendar)), "method": .string(canonicalPaymentMethod(value.method)),
             "note": value.note.isEmpty ? .null : .string(value.note),
             "voidedAt": value.voidedAt.map { .string(timestamp($0)) } ?? .null
         ]
+        // Phase 28: the UI never creates a tip, but a projected payment that
+        // carries one keeps it on the no-baseline path.
+        if let tip = value.tip { fields["tipAmount"] = number(tip) }
         return try decode(fields)
     }
     static func scheduleFieldsChanged(_ value: BusinessSettings, _ old: BusinessSettings) -> Bool {

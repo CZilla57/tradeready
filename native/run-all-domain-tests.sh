@@ -52,11 +52,30 @@ sh "$ROOT_DIR/native/run-estimate-approval-link-tests.sh"
 # Phase 25: good/better/best quote options (shared selection vectors with the Worker).
 sh "$ROOT_DIR/native/run-quote-options-tests.sh"
 sh "$ROOT_DIR/native/run-quote-options-store-tests.sh"
+# Phase 20: custom job / inspection forms (pure domain; store wiring is in store-integration).
+sh "$ROOT_DIR/native/run-job-forms-tests.sh"
+# Phase 33: customer tags + opt-out, and past-customer campaigns (pure domain;
+# store wiring is in store-integration).
+sh "$ROOT_DIR/native/run-customer-tags-tests.sh"
+sh "$ROOT_DIR/native/run-campaign-tests.sh"
 # Phase 27: lead source tracking (normalizer, capture rules, report, coach block).
 sh "$ROOT_DIR/native/run-lead-source-tests.sh"
+# Phase 23: Settings > API access (key-management transport, view model, source guards).
+sh "$ROOT_DIR/native/run-api-access-tests.sh"
 # Phase 32: quote expiration dates (pure policy + shared expiry vectors with the Worker).
 sh "$ROOT_DIR/native/run-quote-expiry-tests.sh"
 sh "$ROOT_DIR/native/run-quote-expiry-store-tests.sh"
+# Phase 21: multi-property and equipment history (properties, merge, warranty insight).
+sh "$ROOT_DIR/native/run-properties-equipment-tests.sh"
+# Phase 34: referral program (codes with the Worker's shared vectors, intake
+# decision, credits, report control total, coach block, Today insight).
+sh "$ROOT_DIR/native/run-referral-tests.sh"
+# Phase 24: card on file + autopay (pure status policy + owner-route transport).
+sh "$ROOT_DIR/native/run-autopay-tests.sh"
+# Phase 28: tips on online payments (ledger, cash basis, Money card, CSV/package rows, Settings toggle).
+sh "$ROOT_DIR/native/run-tips-tests.sh"
+# Phase 19: e-signatures with audit trail (snapshot additions, signed record, settings).
+sh "$ROOT_DIR/native/run-esign-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-pdf-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-delivery-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-message-draft-tests.sh"
@@ -142,6 +161,8 @@ sh "$ROOT_DIR/native/run-booking-attention-tests.sh"
 sh "$ROOT_DIR/native/run-booking-intake-tests.sh"
 sh "$ROOT_DIR/native/run-booking-response-tests.sh"
 sh "$ROOT_DIR/native/run-calendar-tests.sh"
+# Phase 26 (calendar sync): busy rules, the wire snapshot and the mirror planner.
+sh "$ROOT_DIR/native/run-calendar-sync-tests.sh"
 sh "$ROOT_DIR/native/run-csv-export-tests.sh"
 sh "$ROOT_DIR/native/run-csv-import-tests.sh"
 sh "$ROOT_DIR/native/run-import-engine-tests.sh"

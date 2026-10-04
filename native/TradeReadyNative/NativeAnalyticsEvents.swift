@@ -262,6 +262,17 @@ extension NativeAnalyticsEvent {
         .init("ai_chat_sent", ["source": .string(source.rawValue), "provider": .string(provider)])
     }
 
+    // MARK: API access (Roadmap Phase 23, open-API spec §9; native-only)
+
+    /// Scope count only: never the key, its name, prefix or id.
+    static func apiKeyCreated(scopeCount: Int) -> Self {
+        .init("api_key_created", ["scopeCount": .number(Double(scopeCount))])
+    }
+
+    static func apiKeyRevoked(scopeCount: Int) -> Self {
+        .init("api_key_revoked", ["scopeCount": .number(Double(scopeCount))])
+    }
+
     // MARK: Notification and deep-link opens (App.tsx)
 
     static let bookingRequestOpened = Self("booking_request_opened")

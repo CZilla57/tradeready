@@ -532,6 +532,86 @@ struct MutationPushTests {
         expect(notesGuard.requests.isEmpty && notesGuardOutcome.discarded.count == 2,
                "P12-017: a guard outside the collection tables, or on a blob whose id disagrees, is never sent")
 
+        // Phase 20: `forms` is a blob collection like `jobPhotos`: an upsert
+        // POSTs the id/data/deleted row with merge-duplicates and a delete is
+        // the owner-scoped soft delete. A table outside the set is discarded
+        // unsent, so this proves the classification, not just the transport.
+        let formBlob: Canonical.JSONValue = .object([
+            "id": .string("fm1759420800000_k3x9"), "kind": .string("instance"), "jobId": .string("j1"),
+            "title": .string("Electrical safety inspection"), "createdAt": .string("2026-10-02T16:00:00.000Z"),
+            "items": .array([.object(["id": .string("fi_1"), "kind": .string("check"), "label": .string("Panel photo"),
+                                      "checked": .bool(true), "__nativeDraft": .bool(true)])]),
+        ])
+        let formsLoader = PushLoader { _ in 201 }
+        let formsOutcome = try await NativeSupabaseMutationPushService(
+            supabaseURL: url, publishableKey: "publishable-key", allowsWrites: true, loader: formsLoader
+        ).push(sessionBytes: session, expectedUserSubject: subject, items: [
+            item("forms", .upsert, "fm1759420800000_k3x9", formBlob),
+            item("forms", .delete, "fm1_gone", nil),
+            item("formsV2", .upsert, "fm2_x", .object(["id": .string("fm2_x")])),
+        ])
+        expect(formsLoader.requests.count == 2 && formsOutcome.pushedCount == 2,
+               "Phase 20: a forms upsert and delete are sent")
+        expect(formsOutcome.discarded.map(\.table) == ["formsV2"], "Phase 20: a table outside the collections is never sent")
+        let formUpsert = formsLoader.requests[0]
+        let formFields = fields(body(formUpsert))
+        expect(formUpsert.httpMethod == "POST" && table(formUpsert) == "forms"
+               && formUpsert.value(forHTTPHeaderField: "Prefer") == "resolution=merge-duplicates,return=minimal",
+               "Phase 20: a forms upsert is an idempotent merge-duplicates POST to forms")
+        expect(formFields?["id"] == .string("fm1759420800000_k3x9") && formFields?["user_id"] == .string(subject)
+               && formFields?["deleted"] == .bool(false) && formFields?["updated_at"] == nil,
+               "Phase 20: the forms row wraps the blob with its owner")
+        guard case let .array(sentItems)? = fields(formFields?["data"])?["items"],
+              case let .object(sentItem)? = sentItems.first
+        else { expect(false, "Phase 20: the form blob is sent under data"); return }
+        expect(sentItem["checked"] == .bool(true) && sentItem["__nativeDraft"] == nil,
+               "Phase 20: the form blob is sent without native-private keys")
+        let formDelete = formsLoader.requests[1]
+        expect(formDelete.httpMethod == "PATCH" && table(formDelete) == "forms"
+               && queryValue(formDelete, "id") == "eq.fm1_gone" && queryValue(formDelete, "user_id") == "eq.\(subject)"
+               && fields(body(formDelete)) == ["deleted": .bool(true)],
+               "Phase 20: a forms delete is the owner-scoped soft delete")
+        let formGuard = BodyLoader { _ in (200, #"[{"id":"fm1759420800000_k3x9"}]"#) }
+        let formGuardOutcome = try await NativeSupabaseMutationPushService(
+            supabaseURL: url, publishableKey: "publishable-key", allowsWrites: true, loader: formGuard
+        ).push(sessionBytes: session, expectedUserSubject: subject,
+               items: [guarded("forms", "fm1759420800000_k3x9", formBlob)])
+        expect(formGuard.requests.first?.httpMethod == "PATCH" && formGuardOutcome.pushedCount == 1,
+               "Phase 20: forms accepts a guarded upsert like every collection")
+
+        // Phase 33: `campaigns` is a blob collection too.
+        let campaignBlob: Canonical.JSONValue = .object([
+            "id": .string("cmp_1"), "name": .string("Fall tune-up"), "code": .string("04hmasw9nf6yy41j"),
+            "createdAt": .string("2026-10-03T15:00:00.000Z"), "status": .string("sending"),
+            "recipients": .array([.object(["customerId": .string("c1"), "name": .string("Dana"), "channel": .string("text"),
+                                           "status": .string("sent"), "__nativeDraft": .bool(true)])]),
+        ])
+        let campaignsLoader = PushLoader { _ in 201 }
+        let campaignsOutcome = try await NativeSupabaseMutationPushService(
+            supabaseURL: url, publishableKey: "publishable-key", allowsWrites: true, loader: campaignsLoader
+        ).push(sessionBytes: session, expectedUserSubject: subject, items: [
+            item("campaigns", .upsert, "cmp_1", campaignBlob),
+            item("campaigns", .delete, "cmp_gone", nil),
+            item("campaignsV2", .upsert, "cmp_x", .object(["id": .string("cmp_x")])),
+        ])
+        expect(campaignsLoader.requests.count == 2 && campaignsOutcome.pushedCount == 2,
+               "Phase 33: a campaigns upsert and delete are sent")
+        expect(campaignsOutcome.discarded.map(\.table) == ["campaignsV2"], "Phase 33: a table outside the collections is never sent")
+        let campaignUpsert = campaignsLoader.requests[0]
+        let campaignFields = fields(body(campaignUpsert))
+        expect(campaignUpsert.httpMethod == "POST" && table(campaignUpsert) == "campaigns"
+               && campaignFields?["id"] == .string("cmp_1") && campaignFields?["user_id"] == .string(subject),
+               "Phase 33: a campaigns upsert POSTs the owner's row")
+        guard case let .array(sentRecipients)? = fields(campaignFields?["data"])?["recipients"],
+              case let .object(sentRecipient)? = sentRecipients.first
+        else { expect(false, "Phase 33: the campaign blob is sent under data"); return }
+        expect(sentRecipient["status"] == .string("sent") && sentRecipient["__nativeDraft"] == nil,
+               "Phase 33: the campaign blob is sent without native-private keys")
+        let campaignDelete = campaignsLoader.requests[1]
+        expect(campaignDelete.httpMethod == "PATCH" && table(campaignDelete) == "campaigns"
+               && queryValue(campaignDelete, "id") == "eq.cmp_gone" && fields(body(campaignDelete)) == ["deleted": .bool(true)],
+               "Phase 33: a campaigns delete is the owner-scoped soft delete")
+
         if failures == 0 { print("PASS: native mutation push tests") }
         else { exit(1) }
     }

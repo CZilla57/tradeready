@@ -82,7 +82,8 @@
    "calendar",
    "calendar-editor",
    "availability",
-   "schedule"
+   "schedule",
+   "calendar-sync"
   ],
   "oracles": [
    "calendar",
@@ -90,7 +91,10 @@
    "availability",
    "availabilityParity",
    "scheduleConfig",
-   "scheduleSmarts"
+   "scheduleSmarts",
+   "calendarBusyParity",
+   "calendarBusyWorkers",
+   "bookingCalendarBusyWorkers"
   ]
  },
  "Route": {

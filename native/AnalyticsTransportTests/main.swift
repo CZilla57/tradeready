@@ -173,17 +173,19 @@ struct AnalyticsTransportTests {
             return
         }
         expectEqual(catalog.catalogVersion, 1, "catalog: version 1")
-        expectEqual(catalog.events.count, 52, "catalog: 52 events")
+        // 54: Phase 23 adds api_key_created and api_key_revoked.
+        expectEqual(catalog.events.count, 54, "catalog: 54 events")
         expectEqual(catalog.events["invoice_created"]?.count, 3, "catalog: invoice_created has three variants")
         expectEqual(catalog.events["job_created"]?.first?["duplicated"],
                     .init(type: .trueLiteral, isOptional: true), "catalog: `duplicated?: true` is an optional literal")
         expectEqual(catalog.events["insight_shown"]?.first?["ids"], .init(type: .strings, isOptional: false),
                     "catalog: ids is string[]")
         // Phase 32: the catalog's InsightKind enum is exactly the native kinds
-        // (quote_expiring and quote_expired added; catalogVersion stays 1).
+        // (quote_expiring and quote_expired added; catalogVersion stays 1),
+        // less Phase 34's `referral_thanks`, which stays out of the catalog.
         expectEqual(catalog.events["insight_tapped"]?.first?["kind"],
-                    .init(type: .oneOf(Set(NativeInsightKind.allCases.map(\.rawValue))), isOptional: false),
-                    "catalog: InsightKind lists every native insight kind, including quote_expiring and quote_expired")
+                    .init(type: .oneOf(Set(NativeInsightKind.allCases.filter(\.isInAnalyticsCatalog).map(\.rawValue))), isOptional: false),
+                    "catalog: InsightKind lists every cataloged native insight kind, including quote_expiring and quote_expired")
         expectEqual(catalog.events["change_order_decided"]?.first?["channel"],
                     .init(type: .oneOf(["manual"]), isOptional: false), "catalog: a single token is a fixed literal")
         expect((try? NativeAnalyticsEventCatalog(json: Data(#"{"catalogVersion":1,"enums":{},"events":{"x":[{"k":"enum:Nope"}]}}"#.utf8))) == nil,

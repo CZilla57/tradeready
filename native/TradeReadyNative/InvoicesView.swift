@@ -373,6 +373,21 @@ struct InvoiceDetailView: View {
                             ContactButtons(phone: invoice.phone, email: invoice.email)
                         }.padding(.vertical, 5)
                     }
+                    // Phase 24 §6.3: a plan invoice's autopay outlook, one line.
+                    if let banner = store.autopayInvoiceBanner(invoiceID: invoice.id) {
+                        Section {
+                            Label {
+                                Text(banner.text)
+                            } icon: {
+                                Image(systemName: banner.isProblem ? "exclamationmark.triangle" : "creditcard")
+                                    .accessibilityHidden(true)
+                            }
+                            .font(.subheadline)
+                            .foregroundStyle(banner.isProblem ? Color.tradeWarningText : Color.primary)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(banner.accessibilityText)
+                        }
+                    }
                     Section("Invoice") { LabeledContent("Number", value: invoice.number); LabeledContent("Customer", value: invoice.customer); if !invoice.description.isEmpty { Text(invoice.description) } }
                     Section("Document") {
                         Button { sharePDF() } label: { Label("Save or share PDF", systemImage: "doc.richtext") }
@@ -407,6 +422,13 @@ struct InvoiceDetailView: View {
                                     Spacer()
                                     Text("\(payment.date.shortDate) · \(payment.displayMethod)")
                                         .font(.caption).foregroundStyle(.secondary)
+                                }
+                                // Phase 28 (tips spec §6.3): the tip rides beside the
+                                // payment; it is never part of the amount above.
+                                if let tip = payment.tip, tip > 0 {
+                                    Text("+ \(tip.currency) tip")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .accessibilityLabel("plus \(tip.currency) tip")
                                 }
                                 if payment.id.hasPrefix("legacy_") {
                                     Text("Recorded before itemized history").font(.caption).italic().foregroundStyle(.secondary)

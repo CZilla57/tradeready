@@ -373,3 +373,180 @@ describe('pay checkout — mutual exclusion with the autopay sweep', () => {
     assert.equal(res.status, 200);
   });
 });
+
+// Phase 28 (tips spec §4.2, §8): the tip is a second server-priced "Tip" line,
+// offered only on a full-balance payment, re-checked against the owner's
+// setting, capped at the amount being paid, and part of the idempotency key.
+describe('pay checkout — tips (Phase 28)', () => {
+  const TIPS_ON = () => ({ settings: [W.settingsRow({ tipsEnabled: true })] });
+  const createArgs = (stripe) => stripe.callsTo('checkout.sessions.create')[0].args;
+  const TIP_LINE = (cents) => ({ price_data: { currency: 'usd', unit_amount: cents, product_data: { name: 'Tip' } }, quantity: 1 });
+
+  test('a tip adds exactly one "Tip" line, the metadata and the key; the invoice line is unchanged', async () => {
+    w = W.world(TIPS_ON());
+    const { status, body, stripe } = await call({ t: pTok(), tipCents: 1800 });
+    assert.deepEqual([status, body], [200, { url: 'https://checkout.stripe.com/c/pay/cs_test_1#fidabc' }]);
+    const [params, opts] = createArgs(stripe);
+    const idem = `tr-co:inv1:12000:t1800:n:${BUCKET}`;
+    assert.deepEqual(opts, { stripeAccount: ACCOUNT, idempotencyKey: idem });
+    assert.deepEqual(params.line_items, [
+      { price_data: { currency: 'usd', unit_amount: 12000, product_data: { name: 'Invoice INV-0042' } }, quantity: 1 },
+      TIP_LINE(1800),
+    ]);
+    assert.deepEqual(params.metadata, { invoiceId: 'inv1', tr_kind: 'invoice', tr_invoice_cents: '12000', tr_tip_cents: '1800', tr_idem: idem });
+    assert.deepEqual(params.payment_method_types, ['card']);
+    assert.equal(params.mode, 'payment');
+  });
+
+  test('no tip line, no tr_tip_cents and the old key unless tipCents > 0 (absent, null, 0)', async () => {
+    for (const body of [{}, { tipCents: null }, { tipCents: 0 }]) {
+      w = W.world(TIPS_ON());
+      const { status, stripe } = await call({ t: pTok(), ...body });
+      assert.equal(status, 200, JSON.stringify(body));
+      const [params, opts] = createArgs(stripe);
+      const idem = `tr-co:inv1:12000:n:${BUCKET}`;
+      assert.equal(params.line_items.length, 1);
+      assert.equal('tr_tip_cents' in params.metadata, false);
+      assert.equal(params.metadata.tr_idem, idem);
+      assert.equal(opts.idempotencyKey, idem);
+      w.restore();
+      w = null;
+    }
+  });
+
+  test('a tipCents of 0 or null still goes through when tips are off', async () => {
+    w = W.world();
+    assert.equal((await call({ t: pTok(), tipCents: 0 })).status, 200);
+    assert.equal((await call({ t: pTok(), tipCents: null })).status, 200);
+  });
+
+  test('tips turned off since the page loaded → 409 tips_off before any Stripe call', async () => {
+    for (const tipsEnabled of [undefined, false, null, 'true', 1]) {
+      w = W.world({ settings: [W.settingsRow(tipsEnabled === undefined ? {} : { tipsEnabled })] });
+      const res = await call({ t: pTok(), tipCents: 1800 });
+      assert.deepEqual([res.status, res.body.code, res.body.error], [409, 'tips_off', 'Tips are no longer offered. Please reload.'], String(tipsEnabled));
+      assert.equal(res.body.businessName, 'Rector HVAC');
+      assert.equal(res.stripe.calls.length, 0);
+      w.restore();
+      w = null;
+    }
+  });
+
+  test('a tip on a deposit link is refused, including a stale one after the deposit was paid', async () => {
+    w = W.world(TIPS_ON());
+    const deposit = await call({ t: pTok({ cents: 5000, balanceCents: 12000 }), tipCents: 500 });
+    assert.deepEqual([deposit.status, deposit.body.code], [409, 'tips_off']);
+    assert.equal(deposit.stripe.calls.length, 0);
+    const noB = await call({ t: pTok({ cents: 5000 }), tipCents: 500 });
+    assert.deepEqual([noB.status, noB.body.code], [409, 'tips_off']);
+    assert.equal(noB.stripe.calls.length, 0);
+    w.restore();
+    // The deposit landed; the link now asks for the live balance, but it was minted as a deposit.
+    w = W.world({ ...TIPS_ON(), invoices: [W.invoiceRow({ amount: 300, payments: [{ id: 'p1', amount: 100, date: '2026-10-02', method: 'stripe' }] })] });
+    const afterDeposit = await call({ t: pTok({ cents: 10000, balanceCents: 30000 }), tipCents: 500 });
+    assert.deepEqual([afterDeposit.status, afterDeposit.body.code], [409, 'tips_off']);
+    assert.equal(afterDeposit.stripe.calls.length, 0);
+    // The same link without a tip still pays the live balance.
+    const plain = await call({ t: pTok({ cents: 10000, balanceCents: 30000 }) });
+    assert.equal(plain.status, 200);
+    assert.equal(createArgs(plain.stripe)[0].line_items[0].price_data.unit_amount, 20000);
+  });
+
+  test('the tip is capped at the invoice amount being paid: 100% is fine, one cent over is refused', async () => {
+    w = W.world(TIPS_ON());
+    const over = await call({ t: pTok(), tipCents: 12001 });
+    assert.deepEqual([over.status, over.body.code], [400, 'tip_invalid']);
+    assert.equal(over.stripe.calls.length, 0);
+    const exact = await call({ t: pTok(), tipCents: 12000 });
+    assert.equal(exact.status, 200);
+    assert.deepEqual(createArgs(exact.stripe)[0].line_items[1], TIP_LINE(12000));
+  });
+
+  test('the cap follows the live balance, not the invoice total', async () => {
+    w = W.world({ ...TIPS_ON(), invoices: [W.invoiceRow({ payments: [{ id: 'p1', amount: 20, date: '2026-10-02', method: 'cash' }] })] });
+    const over = await call({ t: pTok(), tipCents: 10001 });
+    assert.deepEqual([over.status, over.body.code], [400, 'tip_invalid']);
+    const ok = await call({ t: pTok(), tipCents: 10000 });
+    assert.equal(ok.status, 200);
+    assert.equal(createArgs(ok.stripe)[0].line_items[0].price_data.unit_amount, 10000);
+  });
+
+  test('malformed tipCents (negative, fractional, string, huge, boolean) → 400 tip_invalid, nothing created', async () => {
+    w = W.world(TIPS_ON());
+    for (const tipCents of [-1, 1.5, '1800', 1e15, true, {}, [], NaN]) {
+      const res = await call({ t: pTok(), tipCents });
+      assert.deepEqual([res.status, res.body.code], [400, 'tip_invalid'], String(tipCents));
+      assert.equal(res.stripe.calls.length, 0);
+    }
+  });
+
+  test('a page whose amount is stale (baseCents differs from what is charged now) → 409 changed', async () => {
+    w = W.world({ ...TIPS_ON(), invoices: [W.invoiceRow({ payments: [{ id: 'p1', amount: 20, date: '2026-10-02', method: 'cash' }] })] });
+    const stale = await call({ t: pTok(), tipCents: 1800, baseCents: 12000 });
+    assert.deepEqual([stale.status, stale.body.code], [409, 'changed']);
+    assert.equal(stale.stripe.calls.length, 0);
+    const fresh = await call({ t: pTok(), tipCents: 1800, baseCents: 10000 });
+    assert.equal(fresh.status, 200);
+  });
+
+  test('the tip rides the idempotency key: a double-click replays, a changed tip mints a new session and expires the old one', async () => {
+    w = W.world(TIPS_ON());
+    const keyFor = (tip) => `tr-co:inv1:12000:t${tip}:n:${BUCKET}`;
+    const a = await call({ t: pTok(), tipCents: 1800 });
+    const b = await call({ t: pTok(), tipCents: 1800 });
+    assert.equal(createArgs(a.stripe)[1].idempotencyKey, createArgs(b.stripe)[1].idempotencyKey);
+    assert.notEqual(keyFor(1800), keyFor(2400));
+    const stripe = stripeWith({
+      'checkout.sessions.list': async () => ({
+        data: [
+          { id: 'cs_tip_1800', metadata: { invoiceId: 'inv1', tr_idem: keyFor(1800) } },
+          { id: 'cs_no_tip', metadata: { invoiceId: 'inv1', tr_idem: `tr-co:inv1:12000:n:${BUCKET}` } },
+        ],
+        has_more: false,
+      }),
+    });
+    const changed = await call({ t: pTok(), tipCents: 2400 }, { stripe });
+    assert.equal(changed.status, 200);
+    assert.equal(createArgs(stripe)[1].idempotencyKey, keyFor(2400));
+    assert.equal(createArgs(stripe)[0].metadata.tr_idem, keyFor(2400));
+    assert.deepEqual(stripe.callsTo('checkout.sessions.expire').map((c) => c.args[0]), ['cs_tip_1800', 'cs_no_tip']);
+  });
+
+  test('the re-minted replay keeps the tip line and metadata', async () => {
+    w = W.world(TIPS_ON());
+    let n = 0;
+    const stripe = stripeWith({
+      'checkout.sessions.create': async () => {
+        n += 1;
+        return n === 1 ? { id: 'cs_old', status: 'expired', url: 'x' } : { id: 'cs_new', status: 'open', url: 'https://checkout.stripe.com/c/pay/cs_new' };
+      },
+    });
+    const res = await call({ t: pTok(), tipCents: 1800 }, { stripe });
+    assert.equal(res.body.url, 'https://checkout.stripe.com/c/pay/cs_new');
+    const [, second] = stripe.callsTo('checkout.sessions.create');
+    assert.equal(second.args[1].idempotencyKey, `tr-co:inv1:12000:t1800:n:${BUCKET}:r`);
+    assert.equal(second.args[0].line_items[1].price_data.unit_amount, 1800);
+    assert.equal(second.args[0].metadata.tr_tip_cents, '1800');
+  });
+
+  test('a client-supplied tip price or label is ignored; only tipCents counts', async () => {
+    w = W.world(TIPS_ON());
+    const { stripe } = await call({ t: pTok(), tipCents: 500, tip: 99999, tipName: 'x', line_items: [{ price: 'price_x' }], tr_tip_cents: '9' });
+    const [params] = createArgs(stripe);
+    assert.deepEqual(params.line_items[1], TIP_LINE(500));
+    assert.equal(params.metadata.tr_tip_cents, '500');
+  });
+
+  test('with the autopay box ticked the tip rides this payment only; the authorization stays the plan amount', async () => {
+    w = W.world(TIPS_ON());
+    const { status, stripe } = await call({ t: pTok(), tipCents: 1800, autopay: optIn() });
+    assert.equal(status, 200);
+    const [params] = createArgs(stripe);
+    assert.equal(params.line_items.length, 2);
+    assert.equal(params.metadata.tr_tip_cents, '1800');
+    assert.equal(params.payment_intent_data.setup_future_usage, 'off_session');
+    const [e] = w.db.rows('autopay_enrollments');
+    assert.equal(e.max_amount_cents, 12000);
+    assert.equal(e.consent_text.includes('18.00'), false);
+  });
+});

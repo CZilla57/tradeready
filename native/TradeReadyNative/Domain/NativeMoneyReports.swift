@@ -341,7 +341,8 @@ enum NativeMoneyReports {
             ))
         }
 
-        let totals = NativeCashBasis.collectedByPeriod(invoices: invoices, ranges: windows)
+        // Phase 28 (tips spec §6.3): the income trend counts tips.
+        let totals = NativeCashBasis.receivedByPeriod(invoices: invoices, ranges: windows)
         var months: [NativeMonthlyTrend] = []
         var thisYearTotal = Decimal.zero
         var lastYearTotal = Decimal.zero

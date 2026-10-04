@@ -338,6 +338,40 @@ enum JobInvoiceDomain {
         }
     }
 
+    // MARK: Referral credit (Phase 34, spec 2026-10-03-referral-program-design.md §5.6)
+
+    /// Must equal `NativeReferrals.creditLineCategory`/`creditLineDescription`
+    /// (pinned by the referral suite); duplicated so this file keeps its
+    /// standalone compile.
+    static let referralCreditCategory = "referral_credit"
+    static let referralCreditDescription = "Referral credit \u{2014} thank you!"
+
+    /// The invoice-from-job lines with referral credits kept and added: the
+    /// job's recomputed lines, then (finalize) every `referral_credit` line
+    /// the existing invoice already carries, so a recompute never drops an
+    /// applied credit, then one new `-credit` line when `credit > 0`.
+    static func appendingReferralCredit(
+        _ jobLines: [JobInvoiceLineDraft],
+        existingInvoiceLines: [JobInvoiceLineDraft],
+        credit: Decimal
+    ) -> [JobInvoiceLineDraft] {
+        var lines = jobLines.filter { $0.category != referralCreditCategory }
+        lines.append(contentsOf: existingInvoiceLines.filter { $0.category == referralCreditCategory })
+        if credit > 0 {
+            lines.append(JobInvoiceLineDraft(
+                description: referralCreditDescription,
+                amount: -FinancialDecimal.javascriptCents(credit),
+                category: referralCreditCategory
+            ))
+        }
+        return lines
+    }
+
+    /// Σ of the (negative) `referral_credit` line amounts.
+    static func referralCreditTotal(_ lines: [JobInvoiceLineDraft]) -> Decimal {
+        lines.reduce(Decimal.zero) { $0 + ($1.category == referralCreditCategory ? $1.amount : 0) }
+    }
+
     /// Default payment terms: 30 days from today.
     static func defaultDueDate(from now: Date = .now, calendar: Calendar = .current) -> Date {
         calendar.date(byAdding: .day, value: 30, to: now) ?? now

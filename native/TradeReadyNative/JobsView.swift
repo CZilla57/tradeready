@@ -384,7 +384,7 @@ struct JobDetailView: View {
             } else {
                 Text("Needs scheduling").foregroundStyle(.secondary)
             }
-            if !job.address.isEmpty { Label(job.address, systemImage: "mappin.and.ellipse") }
+            NativeJobAddressRow(job: job) // Phase 21: property label + the job's own address
             if job.scheduledAt != nil && [.approved, .scheduled, .inProgress].contains(job.status) {
                 Button { store.requestAppointmentConfirmationReview(jobID: job.id, fromNotification: false) } label: {
                     Label("Send confirmation", systemImage: "checkmark.message")
@@ -394,6 +394,7 @@ struct JobDetailView: View {
                 }
             }
         }
+        NativeJobPropertySection(jobID: job.id) // Phase 21
         let quoteOptions = store.quoteOptionsState(jobID: job.id)
         let optionsUndecided = quoteOptions.map { $0.hasOptions && $0.acceptance == nil } ?? false
         Section("Estimate") {
@@ -427,9 +428,12 @@ struct JobDetailView: View {
         NativeChangeOrdersSection(jobID: job.id)
         NativeTimeTrackingSection(jobID: job.id)
         NativeJobProfitabilitySection(jobID: job.id)
+        // Phase 20: forms and checklists sit just before Photos (spec §4).
+        NativeJobFormsSection(jobID: job.id)
         NativeJobPhotosView(jobID: job.id)
         statusSection(job)
-        EstimateApprovalHistorySection(approvals: store.estimateApprovalHistory(jobID: job.id))
+        NativeEstimateSignatureSection(jobID: job.id) // Phase 19: the customer's signature and audit trail
+        EstimateApprovalHistorySection(approvals: store.estimateApprovalHistory(jobID: job.id), jobID: job.id)
         if !job.notes.isEmpty {
             Section("Notes") { Text(job.notes) }
         }
@@ -708,6 +712,8 @@ struct NativeEstimateValidityEditorView: View {
 
     private var today: String { store.estimateValidityToday() }
     private var hasLink: Bool { store.hasUndecidedEstimateApprovalLink(jobID: jobID) }
+    /// Review fix 2026-10-03: the customer's link shows another date.
+    private var linkDateNote: String? { store.estimateLinkValidityNote(jobID: jobID) }
 
     private var currentText: String {
         switch store.estimateValidity(jobID: jobID) {
@@ -733,6 +739,11 @@ struct NativeEstimateValidityEditorView: View {
                             in: NativeValidUntilPicker.range(today: today),
                             displayedComponents: .date
                         )
+                    }
+                    if let linkDateNote {
+                        Text(linkDateNote)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 } footer: {
                     Text(hasLink
@@ -797,9 +808,10 @@ struct NativeEstimateValidityEditorView: View {
     private func save() {
         guard !isSaving else { return }
         let validUntil = doesNotExpire ? nil : NativeValidUntilPicker.ymd(from: date)
-        // Nothing changed (an open date kept, or still "Doesn't expire"):
-        // no save, no link refresh, no alert.
-        if !wasExpired, validUntil == originalValidUntil {
+        // Nothing changed (an open date kept, or still "Doesn't expire",
+        // and the customer's link already shows it): no save, no link
+        // refresh, no alert. A link showing another date is refreshed.
+        if !wasExpired, store.isEstimateValidityUnchanged(jobID: jobID, validUntil: validUntil) {
             dismiss()
             return
         }
@@ -826,12 +838,13 @@ struct NativeEstimateValidityEditorView: View {
 
 private struct EstimateApprovalHistorySection: View {
     let approvals: [Canonical.EstimateApproval]
+    let jobID: String
 
     var body: some View {
         if !approvals.isEmpty {
             Section("Estimate history") {
                 ForEach(Array(approvals.enumerated()), id: \.offset) { index, approval in
-                    EstimateApprovalHistoryRow(approval: approval, sequence: index + 1)
+                    EstimateApprovalHistoryRow(approval: approval, sequence: index + 1, jobID: jobID)
                 }
             }
         }
@@ -841,6 +854,7 @@ private struct EstimateApprovalHistorySection: View {
 private struct EstimateApprovalHistoryRow: View {
     let approval: Canonical.EstimateApproval
     let sequence: Int
+    let jobID: String
 
     private var title: String {
         "\((approval.decision ?? "reviewed").capitalized) estimate \(sequence)"
@@ -855,7 +869,10 @@ private struct EstimateApprovalHistoryRow: View {
             LabeledContent("Estimate", value: approval.snapshot.jobTitle)
             LabeledContent("Total", value: money(approval.snapshot.total))
             LabeledContent("Sent", value: approval.sentAt)
-            if let signer = approval.signerName, !signer.isEmpty {
+            // Phase 19: an approval shows its signature (or "before audit trail").
+            if let evidence = NativeESignature.evidence(for: approval) {
+                NativeApprovalEvidenceRows(evidence: evidence, jobID: jobID, changeOrderID: nil)
+            } else if let signer = approval.signerName, !signer.isEmpty {
                 LabeledContent("Customer", value: signer)
             }
             if let reason = approval.declineReason, !reason.isEmpty {
@@ -914,7 +931,8 @@ struct JobEditor: View {
                         Text("Choose a customer").tag("")
                         ForEach(store.customers) { Text($0.name).tag($0.id) }
                     }
-                    .onChange(of: job.customerId) { _, id in if let c = store.customers.first(where: { $0.id == id }) { job.customerName = c.name; if job.address.isEmpty { job.address = c.address } } }
+                    .onChange(of: job.customerId) { _, id in job.propertyId = nil; if let c = store.customers.first(where: { $0.id == id }) { job.customerName = c.name; if job.address.isEmpty { job.address = c.address } } }
+                    NativeJobPropertyPicker(job: $job) // Phase 21
                 }
                 Section("Work") {
                     LabeledField(label: "Job title") { TextField("Replace kitchen faucet", text: $job.title) }

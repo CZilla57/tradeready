@@ -310,3 +310,174 @@ Rollback: unroute `/v1/*`, or revoke every key with one `update`. The tables can
 | Q5 | Privacy label | Confirm no App Store privacy-label change. The app collects no new data types; API access logs are server-side security logs of owner-initiated third-party requests | **No label change.** Re-check if the log ever feeds analytics |
 | Q6 | Subscription gating | Should keys stop working when the subscription lapses? Server-side entitlement enforcement is a deferred decision today (`backend-workers/lib/guards.js:12-14`) | **Not in v1.** Revisit with the general entitlement-enforcement decision |
 | Q7 | Optional Cloudflare `[[ratelimits]]` binding | Add it to `wrangler.toml` as a first-layer burst limiter (config only, no new service)? | **Optional.** The durable RPC counters are sufficient alone. Add it only if request volume ever makes the RPC the bottleneck |
+
+## 14. Build record (2026-10-03)
+
+### Worker and pages
+
+#### 14.1 App-facing contract (settled; the native Settings → API access screen builds against this)
+
+`POST /api/api-keys/manage` on the existing Worker (`BuildEnvironment.endpoint("api/api-keys/manage", sendsUserData: true)`).
+
+- Headers: `Authorization: Bearer <Supabase access token>`, `Content-Type: application/json`. CORS is `appCors` (`POST, OPTIONS`); `OPTIONS` answers 200 with an empty body.
+- Every error body is `{"error": "<code>"}`, sometimes with extra keys listed below. Codes are stable.
+
+| Status | `error` | When |
+|---|---|---|
+| 405 | `method_not_allowed` | Any method other than POST/OPTIONS |
+| 401 | `unauthorized` | Missing bearer, or `/auth/v1/user` rejects it. Refresh the session once and retry (portal-admin convention) |
+| 429 | `rate_limited` | More than 10 calls per minute for this user (per isolate) |
+| 400 | `invalid_request` | Unknown action, malformed field, bad UUID, bad name/scopes/expiry/grace |
+| 404 | `not_found` | `keyId` unknown, another owner's, or (rotate only) revoked, expired or already rotated |
+| 409 | `key_limit` | `create` when 5 live keys exist. Extra: `"maxLiveKeys": 5` |
+| 409 | `already_completed` | `create`/`rotate` replayed with an `operationId` that already committed. Extra: `"key": {"id": "<uuid>", "prefix": "trk_XXXXXXXX"}`. **No secret.** The app tells the owner to revoke that key and create a new one |
+| 409 | `operation_conflict` | Same `operationId` sent with a different request |
+| 503 | `unavailable` | The migration is not applied yet (RPC transport 404). Fail closed |
+| 500 | `server_error` | Anything else. No internals in the body |
+
+`KeySummary` (every action that returns a key uses this exact object; all keys always present):
+
+```json
+{
+  "id": "6f1c…uuid",
+  "name": "QuickBooks sync",
+  "prefix": "trk_Ab3dE9fQ",
+  "scopes": ["customers:read", "invoices:read"],
+  "createdAt": "2026-10-03T17:00:00.000Z",
+  "expiresAt": "2027-10-03T17:00:00.000Z",
+  "revokedAt": null,
+  "lastUsedAt": null,
+  "replacedBy": null,
+  "status": "active"
+}
+```
+
+- Timestamps are ISO-8601 UTC strings or `null`. `expiresAt: null` means "never expires".
+- `status` is computed by the server at response time: `revoked` (revokedAt set) → `expired` (expiresAt ≤ now) → `expiring` (replacedBy set: the old key in a rotation grace window, still working until `expiresAt`) → `active`.
+- `scopes` are always in canonical order: `customers:read`, `jobs:read`, `invoices:read`, `expenses:read`, `mileage:read`. Presets: **Everything** = all five; **Bookkeeping** = `customers:read`, `invoices:read`, `expenses:read`, `mileage:read`.
+
+Actions (request → 200 response):
+
+| Action | Request body | 200 body |
+|---|---|---|
+| `list` | `{"action":"list"}` | `{"ok":true,"keys":[KeySummary…],"liveCount":2,"maxLiveKeys":5}`. Newest first: every non-revoked unexpired key plus the 50 most recent keys overall. `liveCount` counts `active` keys (the cap; `expiring` keys don't count) |
+| `create` | `{"action":"create","operationId":"<UUID v4>","name":"QuickBooks sync","scopes":["invoices:read"],"expiry":"1y"}` | `{"ok":true,"key":KeySummary,"secret":"trk_<43 chars>"}` |
+| `rotate` | `{"action":"rotate","operationId":"<UUID v4>","keyId":"<uuid>","grace":"24h"}` | `{"ok":true,"key":KeySummary,"secret":"trk_<43 chars>","previous":KeySummary}` |
+| `revoke` | `{"action":"revoke","keyId":"<uuid>"}` | `{"ok":true,"key":KeySummary}`. Idempotent: revoking a revoked key returns it unchanged |
+| `activity` | `{"action":"activity"}` or `{"action":"activity","keyId":"<uuid>"}` | `{"ok":true,"events":[{"at":"…Z","keyId":"<uuid>","event":"ok","route":"/v1/invoices","status":200,"ip":"203.0.113.9"}]}`. Newest first, at most 50. `event` is `ok`, `denied`, `rate_limited` or `error`; `route` is a template such as `/v1/invoices/:id`, never query values |
+
+Field rules:
+- `operationId`: required for `create` and `rotate`, a UUID v4 (any case). Reuse the same id when retrying the same request after a lost response.
+- `name`: string, trimmed by the server, 1–40 characters, no control characters.
+- `scopes`: non-empty array of the five scope strings. Duplicates are collapsed.
+- `expiry`: `"1y"` (default when absent), `"90d"` or `"none"`. The server computes `expiresAt` from its own clock.
+- `grace`: `"24h"` (default when absent) or `"immediate"`. The new key gets the old key's name and scopes and a fresh expiry from the old key's expiry choice (none stays none; otherwise the old key's original lifetime, 90 days or 1 year, from now). The old key's `expiresAt` becomes now + 24 h (or now) and its `replacedBy` is the new key's id.
+- `secret` appears only in a `create` or `rotate` 200 body, exactly once. It is never stored server-side and the app must never persist it.
+- Live-key cap: 5 keys with status `active`. `expiring` keys (rotation grace) don't count, so a rotate never fails on the cap.
+
+The public `/v1` contract is §5 as built, plus the decisions in 14.4. The app never calls `/v1`.
+
+#### 14.2 What was built, by file
+
+Worker (`backend-workers/`):
+- `lib/api/keys.js`: key format (`trk_` + 43 base64url chars over 32 CSPRNG bytes), sha256 hashing, 12-character display prefix, Bearer parsing, key-in-query detection, the five scopes and two presets, resource→scope map, name/scope normalization, limits (5 live keys, expiry `1y`/`90d`/`none`, grace `24h`/`immediate`).
+- `lib/api/resources.js`: `SCHEMA` (OpenAPI 3.1 JSON Schema per resource), `FIELDS` (derived from `SCHEMA`), and one allowlist mapper per resource built key by key (`toPublic.*`), the estimate status table, ledger math via `lib/paymentMath.js`, the portal's payment-link gate and estimate total (both parity-tested against `lib/estimate/portalAssemble.js`), method/source normalization, the accountant issue-date rule, expense category labels, tombstones and the resource registry.
+- `lib/api/cursor.js`: HMAC-SHA256-tagged keyset cursor `{u, i, r}` with tamper and cross-resource rejection.
+- `lib/api/store.js`: the GET-only data module. One builder (`ownerQuery`) always adds `user_id=eq.<owner>` and refuses a non-UUID owner; one `fetch` call hard-wired to `GET`.
+- `lib/api/auth.js`: `authorizeKey` (the `api_key_authorize` RPC; 404 → unavailable), `logApiRequest` (best-effort `api_access_log` insert), the failed-auth load guard on `createRateLimiter`.
+- `lib/api/v1.js`: `handleV1`, the whole request contract (routing, GET-only, key-in-query, auth, scopes, parameters, keyset pages, tombstones, `dataAsOf`, `nextUpdatedSince`, headers, error vocabulary) and the route table.
+- `lib/api/openapi.js`: the OpenAPI 3.1 document, built once from `SCHEMA`/`FIELDS`/`ROUTES`; `API_BASE_URL` is the single base-URL constant.
+- `lib/api/keyAdmin.js`: `apiKeysManageCore` for list/create/rotate/revoke/activity against the `api_key_admin` RPC and owner-scoped REST reads.
+- `lib/api/retention.js`: `pruneApiLogs` (log rows > 90 days, counter rows > 2 days).
+- `src/routes/api/v1.js`: Hono shell for `/v1` and `/v1/*` (no CORS; caller IP from `cf-connecting-ip` only).
+- `src/routes/api/keysManage.js`: Hono shell for `POST /api/api-keys/manage` (appCors, Supabase JWT, 10/min per user, CSPRNG bytes).
+- `src/index.js`: routes `/v1`, `/v1/*` and `/api/api-keys/manage`; the daily 15:00 UTC cron branch also runs `pruneApiLogs`.
+- `wrangler.toml` (comment only) and `.dev.vars.example`: the new `API_CURSOR_SECRET`.
+
+Database (written, not applied):
+- `supabase/migrations/20261003_api_keys.sql`: `api_keys`, `api_access_log`, `api_usage_counters`, RLS and grants, `api_key_authorize`, `api_key_admin`, and the `api_key_public` projection.
+- `supabase/migrations/verify/20261003_api_keys_verify.sql`: read-only, self-checking hosted-project verification (RLS-snapshot pattern).
+- `supabase/verify/local/api_keys.sh`: throwaway-local-PostgreSQL proof (same harness as `supabase/verify/local/run.sh`), including the concurrent counter check.
+
+Tests: `backend-workers/tests/apiResources.test.cjs`, `backend-workers/tests/apiAuth.test.cjs`, `backend-workers/tests/apiKeysManage.test.cjs`, `__tests__/openApiWorkers.test.js`; `docs/native-fixture-manifest.json` regenerated for the new oracle.
+
+No `backend/` (Vercel) twin: the open API is Workers-only, like the portal's Phase 12 additions. No `native/` or React Native changes.
+
+#### 14.3 Preconditions re-checked against the tree (2026-10-03)
+
+- §0 said `clientIp` prefers `x-forwarded-for`. It no longer does: commit `dd4c9b7` made `backend-workers/src/appCors.js` prefer `cf-connecting-ip`. The API still never calls `clientIp`: it reads `cf-connecting-ip` directly and never falls back to `x-forwarded-for`, so the §12 residual no longer applies to this phase.
+- Phase 32 is committed on this base (`aa1bbbf`); `estimateExpiry.js` and `quoteOptions.js` are reused unchanged.
+- This branch does not contain Phases 20, 21, 24, 26, 28, 33 or 34. Their future blob fields (for example referral codes, tips) are excluded by the allowlist without any code here; the fixtures carry `referralCode`, vendor keys, `portal` and junk keys to prove it. Adding `tipAmount` (Phase 28) and the Phase 21/20 resources later is an additive `SCHEMA` edit (§7).
+- Everything else in §0 holds as written.
+
+#### 14.4 Decisions where the spec was silent
+
+Storage and RPCs:
+1. `api_keys` gains three columns beyond §4: `expiry_days` (90 | 365 | null, so rotate keeps the owner's lifetime choice), `operation_id` (unique when set) and `request_hash` (replay detection without storing the raw key). Plus check constraints on hash shape, prefix length, scopes and log `event`, and `replaced_by … on delete set null`.
+2. "Live" means not revoked, not expired and not replaced. Keys in a rotation grace window don't count toward the 5-key cap, so rotate never fails on the cap.
+3. Rotate inherits name, scopes and lifetime. The old key's `expires_at` becomes the earlier of its current expiry and now + grace. Only a live, not-yet-rotated key rotates; anything else is `not_found`.
+4. Revoke is idempotent: a second revoke answers 200 with the key unchanged (`revoked_at` never moves).
+5. Rate limits are check-then-increment under a per-owner advisory lock, so concurrent requests never over-admit and **refused requests consume no quota**. The `X-RateLimit-*` headers describe the per-key minute window. Daily windows are UTC.
+6. `denied` and `rate_limited` rows are written by the RPC at most once per key per minute, so a client hammering with a dead or limited key cannot grow the log without bound. Unknown hashes are never logged (there is no owner).
+7. Both RPCs refuse a client JWT that reaches them anyway (the `booking_is_client_caller` logic, inlined to avoid a dependency on the booking migrations).
+
+Request contract:
+8. Check order: GET-only → key in query → route → failed-auth block → Bearer parse → RPC → scope → parameters → reads. `HEAD` and `OPTIONS` are 405 like every non-GET.
+9. Key-in-query means a credential-like parameter name (`api_key`, `apikey`, `key`, `access_token`, `token`, `authorization`, `bearer`) or any value starting with `trk_`. It is refused before routing and counts as an auth failure for the IP guard.
+10. Failed-auth guard: the 20th failure per minute from one `cf-connecting-ip` blocks that address for a minute, answered `429 rate_limited` before any RPC call.
+11. Worker-written log rows (requests that resolved a key): 2xx → `ok`, 403 → `denied`, 429 → `rate_limited`, anything else (400, 404, 500, 503) → `error`. Requests that never resolved an owner (405, malformed bearer, key in query, unknown path) are not logged.
+12. Headers: `TradeReady-Api-Version` and `Cache-Control: no-store` on every `/v1` response; `X-RateLimit-Limit/Remaining/Reset` (Reset in Unix seconds) on every response that resolved a key, including 429. Pre-auth responses have no key to describe, so they omit the rate headers. `/v1/openapi.json` is `Cache-Control: public, max-age=3600`. 401s carry `WWW-Authenticate: Bearer realm="TradeReady API"`.
+13. Failure mapping: authorize RPC not deployed, undecodable or erroring → `503 unavailable` (fail closed); a data read failing after auth → `500 server_error`; `API_CURSOR_SECRET` unset → list endpoints `503 unavailable` (single records and `/v1/account` still work; cursors are never minted unsigned).
+14. `updated_since` must carry a time zone (`Z` or `±hh:mm`) and is applied as `updated_at >= value`. `nextCursor` and `nextUpdatedSince` follow the last raw row scanned (a payments page can hold zero payments; an estimates page skips non-estimate jobs). `nextUpdatedSince` is `null` when the page is empty.
+15. `GET /v1/account` returns `{data: {...}}` with `dataAsOf` inside the account object (it is in the §3 field list). Its `dataAsOf` is the newest change across the tables the key can read. `businessName` is read with `select=businessName:data->>businessName`, so the settings blob (vendor keys, tokens) never reaches the Worker.
+16. Paths: one trailing slash is tolerated; ids longer than 200 characters or with broken percent-encoding are 404; `/v1` itself is 404.
+
+Resources:
+17. Estimate status table: (1) a decision on the approval link wins; (2) otherwise a job status the owner moved by hand: `declined`, or any of `approved/scheduled/in_progress/complete/invoiced/paid` → `approved` (with `decidedAt`, `signerName` and `selection` null); (3) otherwise no link and job status `lead` → `draft`; (4) otherwise `sent`, or `expired` after `validUntil` in the snapshot's zone (`snapshotExpiry`). An estimate sent without a link (only `estimateSentAt`) uses `estimateValidUntil` with anywhere-on-Earth, `total` = `estimateTotal`, `lineItems` `[]`, `options` null.
+18. Estimate `total` is the portal's: the accepted selection total, else the lowest option for an undecided options estimate, else the snapshot total.
+19. Payments: the legacy synthesized `legacy_<invoiceId>` entry is included (so a key's payments always sum to `amountPaid`) and is reachable at `/v1/payments/legacy_<invoiceId>`. `processorReference` is `stripeSessionId`, else the id after `stripe_` (covers Phase 18's `stripe_<payment_intent_id>` without reading a new field). The method map adds `stripe`. A single payment is found with `data->payments=cs.[{"id":…}]`.
+20. Invoice `paid` is the stored flag; `status` is derived from the ledger. Money is rounded half away from zero to cents after `toPrecision(15)` (so 12.345 → 12.35).
+21. Manage `activity` returns `ip` too: it is the owner's own security log, and the privacy wording (Q2) discloses it.
+
+#### 14.5 Uncommitted `tradeready-legal` edit
+
+- New file `tradeready-legal/developers.html` (the only file touched in that repo; `book.html`, `estimate.html`, `portal.html` keep their other-phase edits untouched). Static, no script, CSP-compatible with the existing `_headers`. Covers getting a key, auth, scopes and presets, the workers.dev base URL (Q4), pagination, incremental sync with a worked Node.js loop, tombstones, freshness, rate limits, errors, versioning, per-resource field tables, Zapier, security and privacy, and a changelog. Q6 (subscription gating) and Q7 (Cloudflare binding) are not mentioned.
+- The field tables are generated from the Worker's `SCHEMA`/`FIELDS` (scratch generator), and a jsdom check pins them to `FIELDS` exactly.
+- Not done (owner's call when publishing): adding the page to `sitemap.xml` and linking it from `support.html`.
+
+#### 14.6 Legal and privacy wording to apply (approved recommendations Q2, Q3; not applied here)
+
+- **`privacy.html` §1/§5 (Q2):** "If you create an API key, services you give it to can read the data types you chose. We log each API request (time, key, endpoint, IP address) for 90 days for security."
+- **`terms.html`, new "API access" section next to §7 "Your Data" (Q3):** "API access. TradeReady offers a read-only API for connecting other tools to your data. If you create an API key, you are responsible for where you use it and who you give it to: anyone who has the key can read the kinds of data you chose for it until it expires or you revoke it. Keep keys secret and revoke any key you think has been exposed. We may change API rate limits, and we may suspend or revoke keys used in a way that harms the service or other users. The API is provided as is, without any commitment to uptime or availability."
+- **Q5:** no App Store privacy-label change (re-check if the access log ever feeds analytics).
+
+#### 14.7 Test results
+
+| Command | Result |
+|---|---|
+| `cd backend-workers && npm test` | 238 pass, 0 fail (38 suites; 160 before this phase + 78 new: apiResources 39, apiAuth 23, apiKeysManage 16) |
+| `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath __tests__/openApiWorkers.test.js` | 38 pass |
+| Every root suite that references `backend-workers` (29 files, including the portal, booking and phase 8 suites) under `TZ=America/Phoenix` | 29 suites, 459 tests pass |
+| `sh supabase/verify/local/api_keys.sh` (throwaway local PostgreSQL) | 52 pass, 0 fail: applies twice, hosted verify SQL passes and flags a leaked `key_hash` grant and a client EXECUTE grant, client roles refused, cap/rotate/revoke/replay, denied-log throttle, 70 concurrent callers → exactly 60 admitted, owner daily cap, RLS and column privileges, cascade delete |
+| Mutation check (scratch): 10 deliberate security breaks, each run against the suite meant to catch it (owner filter dropped, invoice email added, job notes added, non-GET allowed, raw key sent to the RPC, `x-forwarded-for` used as the IP, scope check skipped, unsigned cursor accepted, full settings blob selected, key written to the console) | all 12 runs failed, as they should; files restored byte for byte |
+| `developers.html` jsdom check (scratch) | 61 pass; fails with the page absent (pre-edit state) and catches 10/10 broken variants |
+| esbuild bundle of `src/index.js` (local, nothing deployed) | builds; the bundle serves `/v1/openapi.json` 200 and `DELETE /v1/customers` 405 |
+| `node scripts/parity-manifest.mjs --write` then `--check` | current (adds the `openApiWorkers` oracle) |
+| `sh native/run-doc-reference-check.sh` | 0 missing. Run on this spec: 1 missing, `N/NativeAPIKeyAdministration.swift` in §9, which the native slice creates |
+
+#### 14.8 Owner ship steps (in order)
+
+1. Apply `supabase/migrations/20261003_api_keys.sql` in the Supabase SQL editor (staging first if one exists). Then run `supabase/migrations/verify/20261003_api_keys_verify.sql`; expect "ALL API KEY CHECKS PASSED" (psql) or every `ok` true (editor grid).
+2. Set the cursor secret: `wrangler secret put API_CURSOR_SECRET` with a long random value (for example the output of `openssl rand -base64 48`). Same for staging when it exists.
+3. Deploy the Worker.
+4. Smoke from a terminal with a key created in the app: `curl …/v1/account -H "Authorization: Bearer $KEY"`, one list with `limit=1` and its `nextCursor`, then rotate and revoke in the app and confirm the old key gets 401.
+5. Turn on the native `apiAccessEnabled` flag (native slice) once the Worker is live.
+6. Review and publish `tradeready-legal/developers.html` together with the 14.6 privacy and terms wording; optionally add it to `sitemap.xml` and link it from `support.html`.
+7. Optional, after step 1: add `api_keys` and `api_access_log` to the expected list in `supabase/verify/account_deletion_cascade.sql` (left unchanged so that gate stays green before the migration is applied; both tables already cascade).
+
+#### 14.9 Not done / residuals
+
+- Native Settings → API access (§9) belongs to the native slice.
+- Hosted-project verification and a staging concurrency run wait for the owner's migration apply; the local proof covers the SQL behavior.
+- `Deprecation`/`Sunset` headers have nothing to announce until a `/v2` exists.
+- The failed-auth guard and the 10/min manage limit are in-memory per isolate, as §6 accepts; the durable limits are the RPC counters.

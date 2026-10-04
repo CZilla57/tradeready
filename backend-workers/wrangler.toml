@@ -5,6 +5,9 @@
 #   RESEND_API_KEY, GROQ_API_KEY,
 #   PAY_LINK_SIGNING_SECRET (Phase 24 pay-page tokens; also the rollout switch:
 #     unset → create-payment-link keeps minting Stripe Payment Links)
+#   API_CURSOR_SECRET (Phase 23 open API: HMAC key for /v1 list cursors;
+#     without it /v1 lists answer 503 unavailable)
+#   ESIGN_SEAL_PRIVATE_KEY (Phase 19, stage B)
 # Local dev reads .dev.vars (gitignored) — see .dev.vars.example.
 
 name = "tradeready-backend"
@@ -53,6 +56,16 @@ bucket_name = "tradeready-invoice-pdfs"
 [[r2_buckets]]
 binding = "PHOTOS"
 bucket_name = "tradeready-photos"
+
+# Phase 19 e-signatures (docs/superpowers/specs/2026-10-03-esignature-upgrade-
+# design.md §8, §11). Owner steps, never committed with values here until then:
+#   stage B: ESIGN_SEAL_PRIVATE_KEY via `wrangler secret put`; then add to [vars]
+#            ESIGN_SEAL_KEY_ID = "<key id>" and
+#            ESIGN_SEAL_PUBLIC_KEYS = '{"<key id>":"<base64 raw public key>"}'
+#            (public; keep every old key listed after a rotation).
+#   stage C: ESIGN_V2 = "true", then ESIGN_REQUIRE_CONSENT = "true".
+# Both flags are OFF while unset; with ESIGN_V2 off the estimate routes behave
+# exactly as before Phase 19.
 
 # Phase 12B: portal photo URLs are HMAC-signed with PORTAL_URL_SIGNING_SECRET
 # (set via `wrangler secret put PORTAL_URL_SIGNING_SECRET` — never in this

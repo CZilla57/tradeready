@@ -20,6 +20,7 @@
 import { Hono } from 'hono';
 import { runReminders } from '../lib/sendReminders.js';
 import { runQuarterHourly } from '../lib/cronQuarterHourly.js';
+import { pruneApiLogs } from '../lib/api/retention.js';
 
 import { aiChatHandler } from './routes/aiChat.js';
 import { pricebookSuggestHandler } from './routes/pricebookSuggest.js';
@@ -49,6 +50,12 @@ import { portalRequestHandler } from './routes/estimate/portalRequest.js';
 import { portalManageHandler } from './routes/estimate/portalManage.js';
 import { changeViewHandler } from './routes/estimate/changeView.js';
 import { changeRespondHandler } from './routes/estimate/changeRespond.js';
+import { calendarBusyHandler } from './routes/calendar/busy.js';
+import { esignCopyHandler } from './routes/esign/copy.js';
+import { esignPreviewHandler } from './routes/esign/preview.js';
+import { esignVerifyHandler } from './routes/esign/verify.js';
+import { esignPublicKeysHandler } from './routes/esign/publicKeys.js';
+import { esignRecordHandler } from './routes/esign/record.js';
 import { connectStatusHandler } from './routes/stripe/connectStatus.js';
 import { createConnectAccountHandler } from './routes/stripe/createConnectAccount.js';
 import { disconnectHandler } from './routes/stripe/disconnect.js';
@@ -61,6 +68,8 @@ import { payAutopayOffHandler } from './routes/pay/autopayOff.js';
 import { autopayStatusHandler } from './routes/autopay/status.js';
 import { autopayManageHandler } from './routes/autopay/manage.js';
 import { connectionTokenHandler, locationHandler, paymentIntentHandler } from './routes/terminal.js';
+import { apiV1Handler } from './routes/api/v1.js';
+import { apiKeysManageHandler } from './routes/api/keysManage.js';
 
 const app = new Hono();
 
@@ -97,6 +106,18 @@ app.all('/api/estimate/change-view', changeViewHandler);
 app.all('/api/estimate/change-respond', changeRespondHandler);
 app.all('/api/estimate/:action', (c) => c.json({ error: 'Not found' }, 404));
 
+// Phase 26: the owner's calendar busy times (on-device EventKit path).
+app.all('/api/calendar/busy', calendarBusyHandler);
+app.all('/api/calendar/:action', (c) => c.json({ error: 'Not found' }, 404));
+// Phase 19 e-signatures: signer copy, unsigned preview, public verification,
+// published keys, and the owner app's record fetch.
+app.all('/api/esign/copy', esignCopyHandler);
+app.all('/api/esign/preview', esignPreviewHandler);
+app.all('/api/esign/verify', esignVerifyHandler);
+app.all('/api/esign/public-keys', esignPublicKeysHandler);
+app.all('/api/esign/record', esignRecordHandler);
+app.all('/api/esign/:action', (c) => c.json({ error: 'Not found' }, 404));
+
 app.all('/api/stripe/connect-status', connectStatusHandler);
 app.all('/api/stripe/create-connect-account', createConnectAccountHandler);
 app.all('/api/stripe/disconnect', disconnectHandler);
@@ -126,6 +147,14 @@ app.all('/api/cron/send-reminders', cronSendRemindersHandler);
 app.all('/api/cron/send-invoice-emails', cronSendInvoiceEmailsHandler);
 app.all('/api/cron/run-autopay', cronRunAutopayHandler);
 
+// Phase 23 read-only open API. One handler owns every /v1 path (routing,
+// GET-only, key auth, scopes, limits and its own JSON 404) — see
+// src/routes/api/v1.js. No CORS on purpose: keys are server-to-server only.
+app.all('/v1', apiV1Handler);
+app.all('/v1/*', apiV1Handler);
+// Owner key management for Settings → API access (JWT + appCors).
+app.all('/api/api-keys/manage', apiKeysManageHandler);
+
 // Anything else under this Worker: JSON 404 (Vercel served its own 404 page).
 app.notFound((c) => c.json({ error: 'Not found' }, 404));
 
@@ -150,6 +179,12 @@ export default {
     ctx.waitUntil(
       runReminders(env).catch((err) =>
         console.error('[send-reminders] scheduled run failed:', err.message)
+      )
+    );
+    // Phase 23 retention: access log 90 days, usage counters 2 days.
+    ctx.waitUntil(
+      pruneApiLogs(env).catch((err) =>
+        console.error('[api-retention] scheduled run failed:', err.message)
       )
     );
   },

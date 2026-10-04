@@ -21,6 +21,9 @@ public enum NativeCalendar {
         public var isTerminal: Bool
         /// Live-vs-live overlap, buffer-aware (AddJobScreen semantics).
         public var inConflict: Bool
+        /// Phase 26: a live job overlapping the owner's personal calendar
+        /// busy time. Warning-only, separate from `inConflict`.
+        public var overlapsPersonalBusy: Bool = false
     }
 
     public struct CalendarDay<Job: ScheduleJobLike> {
@@ -29,6 +32,46 @@ public enum NativeCalendar {
         public var timed: [CalendarBlock<Job>]
         /// Jobs scheduled for the date with no start time (nil or "").
         public var untimed: [Job]
+        /// Phase 26: the owner's personal calendar busy time on this date
+        /// (no titles), sorted and merged. Empty unless calendar checks are on.
+        public var personalBusy: [PersonalBusyBlock] = []
+    }
+
+    /// Phase 26: an untitled personal busy block, [startMinutes, endMinutes)
+    /// on `date` (an end of 23:59 reads as the rest of the day).
+    public struct PersonalBusyBlock: Equatable {
+        public var date: String
+        public var startMinutes: Int
+        public var endMinutes: Int
+        public init(date: String, startMinutes: Int, endMinutes: Int) {
+            self.date = date
+            self.startMinutes = startMinutes
+            self.endMinutes = endMinutes
+        }
+    }
+
+    /// The date's personal busy blocks, merged into disjoint sorted intervals.
+    public static func personalBusy(on date: String, from blocks: [PersonalBusyBlock]) -> [PersonalBusyBlock] {
+        let day = blocks.filter { $0.date == date && $0.startMinutes < $0.endMinutes }
+            .sorted { $0.startMinutes != $1.startMinutes ? $0.startMinutes < $1.startMinutes : $0.endMinutes < $1.endMinutes }
+        var merged: [PersonalBusyBlock] = []
+        for block in day {
+            if let last = merged.last, block.startMinutes <= last.endMinutes {
+                merged[merged.count - 1].endMinutes = max(last.endMinutes, block.endMinutes)
+            } else {
+                merged.append(block)
+            }
+        }
+        return merged
+    }
+
+    /// Phase 26: whether a job window on `date` overlaps personal busy time
+    /// (strict overlap; touching is fine). Warning-only, like conflicts.
+    public static func overlapsPersonalBusy(date: String, start: String, end: String?, laborHours: Double,
+                                            personalBusy: [PersonalBusyBlock]) -> Bool {
+        guard !date.isEmpty, !start.isEmpty,
+              let (s, e) = NativeSchedule.blockWindow(start: start, end: end, laborHours: laborHours) else { return false }
+        return personalBusy.contains { $0.date == date && $0.startMinutes < e && s < $0.endMinutes }
     }
 
     /// Greedy interval lane assignment; laneCount is per overlap cluster.
@@ -65,8 +108,10 @@ public enum NativeCalendar {
     public static func buildCalendarDay<Job: ScheduleJobLike>(
         jobs: [Job],
         date: String,
-        schedule: NativeSchedule.ResolvedSchedule
+        schedule: NativeSchedule.ResolvedSchedule,
+        personalBusy: [PersonalBusyBlock] = []
     ) -> CalendarDay<Job> {
+        let busyToday = Self.personalBusy(on: date, from: personalBusy)
         let dayJobs = jobs.filter { $0.scheduledDate == date }
         let untimed = dayJobs.filter { $0.scheduledStartTime?.isEmpty ?? true }
         let sized = dayJobs.compactMap { job -> (job: Job, startMinutes: Int, endMinutes: Int)? in
@@ -90,11 +135,15 @@ public enum NativeCalendar {
                 ))
                 return !hits.isEmpty
             }()
+            let overlapsBusy = !isTerminal && busyToday.contains {
+                $0.startMinutes < block.endMinutes && block.startMinutes < $0.endMinutes
+            }
             return CalendarBlock(job: block.job, startMinutes: block.startMinutes, endMinutes: block.endMinutes,
                                  lane: lanes[i].lane, laneCount: lanes[i].laneCount,
-                                 isTerminal: isTerminal, inConflict: inConflict)
+                                 isTerminal: isTerminal, inConflict: inConflict,
+                                 overlapsPersonalBusy: overlapsBusy)
         }
-        return CalendarDay(date: date, timed: timed, untimed: untimed)
+        return CalendarDay(date: date, timed: timed, untimed: untimed, personalBusy: busyToday)
     }
 
     /// Hour-aligned axis range for a day view: the work window, stretched to
@@ -118,10 +167,11 @@ public enum NativeCalendar {
     public static func buildCalendarWeek<Job: ScheduleJobLike>(
         jobs: [Job],
         anchorDate: String,
-        schedule: NativeSchedule.ResolvedSchedule
+        schedule: NativeSchedule.ResolvedSchedule,
+        personalBusy: [PersonalBusyBlock] = []
     ) -> [CalendarDay<Job>]? {
         guard let dates = NativeSchedule.weekDates(anchor: anchorDate) else { return nil }
-        return dates.map { buildCalendarDay(jobs: jobs, date: $0, schedule: schedule) }
+        return dates.map { buildCalendarDay(jobs: jobs, date: $0, schedule: schedule, personalBusy: personalBusy) }
     }
 
     /// The unscheduled approved-work queue: approved, no date (nil or ""),
