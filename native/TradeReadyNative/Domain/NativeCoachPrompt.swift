@@ -129,6 +129,11 @@ enum NativeCoachPrompt {
             if let leadSources = snapshot.leadSources, !leadSources.rows.isEmpty {
                 prompt += "\n" + leadSourcesBlock(leadSources)
             }
+
+            // Phase 34 (spec §5.8): after LEAD SOURCES, absent when nil.
+            if let referrals = snapshot.referrals {
+                prompt += "\n" + referralsBlock(referrals)
+            }
         }
 
         return prompt
@@ -153,6 +158,29 @@ enum NativeCoachPrompt {
         }
         return "LEAD SOURCES (year to date, credited to each customer's first source): " +
             rows.joined(separator: "; ") + ". " + leadSourcesGuardrail
+    }
+
+    static let referralsGuardrail = "These referral figures are computed from the owner's records. " +
+        "Cite them exactly; never estimate figures for a referrer who isn't listed. " +
+        "Rewards are recorded by the owner; never promise, calculate or send a reward on the owner's behalf."
+
+    /// "REFERRALS (year to date): 3 new referred customers; $2400 collected
+    /// from referred customers. Top referrers: Sam Ortiz (2 referred, $1800
+    /// collected); … Rewards recorded: 1 ($25). These referral figures …" —
+    /// whole dollars. No top-referrers sentence when every referrer is gone;
+    /// "Rewards recorded: none." when nothing was recorded.
+    static func referralsBlock(_ block: NativeReferralSnapshotBlock) -> String {
+        let noun = block.newReferred == 1 ? "customer" : "customers"
+        var text = "REFERRALS (year to date): \(block.newReferred) new referred \(noun); " +
+            "$\(toFixed0(block.collected)) collected from referred customers."
+        if !block.topReferrers.isEmpty {
+            let rows = block.topReferrers.map { "\($0.name) (\($0.referred) referred, $\(toFixed0($0.collected)) collected)" }
+            text += " Top referrers: " + rows.joined(separator: "; ") + "."
+        }
+        text += block.rewardsRecorded > 0
+            ? " Rewards recorded: \(block.rewardsRecorded) ($\(toFixed0(block.rewardsAmount)))."
+            : " Rewards recorded: none."
+        return text + " " + referralsGuardrail
     }
 
     // MARK: Number formatting

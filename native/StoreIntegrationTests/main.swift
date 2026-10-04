@@ -966,7 +966,7 @@ struct StoreIntegrationTests {
             description: "Maintenance", amount: 150, dueDays: 30,
             cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
             occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: "2026-09-01",
-            isActive: true, createdAt: "2026-09-01", autoSendEnabled: false)
+            isActive: true, createdAt: "2026-09-01", autoSendEnabled: false, autopayEnabled: nil)
         let prePlanCount = empty.invoices.count
         expect(empty.createRecurringInvoice(planRule), "maintenance plan creates")
         expect(empty.createRecurringInvoice(planRule) == false, "duplicate plan id refused")
@@ -1046,6 +1046,193 @@ struct StoreIntegrationTests {
         let partialURL = try await empty.generateInvoicePaymentLink(
             invoiceID: storedLinkID, amount: 200, provider: .paypal)
         expect(partialURL.absoluteString == "https://paypal.me/acme-shop/200.00", "changed amount mints fresh, never reuses stale")
+
+        // Phase 24 §6.1: Stripe links through an injected delivery service.
+        // The old post-await check required the requested amount to equal the
+        // latest balance, so every deposit link failed after minting. The
+        // check now compares the balance before and after the await (a payment
+        // arrived) and refuses only a request above the balance.
+        do {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tradeready-p24-deposit-\(UUID().uuidString)", isDirectory: true)
+            let stripe = StoreTestStripeDelivery()
+            let store = AppStore(fileURL: dir.appendingPathComponent("store.json"), seedIfMissing: false,
+                                 invoiceDeliveryService: stripe, secureSettingsStore: hostTestSecureSettingsStore())
+            store.scheduleBookingTestSeedSignedInOwner(subject: "user-p24", binding: String(repeating: "4", count: 64))
+            store.scheduleBookingTestCredentials = NativeSyncCredentials(
+                subject: "user-p24", sessionBytes: Data("{\"access_token\":\"p24\"}".utf8))
+            let depositInvoice = Invoice(customer: "Deposit Customer", number: "INV-P24", amount: 400)
+            store.upsert(depositInvoice)
+            func stored() -> Canonical.Invoice? {
+                store.canonicalInvoices.first { $0.id == depositInvoice.id }
+            }
+            func refusal(_ amount: Decimal) async -> NativeInvoiceDeliveryError? {
+                do {
+                    _ = try await store.generateInvoicePaymentLink(invoiceID: depositInvoice.id, amount: amount, provider: .stripe)
+                    return nil
+                } catch { return error as? NativeInvoiceDeliveryError ?? .unavailable }
+            }
+
+            // Full balance.
+            let full = try? await store.generateInvoicePaymentLink(invoiceID: depositInvoice.id, amount: 400, provider: .stripe)
+            expect(full?.absoluteString == "https://gettradereadyapp.com/pay.html?t=mint1"
+                       && stored()?.paymentLinkUrl == full?.absoluteString && stored()?.paymentLinkAmount == 400,
+                   "§6.1 a full-balance Stripe link mints and persists against its amount")
+
+            // 50% deposit: strictly below the balance by construction, now succeeds.
+            let deposit = try? await store.generateInvoicePaymentLink(invoiceID: depositInvoice.id, amount: 200, provider: .stripe)
+            expect(deposit?.absoluteString == "https://gettradereadyapp.com/pay.html?t=mint2",
+                   "§6.1 a 50% deposit Stripe link succeeds (it always failed before)")
+            expect(stored()?.paymentLinkUrl == deposit?.absoluteString && stored()?.paymentLinkAmount == 200,
+                   "§6.1 the deposit link persists against the deposit amount")
+            let cachedDeposit = try? await store.generateInvoicePaymentLink(invoiceID: depositInvoice.id, amount: 200, provider: .stripe)
+            expect(cachedDeposit == deposit && stripe.mintedAmounts.count == 2,
+                   "§6.1 the deposit link is reused for the same amount without another mint")
+
+            // Above the balance: refused before any mint, nothing persisted.
+            let aboveBalance = await refusal(500)
+            expect(aboveBalance == .invalidAmount, "§6.1 a request above the balance is refused")
+            expect(stripe.mintedAmounts.count == 2, "§6.1 a request above the balance never reaches the Worker")
+            expect(stored()?.paymentLinkAmount == 200, "§6.1 a refused request leaves the stored link alone")
+
+            // A payment lands while the full-balance mint is in flight.
+            stripe.duringMint = {
+                _ = store.recordPayment(invoiceID: depositInvoice.id,
+                                        payment: Payment(id: "pay-p24-race-1", amount: 100, date: Date(), method: "Cash"))
+            }
+            let racedFull = await refusal(400)
+            expect(racedFull == .invalidAmount, "§6.1 a concurrent payment during the await refuses the full-balance link")
+            expect(stripe.mintedAmounts.count == 3, "§6.1 sanity: the racing request did mint")
+            expect(stored()?.paymentLinkUrl == deposit?.absoluteString && stored()?.paymentLinkAmount == 200,
+                   "§6.1 the stale-amount link is never persisted as current")
+            // And while a deposit mint is in flight.
+            stripe.duringMint = {
+                _ = store.recordPayment(invoiceID: depositInvoice.id,
+                                        payment: Payment(id: "pay-p24-race-2", amount: 50, date: Date(), method: "Cash"))
+            }
+            let racedDeposit = await refusal(150)
+            expect(racedDeposit == .invalidAmount, "§6.1 a concurrent payment during the await refuses a deposit link")
+            expect(stored()?.paymentLinkAmount == 200, "§6.1 the racing deposit link is not persisted")
+            stripe.duringMint = nil
+            // With the balance settled at 250, a fresh deposit request works again.
+            let after = try? await store.generateInvoicePaymentLink(invoiceID: depositInvoice.id, amount: 125, provider: .stripe)
+            expect(after != nil && stored()?.paymentLinkAmount == 125, "§6.1 a deposit after the payments mints against the new balance")
+        }
+
+        // Phase 24 §6.2/§6.3: the plan's "Offer autopay" persists and pushes,
+        // and the owner's autopay status and "Remove saved card" run through
+        // an injected owner-route service.
+        do {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tradeready-p24-autopay-\(UUID().uuidString)", isDirectory: true)
+            let storeURL = dir.appendingPathComponent("store.json")
+            let autopay = StoreTestAutopayService()
+            let store = AppStore(fileURL: storeURL, seedIfMissing: false,
+                                 autopayService: autopay, secureSettingsStore: hostTestSecureSettingsStore())
+            store.scheduleBookingTestSeedSignedInOwner(subject: "user-p24-ap", binding: String(repeating: "5", count: 64))
+            store.scheduleBookingTestCredentials = NativeSyncCredentials(
+                subject: "user-p24-ap", sessionBytes: Data("{\"access_token\":\"p24\"}".utf8))
+            let noPlans = await store.refreshAutopayStatus(trigger: .plansList)
+            expect(!noPlans && autopay.statusCalls == 0, "§6.3 an owner without plans makes no autopay read")
+
+            let apCustomer = Customer(name: "Autopay Customer", email: "autopay@example.com")
+            store.upsert(apCustomer)
+            let apPlan = Canonical.RecurringInvoice(
+                id: "rinv-p24", customerId: apCustomer.id, customerName: apCustomer.name,
+                description: "Monthly service", amount: 120, dueDays: 0,
+                cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
+                occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: "2026-11-01",
+                isActive: true, createdAt: "2026-10-01", autoSendEnabled: false, autopayEnabled: nil)
+            expect(store.createRecurringInvoice(apPlan), "§6.2 the plan creates without autopay")
+            var offering = apPlan
+            offering.autopayEnabled = true
+            expect(store.updateRecurringInvoice(offering), "§6.2 the plan saves with Offer autopay on")
+            let apReloaded = AppStore(fileURL: storeURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
+            expect(apReloaded.recurringInvoiceRules.first { $0.id == "rinv-p24" }?.autopayEnabled == true,
+                   "§6.2 Offer autopay persists across a reload")
+            let apQueued = Canonical.NativeMutationQueue(
+                fileURL: storeURL.deletingLastPathComponent().appendingPathComponent("mutation-queue.json")
+            ).load().last { $0.table == "recurringInvoices" && $0.recordId == "rinv-p24" }
+            if case let .object(payload)? = apQueued?.payload {
+                expect(apQueued?.op == .upsert && payload["autopayEnabled"] == .bool(true),
+                       "§6.2 Offer autopay pushes with the plan (the Worker reads it from the synced row)")
+            } else { expect(false, "§6.2 the plan upsert is queued with an object payload") }
+            expect(store.setRecurringInvoiceActive(id: "rinv-p24", isActive: false)
+                   && store.recurringInvoiceRules.first { $0.id == "rinv-p24" }?.autopayEnabled == true,
+                   "§6.2 pausing a plan keeps its autopay choice")
+            expect(store.setRecurringInvoiceActive(id: "rinv-p24", isActive: true, today: "2026-10-01"), "the plan resumes")
+            expect(store.autopayPlanStatus(planID: "rinv-p24") == .offered,
+                   "§6.3 before any status read the row follows the plan's toggle")
+
+            // A status read, then the 10-minute foreground rule.
+            let readAt = Date(timeIntervalSince1970: 1_792_000_000)
+            let apCard = NativeAutopayCard(brand: "visa", last4: "4242", expMonth: 8, expYear: 2027, wallet: nil)
+            let activeEnrollment = NativeAutopayEnrollment(
+                id: "enr-p24", recurringInvoiceId: "rinv-p24", customerId: apCustomer.id, status: "active",
+                card: apCard, maxAmount: 120, activatedAt: ISO8601DateFormatter().date(from: "2026-10-02T15:00:00Z"),
+                revokedAt: nil, revokedBy: nil, revokeReason: nil)
+            autopay.statusResult = .success(NativeAutopayStatusSnapshot(enrollments: [activeEnrollment], charges: []))
+            let firstRead = await store.refreshAutopayStatus(trigger: .plansList, now: readAt)
+            expect(firstRead && autopay.statusCalls == 1, "§6.3 opening the plans list reads autopay status")
+            expect(store.autopayPlanStatus(planID: "rinv-p24") == .on(apCard)
+                   && NativeAutopay.planRowText(store.autopayPlanStatus(planID: "rinv-p24")) == "Autopay on · Visa •••• 4242",
+                   "§6.3 the plan row reads Autopay on with the card")
+            let soon = await store.refreshAutopayStatus(trigger: .foreground, now: readAt.addingTimeInterval(300))
+            expect(!soon && autopay.statusCalls == 1, "§6.3 a foreground within 10 minutes reuses the last read")
+            let later = await store.refreshAutopayStatus(trigger: .foreground, now: readAt.addingTimeInterval(600))
+            expect(later && autopay.statusCalls == 2, "§6.3 a foreground after 10 minutes reads again")
+
+            // The invoice banner for the plan's next invoice.
+            expect(store.runRecurringInvoiceGeneration(today: "2026-11-01"), "the plan generates its Nov 1 invoice")
+            let apInvoiceID = store.canonicalInvoices.first { $0.recurringInvoiceId == "rinv-p24" }?.id ?? ""
+            expect(store.autopayInvoiceBanner(invoiceID: apInvoiceID, now: readAt)?.text
+                   == "Will be charged automatically on Nov 1, 2026 (Visa •••• 4242)",
+                   "§6.3 the plan invoice shows when it will be charged")
+            expect(store.autopayInvoiceBanner(invoiceID: "no-such-invoice", now: readAt) == nil, "no banner for a missing invoice")
+
+            // A failed remove leaves the card shown; a rejected session asks to sign in.
+            autopay.removeError = .unavailable
+            let failedRemove = await store.removeAutopayCard(enrollmentID: "enr-p24")
+            expect(failedRemove == .failed("The card couldn't be removed. Check your connection and try again."),
+                   "§6.3 a failed remove reports a text error")
+            expect(store.autopayPlanStatus(planID: "rinv-p24") == .on(apCard) && store.autopayRemovalsInFlight.isEmpty,
+                   "§6.3 a failed remove changes nothing")
+            autopay.removeError = .rejectedSession
+            let expiredRemove = await store.removeAutopayCard(enrollmentID: "enr-p24")
+            expect(expiredRemove == .failed("Your session expired. Sign in again to remove the card."),
+                   "§6.3 a rejected session without a refresh asks to sign in again")
+            autopay.removeError = nil
+
+            // The remove itself: no double submit while in flight, the card
+            // reads removed at once, and status is reread afterwards.
+            autopay.holdsRemove = true
+            let callsBeforeRemove = autopay.statusCalls
+            let firstRemove = Task { await store.removeAutopayCard(enrollmentID: "enr-p24") }
+            var spins = 0
+            while !autopay.removeStarted && spins < 100_000 { await Task.yield(); spins += 1 }
+            expect(autopay.removeStarted, "sanity: the remove reached the service")
+            expect(store.autopayRemovalsInFlight.contains("enr-p24"), "§6.3 the card reads as being removed while in flight")
+            let doubleTap = await store.removeAutopayCard(enrollmentID: "enr-p24")
+            expect(doubleTap == .alreadyInProgress, "§6.3 a second remove while one is in flight sends nothing")
+            autopay.statusResult = .failure(.unavailable)
+            autopay.releaseRemove()
+            let removed = await firstRemove.value
+            expect(removed == .removed && autopay.removedIDs == ["enr-p24", "enr-p24", "enr-p24"],
+                   "§6.3 the remove posts the enrollment id (once per attempt, never for the double tap)")
+            expect(autopay.statusCalls == callsBeforeRemove + 1, "§6.3 status is reread after a remove")
+            expect(store.autopayPlanStatus(planID: "rinv-p24") == .removed(by: "owner", reason: nil)
+                   && store.autopayActiveEnrollment(planID: "rinv-p24") == nil,
+                   "§6.3 the removed card stays removed even when the reread fails")
+            expect(store.autopayRemovalsInFlight.isEmpty, "§6.3 nothing is left in flight")
+
+            // A read that lands after the owner changed is dropped.
+            let beforeSwitch = store.autopayStatus
+            autopay.statusResult = .success(NativeAutopayStatusSnapshot(enrollments: [activeEnrollment], charges: []))
+            autopay.duringStatus = { store.scheduleBookingTestSeedSignedInOwner(subject: "user-p24-other", binding: String(repeating: "6", count: 64)) }
+            let raced = await store.refreshAutopayStatus(trigger: .plansList)
+            expect(!raced && store.autopayStatus == beforeSwitch, "§6.3 another owner's autopay read is never applied")
+            autopay.duringStatus = nil
+        }
 
         let canonicalCustomer: Canonical.Customer = try field("customer")
         let canonicalSettings: Canonical.Settings = try field("settings")
@@ -1739,8 +1926,18 @@ struct StoreIntegrationTests {
             expect(reopened.completedAt == nil && reopened.items == completed.items, "forms: reopening keeps the answers")
             expect(queueStore.reopenForm(id: formID) == .failure(.notCompleted), "forms: reopening twice is refused")
 
+            // Review fix (2026-10-03): the form PDF reads each photo from its
+            // file inside the render task instead of holding every photo's bytes.
+            let photoFile = queueStore.jobPhotoFileURL(photoID: photo.id)
+            expect(photoFile.flatMap { try? Data(contentsOf: $0) } == queueStore.jobPhotoBytes(photoID: photo.id)
+                   && photoFile != nil,
+                   "forms: a photo's file holds the same bytes the screen shows")
+            expect(queueStore.jobPhotoFileURL(photoID: "p1_missing") == nil && queueStore.jobPhotoFileURL(photoID: "../x") == nil,
+                   "forms: a photo with no bytes here, or an invalid id, has no file")
+
             // A deleted photo leaves a dangling id that no longer satisfies the item.
             expect(queueStore.deleteJobPhoto(photoID: photo.id), "forms: the job photo deletes")
+            expect(queueStore.jobPhotoFileURL(photoID: photo.id) == nil, "forms: a deleted photo's file is gone")
             expect(queueStore.form(id: formID)?.items[1].photoIds == [photo.id], "forms: the item keeps the dangling id")
             expect(queueStore.formItemPhotos(formID: formID, itemID: "fi_2").isEmpty, "forms: a dangling id resolves to nothing")
             expect(queueStore.formMissingItems(queueStore.form(id: formID)!).map(\.reasons) == [[.photoUnavailable]],
@@ -1819,6 +2016,375 @@ struct StoreIntegrationTests {
             expect(relaunched.form(id: formID) == queueStore.form(id: formID) && relaunched.customFormTemplates.isEmpty
                    && relaunched.formRecords.count == 3,
                    "forms: every form row survives a relaunch")
+        }
+
+        // MARK: - Phase 21: properties & equipment through AppStore
+
+        do {
+            func queuedCustomerValue(_ id: String) -> Canonical.Customer? {
+                guard let payload = pendingMutations(queueURL).last(where: { $0.table == "customers" && $0.recordId == id })?.payload,
+                      let data = try? JSONEncoder().encode(payload) else { return nil }
+                return try? JSONDecoder().decode(Canonical.Customer.self, from: data)
+            }
+            func queuedJobValue(_ id: String) -> Canonical.Job? {
+                guard let payload = pendingMutations(queueURL).last(where: { $0.table == "jobs" && $0.recordId == id })?.payload,
+                      let data = try? JSONEncoder().encode(payload) else { return nil }
+                return try? JSONDecoder().decode(Canonical.Job.self, from: data)
+            }
+            let owner = Customer(name: "Pat Property", phone: "555-0142", address: "12 Oak St")
+            expect(queueStore.upsert(owner), "properties: the customer saves")
+            let implicit = queueStore.customerProperties(customerID: owner.id)
+            expect(implicit.map(\.id) == [NativePropertiesEquipment.implicitPrimaryID] && implicit.first?.address == "12 Oak St",
+                   "properties: a customer starts with one implicit primary at their address")
+            expect(queueStore.canonicalCustomer(id: owner.id)?.properties == nil, "properties: nothing is stored yet")
+
+            // The first equipment action materializes the primary.
+            guard case let .success(furnace) = queueStore.addEquipment(
+                customerID: owner.id, propertyID: NativePropertiesEquipment.implicitPrimaryID,
+                draft: .init(type: "gas furnace", make: "Carrier", model: "59SC5", serial: "CAR-77",
+                             installDate: "2019-04-02", warrantyExpires: "2029-04-02")
+            ) else {
+                expect(false, "properties: equipment is added to the implicit primary")
+                throw StoreTestError.missingFixture
+            }
+            let materialized = queueStore.canonicalCustomer(id: owner.id)?.properties
+            expect(materialized?.count == 1 && materialized?.first?.primary == true && materialized?.first?.id == furnace.propertyID
+                   && materialized?.first?.address == nil, "properties: the primary is materialized with no stored address")
+            expect(queuedCustomerValue(owner.id)?.properties?.first?.equipment?.first?.type == "furnace",
+                   "properties: the change is queued as one customers upsert")
+
+            guard case let .success(rentalID) = queueStore.addProperty(
+                customerID: owner.id, draft: .init(label: "Rental on Elm", address: "44 Elm St", notes: "Lockbox 1234")
+            ) else {
+                expect(false, "properties: a property is added")
+                throw StoreTestError.missingFixture
+            }
+            expect(queueStore.customerProperties(customerID: owner.id).map(\.id) == [furnace.propertyID, rentalID],
+                   "properties: primary first, then the new property")
+            expect(queueStore.addProperty(customerID: owner.id, draft: .init(address: "44 elm st.")) == .failure(.duplicateAddress),
+                   "properties: a duplicate address is refused")
+            expect(queueStore.customerProperties(customerID: owner.id).count == 2, "properties: a refusal changes nothing")
+            expect(queueStore.addProperty(customerID: "missing", draft: .init(address: "1 A")) == .failure(.customerNotFound),
+                   "properties: an unknown customer is refused")
+            expect(queueStore.showsPropertyPicker(customerID: owner.id)
+                   && queueStore.propertyPickerOptions(customerID: owner.id).map(\.id) == [furnace.propertyID, rentalID],
+                   "properties: the job editor shows the picker for two properties")
+
+            // A customer edit (address included) keeps the nested properties;
+            // the primary's address follows.
+            var moved = queueStore.customers.first { $0.id == owner.id } ?? owner
+            moved.address = "14 Oak St"
+            expect(queueStore.upsert(moved), "properties: the customer edit saves")
+            expect(queueStore.canonicalCustomer(id: owner.id)?.properties?.count == 2
+                   && queueStore.customerProperty(customerID: owner.id, propertyID: furnace.propertyID)?.address == "14 Oak St",
+                   "properties: editing the customer keeps properties and moves the primary's address")
+
+            // "Add as a property" from a booking-style job at a new address.
+            let bookingJob = Job(customerId: owner.id, customerName: owner.name, title: "Leak at the cabin",
+                                 address: "9 Cabin Rd", estimateTotal: 250)
+            expect(queueStore.upsert(bookingJob), "properties: the job saves")
+            let before = queueStore.jobPropertyContext(jobID: bookingJob.id)
+            expect(before?.canAddAsProperty == true && before?.property == nil, "properties: a new address offers Add as a property")
+            expect(queueStore.estimateReviewDraft(jobID: bookingJob.id)?.serviceAddress == "9 Cabin Rd",
+                   "properties: the estimate shows the job's service address when it differs")
+            guard case let .success(cabinID) = queueStore.addJobAddressAsProperty(jobID: bookingJob.id) else {
+                expect(false, "properties: the job address becomes a property")
+                throw StoreTestError.missingFixture
+            }
+            let after = queueStore.jobPropertyContext(jobID: bookingJob.id)
+            expect(after?.linkedProperty?.id == cabinID && after?.canAddAsProperty == false,
+                   "properties: the job is linked and the offer is gone")
+            expect(queuedJobValue(bookingJob.id)?.propertyId == cabinID
+                   && queuedCustomerValue(owner.id)?.properties?.last?.address == "9 Cabin Rd",
+                   "properties: the job and the customer are queued together")
+            expect(queueStore.jobs.first { $0.id == bookingJob.id }?.propertyId == cabinID, "properties: the screen model carries the link")
+            expect(queueStore.propertyJobHistory(customerID: owner.id, propertyID: cabinID).map(\.id) == [bookingJob.id],
+                   "properties: the property's history lists the job")
+
+            // The job editor's pick writes through the normal job save.
+            var picked = queueStore.jobs.first { $0.id == bookingJob.id } ?? bookingJob
+            picked.propertyId = rentalID
+            expect(queueStore.upsert(picked) && queueStore.jobPropertyContext(jobID: bookingJob.id)?.linkedProperty?.id == rentalID,
+                   "properties: re-picking a property saves")
+            let atHome = Job(customerId: owner.id, customerName: owner.name, title: "Tune-up", address: "14 Oak St", estimateTotal: 90)
+            expect(queueStore.upsert(atHome), "properties: a job at the customer's address saves")
+            expect(queueStore.propertyJobHistory(customerID: owner.id, propertyID: furnace.propertyID).map(\.id) == [atHome.id],
+                   "properties: an unlinked job at the customer's address is in the primary's history")
+            expect(queueStore.estimateReviewDraft(jobID: atHome.id)?.serviceAddress == "",
+                   "properties: no service address at the customer's own address")
+
+            // Edits, archive and restore.
+            expect((try? queueStore.updateProperty(customerID: owner.id, propertyID: rentalID,
+                                                   draft: .init(label: "Elm duplex", address: "44 Elm St")).get())?
+                       .properties?.first { $0.id == rentalID }?.label == "Elm duplex",
+                   "properties: a property edit commits")
+            expect((try? queueStore.setPropertyArchived(customerID: owner.id, propertyID: rentalID, archived: true).get()) != nil
+                   && queueStore.jobPropertyContext(jobID: bookingJob.id)?.linkedProperty == nil,
+                   "properties: an archived property no longer resolves for its jobs (P3)")
+            expect(queueStore.jobs.first { $0.id == bookingJob.id }?.propertyId == rentalID,
+                   "properties: archiving never rewrites the job")
+            if case .failure(.primaryLocked) = queueStore.setPropertyArchived(
+                customerID: owner.id, propertyID: furnace.propertyID, archived: true
+            ) {} else {
+                expect(false, "properties: the primary can't be archived")
+            }
+            _ = queueStore.setPropertyArchived(customerID: owner.id, propertyID: rentalID, archived: false)
+            expect(queueStore.jobPropertyContext(jobID: bookingJob.id)?.linkedProperty?.id == rentalID, "properties: restore resolves again")
+            expect((try? queueStore.updateEquipment(customerID: owner.id, propertyID: furnace.propertyID, equipmentID: furnace.equipmentID,
+                                                    draft: .init(type: "furnace", serial: "CAR-78")).get()) != nil
+                   && queueStore.customerEquipmentSearchIndex[owner.id] == ["CAR-78"],
+                   "properties: an equipment edit commits and feeds search")
+            _ = queueStore.setEquipmentArchived(customerID: owner.id, propertyID: furnace.propertyID, equipmentID: furnace.equipmentID, archived: true)
+            expect(queueStore.customerProperty(customerID: owner.id, propertyID: furnace.propertyID)?.archivedEquipment.count == 1,
+                   "properties: Mark as removed keeps the item as past equipment")
+
+            // Delete + undo through the shared undo.
+            let snapshotBefore = queueStore.canonicalCustomer(id: owner.id)
+            expect(queueStore.deleteEquipment(customerID: owner.id, propertyID: furnace.propertyID, equipmentID: furnace.equipmentID),
+                   "properties: the equipment entry deletes")
+            expect(queueStore.pendingRecordDeleteUndo?.kind == .equipment
+                   && queuedCustomerValue(owner.id)?.properties?.first?.equipment == nil,
+                   "properties: the delete offers the shared undo and queues the customer")
+            queueStore.undoRecordDeletion()
+            let sortedEncoder = JSONEncoder()
+            sortedEncoder.outputFormatting = .sortedKeys
+            let restoredProperties = try sortedEncoder.encode(queueStore.canonicalCustomer(id: owner.id)?.properties)
+            let propertiesBefore = try sortedEncoder.encode(snapshotBefore?.properties)
+            expect(restoredProperties == propertiesBefore, "properties: undo restores the equipment exactly")
+            expect(queueStore.deleteProperty(customerID: owner.id, propertyID: cabinID), "properties: a property deletes")
+            expect(queueStore.pendingRecordDeleteUndo?.bannerMessage == "Deleted property 9 Cabin Rd",
+                   "properties: the property delete names its address")
+            queueStore.undoRecordDeletion()
+            expect(queueStore.customerProperty(customerID: owner.id, propertyID: cabinID) != nil, "properties: undo restores the property")
+            expect(!queueStore.deleteProperty(customerID: owner.id, propertyID: furnace.propertyID)
+                   && queueStore.customerProperties(customerID: owner.id).count == 3,
+                   "properties: the primary can't be deleted")
+
+            // Insight policy and durability.
+            expect(NativeInsightsCardPolicy.isMuteable(.warrantyExpiring) && NativeInsightsCardPolicy.snoozeDays(for: .warrantyExpiring) == 14,
+                   "properties: the warranty insight is muteable with a 14-day snooze")
+            let relaunched = AppStore(fileURL: queueURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
+            expect(relaunched.customerProperties(customerID: owner.id).map(\.id) == queueStore.customerProperties(customerID: owner.id).map(\.id)
+                   && relaunched.jobs.first { $0.id == bookingJob.id }?.propertyId == rentalID,
+                   "properties: properties and links survive a relaunch")
+        }
+
+        // MARK: - Phase 33: tags, the opt-out and campaigns through AppStore
+
+        do {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tradeready-phase33-\(UUID().uuidString)", isDirectory: true)
+            let backupDir = dir.appendingPathComponent("backups", isDirectory: true)
+            try FileManager.default.createDirectory(at: backupDir, withIntermediateDirectories: true)
+            defer {
+                try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: backupDir.path)
+                try? FileManager.default.removeItem(at: dir)
+            }
+            let url = dir.appendingPathComponent("store.json")
+            let repository = Canonical.SnapshotRepository(
+                primaryURL: url, backupURL: backupDir.appendingPathComponent("store.json.backup")
+            )
+            let loader = CoachTestLoader()
+            let store = AppStore(
+                fileURL: url, seedIfMissing: false, repository: repository,
+                subscriptionService: StoreSubscriptionServiceStub(),
+                coachTransport: NativeCoachTransport(backendBaseURL: URL(string: "https://backend.invalid")!, loader: loader),
+                secureSettingsStore: hostTestSecureSettingsStore()
+            )
+            func queued(_ table: String, _ id: String) -> Canonical.MutationItem? {
+                pendingMutations(url).last { $0.table == table && $0.recordId == id }
+            }
+            func queuedObject(_ table: String, _ id: String) -> [String: Canonical.JSONValue]? {
+                guard case let .object(fields)? = queued(table, id)?.payload else { return nil }
+                return fields
+            }
+            func queuedCampaign(_ id: String) -> Canonical.Campaign? {
+                guard let payload = queued("campaigns", id)?.payload, let data = try? JSONEncoder().encode(payload) else { return nil }
+                return try? JSONDecoder().decode(Canonical.Campaign.self, from: data)
+            }
+            store.settings.businessName = "Saguaro Heating"
+            store.settings.contactName = "Rafa"
+            store.settings.address = "PO Box 12, Mesa, AZ 85201"
+            let dana = Customer(name: "Dana Ortiz", phone: "602-555-0101")
+            let sam = Customer(name: "Sam Lee", email: "sam@example.com")
+            let lee = Customer(name: "Lee Park", phone: "480-555-0102")
+            expect(store.upsert(dana) && store.upsert(sam) && store.upsert(lee), "campaigns: customers save")
+            let served = Calendar.current.date(byAdding: .month, value: -8, to: .now) ?? .now
+            var leeJobID = ""
+            for (customer, title) in [(dana, "Furnace tune-up"), (sam, "AC repair"), (lee, "Water heater")] {
+                let job = Job(customerId: customer.id, customerName: customer.name, title: title, status: .paid, scheduledAt: served)
+                if customer.id == lee.id { leeJobID = job.id }
+                expect(store.upsert(job), "campaigns: a delivered job saves (\(title))")
+            }
+
+            // Tags (spec §3.2): normalized, enqueued, projected; missing customers refused.
+            expect(store.setCustomerTags(customerID: dana.id, tags: ["#VIP", "ac", "vip"]), "tags: set")
+            expect(store.canonicalCustomer(id: dana.id)?.tags == ["ac", "VIP"], "tags: stored normalized and sorted")
+            expect(queuedObject("customers", dana.id)?["tags"] == .array([.string("ac"), .string("VIP")]),
+                   "tags: the customer upsert is enqueued with the tags")
+            expect(store.customers.first { $0.id == dana.id }?.tags == ["ac", "VIP"], "tags: the UI projection carries them")
+            expect(store.customerTagVocabulary.map(\.key) == ["ac", "vip"], "tags: the vocabulary is derived from customers")
+            expect(!store.setCustomerTags(customerID: "missing", tags: ["x"]), "tags: a missing customer is refused")
+            expect(store.setCustomerTags(customerID: dana.id, tags: []), "tags: clearing succeeds")
+            expect(store.canonicalCustomer(id: dana.id)?.tags == nil && queuedObject("customers", dana.id)?["tags"] == nil,
+                   "tags: clearing removes the key from the record and the queued upsert")
+            _ = store.setCustomerTags(customerID: dana.id, tags: ["VIP"])
+
+            // The opt-out toggle (spec §4.1): today's local date and the reason.
+            let optDay = NativeCashBasis.localDate(year: 2026, month: 9, day: 3, hour: 9)
+            expect(store.setMarketingOptOut(customerID: lee.id, via: .textStop, on: optDay), "opt-out: set")
+            expect(queuedObject("customers", lee.id)?["marketingOptOutOn"] == .string("2026-10-03")
+                   && queuedObject("customers", lee.id)?["marketingOptOutVia"] == .string("text_stop"),
+                   "opt-out: the customer upsert carries the local date and the reason")
+            expect(store.customerOptedOutOfMarketing(jobID: leeJobID), "opt-out: the review-request line sees it")
+            expect(store.clearMarketingOptOut(customerID: lee.id)
+                   && store.canonicalCustomer(id: lee.id)?.isMarketingOptedOut == false
+                   && queuedObject("customers", lee.id)?["marketingOptOutOn"] == nil,
+                   "opt-out: turning it off clears both fields and enqueues")
+            _ = store.setMarketingOptOut(customerID: lee.id, via: .asked)
+
+            // Campaign drafts (spec §5.4, §7.1).
+            let campaignsBefore = store.campaignRecords.count
+            var draft = store.makeCampaignDraft(preset: .everyoneServed)
+            expect(store.campaignRecords.count == campaignsBefore && store.campaign(id: draft.id) == nil,
+                   "draft: making one stores nothing until it is saved")
+            expect(draft.id.hasPrefix("cmp_") && draft.id.count == 40 && NativeAttributionCode.isValid(draft.code)
+                   && draft.status == "draft", "draft: a cmp_ UUID id, a valid ?c= code, draft status")
+            draft.message.text = "Hi {firstName}, it's {ownerName}. Time for a check-up?"
+            draft.message.emailSubject = "Check-up time"
+            draft.message.emailBody = "Hi {firstName},\nTime for a check-up?"
+            guard case let .success(saved) = store.saveCampaignDraft(draft) else {
+                expect(false, "draft: saving succeeds")
+                throw StoreTestError.missingFixture
+            }
+            expect(queued("campaigns", saved.id)?.op == .upsert && queuedCampaign(saved.id)?.message.text == draft.message.text,
+                   "draft: saving enqueues one campaigns upsert")
+            let audience = store.campaignAudience(for: saved)
+            expect(audience.recipients.map(\.customerID) == [dana.id, sam.id], "audience: by name, the opted-out customer left out")
+            expect(audience.exclusions.first { $0.customerID == lee.id }?.reason == .optedOut, "audience: the opt-out is the reason")
+            expect(audience.recipients.last?.channel == .email, "audience: email reaches the email-only customer once the address is set")
+            guard case let .success(frozen) = store.startCampaignSending(id: saved.id, bookingLink: .off) else {
+                expect(false, "send: Start sending freezes the audience")
+                throw StoreTestError.missingFixture
+            }
+            expect(frozen.status == "sending" && frozen.recipients?.map(\.customerId) == [dana.id, sam.id]
+                   && queuedCampaign(saved.id)?.status == "sending" && queuedCampaign(saved.id)?.recipients?.count == 2,
+                   "send: the frozen campaign persists and enqueues")
+            var tampered = frozen
+            tampered.message.text = "Changed"
+            expect(store.updateCampaignDraft(tampered) == .failure(.messageLocked), "send: a started campaign's message cannot change")
+
+            // The queue (spec §7.3): live check, one outcome per write, the lock.
+            guard case .success(.ready(let contact)) = store.prepareCampaignRecipient(campaignID: saved.id, customerID: dana.id) else {
+                expect(false, "send: the live check passes for Dana")
+                throw StoreTestError.missingFixture
+            }
+            expect(contact == "602-555-0101", "send: the composer gets the live phone")
+            let rendered = store.renderCampaignMessage(frozen, kind: .text, customerID: dana.id, fallbackName: "Dana",
+                                                        bookingLink: .off)
+            expect(rendered.body == "Hi Dana, it's Rafa. Time for a check-up?\n\nReply STOP to opt out.",
+                   "send: the rendered text carries the opt-out line")
+            guard case let .success(sentOutcome) = store.recordCampaignOutcome(
+                campaignID: saved.id, customerID: dana.id, outcome: .sent, autoAdvance: true
+            ) else {
+                expect(false, "send: a .sent outcome is recorded")
+                throw StoreTestError.missingFixture
+            }
+            expect(sentOutcome.advances, "send: auto-advance after a send")
+            let afterSend = queuedCampaign(saved.id)
+            expect(afterSend?.recipients?.first?.status == "sent" && afterSend?.recipients?.first?.sentAt != nil
+                   && afterSend?.message.lockedAt != nil, "send: the sent recipient and the lock persist and enqueue")
+            if case .success = store.recordCampaignOutcome(campaignID: saved.id, customerID: sam.id, outcome: .cancelled, autoAdvance: true) {
+                expect(store.campaign(id: saved.id)?.recipients?[1].status == "pending", "send: a cancel keeps the recipient pending")
+            } else { expect(false, "send: a cancel is accepted") }
+
+            // "They asked to stop": the opt-out and the skip in one commit.
+            guard case let .success(stopped) = store.campaignRecipientAskedToStop(campaignID: saved.id, customerID: sam.id) else {
+                expect(false, "send: They asked to stop succeeds")
+                throw StoreTestError.missingFixture
+            }
+            expect(store.canonicalCustomer(id: sam.id)?.isMarketingOptedOut == true
+                   && queuedObject("customers", sam.id)?["marketingOptOutVia"] == .string("asked"),
+                   "stop: the customer is opted out and enqueued")
+            expect(stopped.recipients?[1].skipReason == "opted_out" && stopped.status == "done"
+                   && queuedCampaign(saved.id)?.status == "done", "stop: the recipient is skipped and the campaign is done")
+            expect(store.campaignResults(stopped).sent == 1, "results: one sent")
+
+            // Live re-validation skips an archived customer, persisted.
+            var second = store.makeCampaignDraft(preset: .everyoneServed)
+            second.segment.excludeContactedWithinDays = 0
+            second.message.text = "Hi {firstName}"
+            _ = store.saveCampaignDraft(second)
+            guard case let .success(secondFrozen) = store.startCampaignSending(id: second.id, bookingLink: .off),
+                  secondFrozen.recipients?.map(\.customerId) == [dana.id] else {
+                expect(false, "live: the second campaign freezes with Dana only")
+                throw StoreTestError.missingFixture
+            }
+            store.setCustomerArchived(id: dana.id, archived: true)
+            let archivedCheck = store.prepareCampaignRecipient(campaignID: second.id, customerID: dana.id)
+            expect(archivedCheck == .success(.skip(.archived)), "live: an archived customer is skipped before the composer")
+            expect(queuedCampaign(second.id)?.recipients?.first?.skipReason == "archived", "live: the skip persists and enqueues")
+            store.setCustomerArchived(id: dana.id, archived: false)
+
+            // A .sent that cannot be saved is reported and changes nothing.
+            var third = store.makeCampaignDraft(preset: .everyoneServed)
+            third.segment.excludeContactedWithinDays = 0
+            third.message.text = "Hi {firstName}"
+            _ = store.saveCampaignDraft(third)
+            _ = store.startCampaignSending(id: third.id, bookingLink: .off)
+            try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: backupDir.path)
+            let unsaved = store.recordCampaignOutcome(campaignID: third.id, customerID: dana.id, outcome: .sent, autoAdvance: true)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: backupDir.path)
+            expect(unsaved == .failure(.notSaved), "persist: a .sent that fails to save surfaces .notSaved (the screen's notice)")
+            expect(store.campaign(id: third.id)?.recipients?.first?.status == "pending",
+                   "persist: nothing changes in memory, so the composer never re-presents on its own")
+
+            // AI drafting (spec §6.2): only Settings and the brief reach the provider.
+            store.coachAdvisoryAnthropicKeyOverride = ""
+            store.coachAdvisoryGroqKeyOverride = "gsk-test-key"
+            loader.status = 200
+            loader.responseData = Data(#"{"choices":[{"message":{"content":"BODY: Hi {FirstName}! Our $79 tune-up is back."}}]}"#.utf8)
+            let brief = NativeCampaignDrafting.Brief(goal: .tuneUp, tone: .friendly, kind: .text, details: "$89 furnace tune-up")
+            let drafted = await store.draftCampaignMessage(brief: brief, bookingLinkReady: false)
+            expect(drafted.source == .ai && drafted.draft.body == "Hi {firstName}! Our $79 tune-up is back.",
+                   "draft AI: the parsed reply is used")
+            expect(drafted.warnings == ["The draft mentions $79. Your details said $89. Check it before sending."],
+                   "draft AI: the fact check warns")
+            let sentBody = String(data: loader.lastRequest?.httpBody ?? Data(), encoding: .utf8) ?? ""
+            for value in ["Dana", "Ortiz", "Sam Lee", "Lee Park", "602-555-0101", "480-555-0102", "sam@example.com", "PO Box"] {
+                expect(!sentBody.contains(value), "draft AI: no customer data or address reaches the provider (\(value))")
+            }
+            expect(sentBody.contains("Saguaro Heating") && sentBody.contains("$89 furnace tune-up")
+                   && !sentBody.contains("BUSINESS DATA"), "draft AI: the business name and brief go, the coach data block does not")
+            let request = store.campaignDraftRequest(brief: brief, bookingLinkReady: false)
+            expect(sentBody.contains("Seasonal tune-up") && request.systemPrompt.contains("Saguaro Heating"),
+                   "draft AI: the request is the dedicated campaign prompt")
+            loader.status = 500
+            loader.responseData = Data()
+            let fallback = await store.draftCampaignMessage(brief: brief, bookingLinkReady: false)
+            expect(fallback.source == .template && fallback.notice == NativeCampaignDrafting.fallbackNotice,
+                   "draft AI: a provider failure starts from the template with the notice")
+            store.coachAdvisoryGroqKeyOverride = nil
+            store.coachAdvisoryAnthropicKeyOverride = nil
+
+            // Duplicate, delete and undo; durable across a relaunch.
+            guard case let .success(copy) = store.duplicateCampaign(id: saved.id) else {
+                expect(false, "duplicate: succeeds")
+                throw StoreTestError.missingFixture
+            }
+            expect(copy.status == "draft" && copy.recipients == nil && copy.message.lockedAt == nil && copy.code != saved.code
+                   && queued("campaigns", copy.id)?.op == .upsert, "duplicate: an editable draft copy is enqueued")
+            expect(store.deleteCampaign(id: copy.id) && queued("campaigns", copy.id)?.op == .delete
+                   && store.pendingRecordDeleteUndo?.kind == .campaign, "delete: a campaigns tombstone with the shared undo")
+            store.undoRecordDeletion()
+            expect(store.campaign(id: copy.id) == copy && queued("campaigns", copy.id)?.op == .upsert, "delete: undo restores the copy")
+            let relaunched = AppStore(fileURL: url, seedIfMissing: false, repository: repository,
+                                      subscriptionService: StoreSubscriptionServiceStub(),
+                                      secureSettingsStore: hostTestSecureSettingsStore())
+            expect(relaunched.campaign(id: saved.id) == store.campaign(id: saved.id)
+                   && relaunched.canonicalCustomer(id: dana.id)?.tags == ["VIP"]
+                   && relaunched.canonicalCustomer(id: sam.id)?.isMarketingOptedOut == true,
+                   "durable: campaigns, tags and opt-outs survive a relaunch")
         }
 
 
@@ -2395,6 +2961,207 @@ struct StoreIntegrationTests {
             store2.scrubScheduleBookingPendingWork(binding: "bind-recover")
             expect(store2.pendingScheduleBookingWorkStore().load().isEmpty,
                    "8.08 account boundary scrubs owner-bound pending work")
+        }
+
+        // MARK: - Phase 34: referrals through AppStore (spec 2026-10-03-referral-program-design.md §5.2, §5.6, §7)
+        do {
+            func customer34(_ json: String) -> Canonical.Customer {
+                try! JSONDecoder().decode(Canonical.Customer.self, from: Data(json.utf8))
+            }
+            func job34(id: String, status: String, invoiceId: String? = nil) -> Canonical.Job {
+                var json = """
+                {"id":"\(id)","customerId":"c_sam","customerName":"Sam Ortiz","title":"Panel swap",
+                 "description":"d","status":"\(status)","address":"1 Main",
+                 "estimateTotal":500,"laborHours":4,"laborRate":100,"materials":[],
+                 "materialMarkup":0,"overhead":10,"margin":30,"notes":"",
+                 "createdAt":"2026-09-01T00:00:00.000Z"
+                """
+                if let invoiceId { json += ",\"invoiceId\":\"\(invoiceId)\"" }
+                return try! JSONDecoder().decode(Canonical.Job.self, from: Data((json + "}").utf8))
+            }
+            let customers = [
+                customer34(#"{"id":"c_sam","name":"Sam Ortiz","email":"sam@example.test","phone":"602-555-0142","address":"","notes":""}"#),
+                customer34(#"{"id":"c_alex","name":"Alex Kim","email":"","phone":"","address":"","notes":"","leadSource":"referral","referredByCustomerId":"c_sam","referralReward":{"kind":"invoice_credit","amount":25,"recordedOn":"2026-09-10"}}"#),
+                customer34(#"{"id":"c_bea","name":"Bea Ray","email":"","phone":"","address":"","notes":"","leadSource":"referral","referredByCustomerId":"c_sam"}"#),
+            ]
+            var settings = settings08(bookingLink: "{\"token\":\"\(token48A)\",\"enabled\":true}")
+            settings.autoInvoiceOnComplete = true
+            let (store, dir) = try seed08Store(
+                jobs: [job34(id: "j_done", status: "complete"), job34(id: "j_auto", status: "in_progress"),
+                       job34(id: "j_deposit", status: "approved")],
+                customers: customers, settings: settings, tag: "referrals")
+            let storeURL = dir.appendingPathComponent("store.json")
+            func queued(_ table: String, _ id: String) -> [Canonical.MutationItem] {
+                pendingMutations(storeURL).filter { $0.table == table && $0.recordId == id }
+            }
+            func stored(_ id: String) -> Canonical.Customer? {
+                try? snapshot08(storeURL).payload.customers?.first { $0.id == id }
+            }
+
+            // Codes: generated once, persisted and queued; idempotent.
+            var draws = 0
+            let fixedBytes: (Int) -> [UInt8]? = { count in draws += 1; return [UInt8](repeating: 7, count: count) }
+            expect(store.referralCode(customerID: "c_sam") == nil, "34 no code exists before the first share")
+            let code = store.ensureReferralCode(customerID: "c_sam", randomBytes: fixedBytes)
+            expect(code != nil && code == NativeReferrals.encodeCode([UInt8](repeating: 7, count: 10)),
+                   "34 ensureReferralCode generates a code from the injected bytes")
+            expect(stored("c_sam")?.referralCode == code, "34 the code is persisted on the customer")
+            expect(queued("customers", "c_sam").count == 1, "34 the code write is queued once")
+            let again = store.ensureReferralCode(customerID: "c_sam", randomBytes: fixedBytes)
+            expect(again == code && draws == 1, "34 ensureReferralCode is idempotent and draws no new bytes")
+            expect(queued("customers", "c_sam").count == 1, "34 an existing code writes nothing")
+            expect(store.ensureReferralCode(customerID: "c_missing", randomBytes: fixedBytes) == nil, "34 a missing customer has no code")
+            expect(store.ensureReferralCode(customerID: "c_bea", randomBytes: { _ in nil }) == nil
+                   && stored("c_bea")?.referralCode == nil, "34 an RNG failure writes nothing")
+            expect(store.ensureReferralCode(customerID: "c_bea", randomBytes: { count in [UInt8](repeating: 7, count: count) }) == nil,
+                   "34 a colliding code fails closed after three draws (R2)")
+
+            // Reset: a new code, the old one dropped (not aliased).
+            let resetBytes: (Int) -> [UInt8]? = { count in [UInt8](repeating: 9, count: count) }
+            expect(store.resetReferralCode(customerID: "c_sam", randomBytes: resetBytes), "34 resetReferralCode succeeds")
+            let resetCode = stored("c_sam")?.referralCode
+            expect(resetCode != nil && resetCode != code && stored("c_sam")?.referralCodeAliases == nil,
+                   "34 the reset code replaces the old one, which is not kept as an alias")
+            expect(queued("customers", "c_sam").count == 1 && store.referralCode(customerID: "c_sam") == resetCode,
+                   "34 the reset is queued")
+            expect(!store.resetReferralCode(customerID: "c_bea", randomBytes: resetBytes), "34 a customer with no code has nothing to reset")
+
+            // Share link: only after a fresh verified status read.
+            let unverified = await store.referralShareLink(customerID: "c_bea")
+            expect(unverified == .unverified && stored("c_bea")?.referralCode == nil,
+                   "34 signed out: unverified, and no code is created for a customer never shared")
+            let missingLink = await store.referralShareLink(customerID: "c_missing")
+            expect(missingLink == .unavailable, "34 a missing customer is unavailable")
+            seed08Owner(store, binding: "bind-ref")
+            let loader = ScheduleBookingTestLoader()
+            let service = NativeBookingAdministrationService(
+                endpoint: URL(string: "https://example.com/api/booking/admin")!, loader: loader)
+            loader.handler = { _ in (Data("{\"ok\":true,\"enabled\":false,\"revision\":3,\"tokenValid\":true}".utf8), 200) }
+            let off = await store.referralShareLink(customerID: "c_bea", adminService: service)
+            expect(off == .bookingLinkOff && stored("c_bea")?.referralCode == nil,
+                   "34 a disabled booking link is bookingLinkOff, and no code is created")
+            loader.handler = { _ in (Data("oops".utf8), 500) }
+            let failedRead = await store.referralShareLink(customerID: "c_bea", adminService: service)
+            expect(failedRead == .unverified, "34 a failed status read is unverified")
+            loader.handler = { _ in (Data("{\"ok\":true,\"enabled\":true,\"revision\":3,\"tokenValid\":true}".utf8), 200) }
+            let ready = await store.referralShareLink(customerID: "c_bea", adminService: service, randomBytes: { count in
+                [0x00, 0x44, 0x32, 0x14, 0xC7, 0x42, 0x54, 0xB6, 0x35, 0xCF].prefix(count).map { $0 }
+            })
+            expect(ready == .ready(URL(string: "https://gettradereadyapp.com/book.html?b=\(token48A)&r=0123456789abcdef")!),
+                   "34 a verified, enabled link returns the referral URL")
+            expect(stored("c_bea")?.referralCode == "0123456789abcdef", "34 sharing created and stored Bea's code")
+            if case let .ready(url) = ready {
+                expect(NativeBookingAdministrationService.isValidBookingURL(url, token: token48A),
+                       "34 the referral URL is still a valid booking URL")
+            }
+
+            // Rewards: a record on the referred customer, queued.
+            let reward = try NativeReferrals.makeReward(kind: .invoiceCredit, amount: 10, note: "Thanks", recordedOn: "2026-09-20")
+            expect(store.recordReferralReward(referredCustomerID: "c_bea", reward: reward), "34 recordReferralReward saves")
+            expect(stored("c_bea")?.referralReward?.amount == 10 && queued("customers", "c_bea").count == 1,
+                   "34 the reward is persisted and queued")
+            expect(!store.recordReferralReward(referredCustomerID: "c_sam", reward: reward),
+                   "34 a customer without a referrer cannot carry a reward (R3)")
+            expect(store.referralSummary(customerID: "c_sam")?.creditOwed == 35, "34 Sam is owed 25 + 10")
+            expect(store.removeReferralReward(referredCustomerID: "c_bea") && stored("c_bea")?.referralReward == nil,
+                   "34 removeReferralReward clears the record")
+            expect(store.referralSummary(customerID: "c_sam")?.creditOwed == 25, "34 removing the reward re-closes its credit")
+            let summary = store.referralSummary(customerID: "c_sam")
+            expect(Set(summary?.referred.map(\.id) ?? []) == ["c_alex", "c_bea"] && summary?.hasCode == true,
+                   "34 the summary lists everyone Sam referred")
+
+            // Auto-invoice never adds a credit line.
+            guard case let .autoInvoiced(autoID) = store.completeJob(id: "j_auto") else {
+                expect(false, "34 the auto-invoice fixture completes into an invoice")
+                throw StoreTestError.missingFixture
+            }
+            let autoInvoice = try snapshot08(storeURL).payload.invoices?.first { $0.id == autoID }
+            expect(autoInvoice?.amount == 500 && autoInvoice?.lineItems?.contains { $0.category == "referral_credit" } == false,
+                   "34 auto-invoice on complete never applies a referral credit")
+            expect(store.referralCreditOwed(customerId: "c_sam", name: "Sam Ortiz") == 25, "34 the credit is still owed")
+
+            // Invoice-from-job: offered, applied as a negative line, never a payment.
+            guard var draft = store.invoiceFromJobDraft(jobID: "j_done") else {
+                expect(false, "34 the complete job opens an invoice draft")
+                throw StoreTestError.missingFixture
+            }
+            expect(draft.mode == .create && draft.referralCreditAvailable == 25 && draft.amount == 500,
+                   "34 the create draft offers the owed credit")
+            draft.referralCreditToApply = 30
+            draft.amount = 470
+            expect(!store.commitInvoiceFromJob(draft), "34 a credit larger than what is owed is refused")
+            let invoiceCountAfterRefusal = try snapshot08(storeURL).payload.invoices?.count
+            expect(invoiceCountAfterRefusal == 1, "34 …and nothing is written")
+            draft.referralCreditToApply = 25
+            draft.amount = 475
+            expect(store.commitInvoiceFromJob(draft), "34 the invoice with the credit commits")
+            let credited = try snapshot08(storeURL).payload.invoices?.first { $0.jobId == "j_done" }
+            expect(credited?.amount == 475, "34 the credit lowers invoice.amount")
+            let creditLine = credited?.lineItems?.first { $0.category == "referral_credit" }
+            expect(creditLine?.amount == -25 && creditLine?.description == "Referral credit \u{2014} thank you!",
+                   "34 the credit is a negative Referral credit line")
+            expect((credited?.payments ?? []).isEmpty, "34 the credit is never a payment entry")
+            expect(credited.map { queued("invoices", $0.id).count } == 1, "34 the credited invoice is queued")
+            expect(store.referralCreditOwed(customerId: "c_sam", name: "Sam Ortiz") == 0, "34 the applied credit is no longer owed")
+            if let credited {
+                let ledger = NativeCashBasis.ledgerInvoice(credited)
+                expect(PaymentLedger.balanceDue(ledger) == 475, "34 balance due is the lowered amount")
+                let pdf = NativeInvoicePDFDocument(invoice: credited, settings: settings)
+                expect(pdf.total == 475 && pdf.balance == 475
+                       && pdf.lineItems.contains { $0.label == "Referral credit \u{2014} thank you!" && $0.amount == -25 },
+                       "34 the PDF prints the credit line and the lowered total")
+                var paidPayment = Payment()
+                paidPayment.amount = 475
+                paidPayment.method = "Cash"
+                if case let .success(paid) = store.recordPayment(invoiceID: credited.id, payment: paidPayment) {
+                    expect(paid.isPaid, "34 paying the lowered amount settles the invoice")
+                } else {
+                    expect(false, "34 a payment on the credited invoice records")
+                }
+                let paidInvoice = try snapshot08(storeURL).payload.invoices?.first { $0.id == credited.id }
+                let allTime = NativeCashBasis.range(for: "all_time", now: Date())
+                expect(paidInvoice.map { NativeCashBasis.collected(invoices: [$0], start: allTime.start, end: allTime.end) } == 475,
+                       "34 collected cash is what the customer paid, not the pre-credit total")
+            }
+            guard let noCreditDraft = store.invoiceFromJobDraft(jobID: "j_deposit") else {
+                expect(false, "34 the approved job opens a deposit draft")
+                throw StoreTestError.missingFixture
+            }
+            expect(noCreditDraft.mode == .requestDeposit && noCreditDraft.referralCreditAvailable == 0,
+                   "34 a deposit request never offers a credit")
+
+            // Finalize keeps an applied credit through a recompute.
+            expect(store.recordReferralReward(referredCustomerID: "c_bea", reward: reward), "34 Bea's 10 credit is recorded")
+            expect(store.commitInvoiceFromJob(noCreditDraft), "34 the deposit invoice commits")
+            if var depositJob = store.jobs.first(where: { $0.id == "j_deposit" }) {
+                depositJob.status = .complete
+                expect(store.upsert(depositJob), "34 the deposit job is completed")
+            }
+            guard var finalizeDraft = store.invoiceFromJobDraft(jobID: "j_deposit") else {
+                expect(false, "34 the completed deposit job opens a finalize draft")
+                throw StoreTestError.missingFixture
+            }
+            expect(finalizeDraft.mode == .finalize && finalizeDraft.referralCreditAvailable == 10,
+                   "34 finalize offers the newly owed credit")
+            finalizeDraft.referralCreditToApply = 10
+            finalizeDraft.amount -= 10
+            let finalizedAmount = finalizeDraft.amount
+            expect(store.commitInvoiceFromJob(finalizeDraft), "34 finalize with a credit commits")
+            if var reopened = store.jobs.first(where: { $0.id == "j_deposit" }) {
+                reopened.status = .complete
+                expect(store.upsert(reopened), "34 the finalized job is set back to complete")
+            }
+            guard let refinalize = store.invoiceFromJobDraft(jobID: "j_deposit") else {
+                expect(false, "34 a second finalize draft opens")
+                throw StoreTestError.missingFixture
+            }
+            expect(refinalize.referralCreditAvailable == 0 && refinalize.amount == finalizedAmount,
+                   "34 a second finalize offers nothing and keeps the credited amount")
+            expect(store.commitInvoiceFromJob(refinalize), "34 the recompute commits")
+            let refinalized = try snapshot08(storeURL).payload.invoices?.first { $0.jobId == "j_deposit" }
+            expect(refinalized?.lineItems?.filter { $0.category == "referral_credit" }.map(\.amount) == [-10],
+                   "34 the recompute keeps the earlier credit line exactly once")
+            expect(store.referralCreditOwed(customerId: "c_sam", name: "Sam Ortiz") == 0, "34 nothing is owed afterwards")
         }
 
         // P1 portal admin: saved-customer guard, server-first merge, already_exists adoption.
@@ -3429,7 +4196,7 @@ struct StoreIntegrationTests {
                 description: "Quarterly service", amount: 200, dueDays: 30,
                 cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
                 occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: "2026-10-01",
-                isActive: true, createdAt: "2026-09-01", autoSendEnabled: false)
+                isActive: true, createdAt: "2026-09-01", autoSendEnabled: false, autopayEnabled: nil)
             expect(rinvStore.createRecurringInvoice(rule), "10.08 rinv fixture plan creates")
 
             // Success, but nothing has generated yet: routes to the plain
@@ -3560,7 +4327,7 @@ struct StoreIntegrationTests {
                 description: "Key plan", amount: 150, dueDays: 30,
                 cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
                 occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: "2026-12-01",
-                isActive: true, createdAt: "2026-09-01", autoSendEnabled: false)
+                isActive: true, createdAt: "2026-09-01", autoSendEnabled: false, autopayEnabled: nil)
             expect(keyStore.createRecurringInvoice(rinvRule), "10.08 schedule-key rinv fixture saves")
             let keyAfterRinvCreated = keyStore.estimateFollowUpNotificationScheduleKey
 
@@ -4116,6 +4883,11 @@ struct StoreIntegrationTests {
                    "10.12 low_margin_estimate is dismiss-only, no snooze option")
             expect(NativeInsightsCardPolicy.snoozeDays(for: .expenseAnomaly) == nil,
                    "10.12 expense_anomaly is dismiss-only, no snooze option")
+            // Phase 34: referral_thanks is muteable, dismiss-only, with the gift icon.
+            expect(NativeInsightsCardPolicy.isMuteable(.referralThanks)
+                   && NativeInsightsCardPolicy.snoozeDays(for: .referralThanks) == nil
+                   && NativeInsightsCardPolicy.symbolName(for: .referralThanks) == "gift",
+                   "34 referral_thanks is muteable, dismiss-only, icon gift")
 
             // Fail-closed (brief step 5, decision row 17): mutes == nil (the
             // store was unreadable) renders ONLY the five non-muteable kinds,
@@ -4142,6 +4914,38 @@ struct StoreIntegrationTests {
                    "10.12 gate ordering: zero visible insights suppresses the card even when otherwise eligible")
             expect(NativeInsightsCardPolicy.isVisible(setupComplete: true, hero: nil, insights: five),
                    "10.12 gate ordering: setup complete + no hero + insights present shows the card")
+
+            // Phase 32 (spec 2026-10-03 §6.8): quote_expired is dismiss-only
+            // (its id carries the date, so an extension re-arms it);
+            // quote_expiring resolves on its own and has no mute affordance.
+            expect(NativeInsightsCardPolicy.isMuteable(.quoteExpired) && NativeInsightsCardPolicy.snoozeDays(for: .quoteExpired) == nil,
+                   "Phase 32 quote_expired is dismiss-only")
+            expect(!NativeInsightsCardPolicy.isMuteable(.quoteExpiring), "Phase 32 quote_expiring is not muteable")
+            expect(NativeInsightsCardPolicy.symbolName(for: .quoteExpiring) == "hourglass"
+                   && NativeInsightsCardPolicy.symbolName(for: .quoteExpired) == "hourglass.bottomhalf.filled",
+                   "Phase 32 quote kinds use the hourglass symbols")
+            let expired = insight1012(.quoteExpired, id: "quote_expired:j9:2026-09-01")
+            let expiring = insight1012(.quoteExpiring, id: "quote_expiring:j8:2026-09-25")
+            let dismissed = [NativeInsightMutes.makeMute(id: expired.id, now: now)]
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [expiring, expired], mutes: dismissed, now: now).map(\.id) == [expiring.id],
+                   "Phase 32 a dismissed quote_expired row stays hidden")
+            let reArmed = insight1012(.quoteExpired, id: "quote_expired:j9:2026-09-20")
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [reArmed], mutes: dismissed, now: now).map(\.id) == [reArmed.id],
+                   "Phase 32 an extended-then-expired estimate (new date, new id) shows again")
+            // The dismiss-only aggregate carries its newest date, so
+            // dismissing one batch never hides the next one for good.
+            let batch = insight1012(.quoteExpired, id: "quote_expired:all:2026-09-01")
+            let batchDismissed = [NativeInsightMutes.makeMute(id: batch.id, now: now)]
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [batch], mutes: batchDismissed, now: now).isEmpty,
+                   "Phase 32 a dismissed quote_expired aggregate stays hidden")
+            let nextBatch = insight1012(.quoteExpired, id: "quote_expired:all:2026-09-20")
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [nextBatch], mutes: batchDismissed, now: now).map(\.id) == [nextBatch.id],
+                   "Phase 32 the next quote_expired aggregate shows despite the earlier dismissal")
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [expired, expiring], mutes: nil, now: now).map(\.id) == [expiring.id],
+                   "Phase 32 fail-closed hides quote_expired but keeps the self-resolving quote_expiring")
+            expect(NativeInsightsCardPolicy.muteControlsAvailable(for: .quoteExpired, mutes: [])
+                   && !NativeInsightsCardPolicy.muteControlsAvailable(for: .quoteExpiring, mutes: []),
+                   "Phase 32 only quote_expired offers mute controls")
         }
 
         // --- Every checklist destination (pure `NativeSetupChecklist.route`).
@@ -4584,6 +5388,40 @@ struct StoreIntegrationTests {
                    "10.12 fix1 I7a: the relaunched, re-activated store reads back a real (non-nil) checklist state")
             expect(relaunched.setupChecklistState?.isDone(.rate) == false,
                    "10.12 fix1 I7a: the on-disk setup-checklist store was actually removed by applyCompletedSignOutState, not just the in-memory copy")
+        }
+
+        // --- Phase 20 review fix (2026-10-03): form text a closing screen could
+        // not save is held in memory by form id, taken back once by the screen
+        // that owns it, and scrubbed at an account boundary.
+        do {
+            let (store, _) = try seed08Store(settings: settings08(), tag: "forms-held-text")
+            seed08Owner(store, binding: hexBinding("bind-forms-held"))
+            let heldFormID = "fm1759420800000_held"
+            let answer = NativeJobFormsPresentation.DraftKey(itemID: "fi_12", field: .answer)
+            expect(!store.hasHeldFormText(formID: heldFormID) && store.takeHeldFormDrafts(formID: heldFormID) == nil
+                   && store.takeHeldFormTitle(formID: heldFormID) == nil,
+                   "forms held text: nothing is held at first")
+            store.holdFormDrafts([answer: "Three breakers"], refusals: [answer: .readOnlyCompleted], formID: heldFormID)
+            store.holdFormTitle("Panel check", refusal: .notSaved, formID: heldFormID)
+            expect(store.hasHeldFormText(formID: heldFormID), "forms held text: the form's row can say it has unsaved text")
+            let drafts = store.takeHeldFormDrafts(formID: heldFormID)
+            expect(drafts?.drafts == [answer: "Three breakers"] && drafts?.refusals == [answer: .readOnlyCompleted],
+                   "forms held text: the fill screen takes back its text with the reasons")
+            expect(store.takeHeldFormDrafts(formID: heldFormID) == nil && store.hasHeldFormText(formID: heldFormID),
+                   "forms held text: taken once; the editor's title is still held")
+            let title = store.takeHeldFormTitle(formID: heldFormID)
+            expect(title?.title == "Panel check" && title?.refusal == .notSaved && store.heldFormText.isEmpty,
+                   "forms held text: the editor takes back its title, and nothing is left")
+            store.holdFormDrafts([answer: "x"], refusals: [answer: .notSaved], formID: heldFormID)
+            store.holdFormDrafts([:], refusals: [answer: .notSaved], formID: heldFormID)
+            expect(store.heldFormText.isEmpty, "forms held text: a screen that closes with everything saved releases what was held")
+            store.holdFormTitle(nil, refusal: .notSaved, formID: heldFormID)
+            expect(store.heldFormText.isEmpty, "forms held text: no title, nothing held")
+            store.holdFormDrafts([answer: "Kept"], refusals: [:], formID: heldFormID)
+            store.holdFormTitle("Kept title", refusal: nil, formID: heldFormID)
+            store.testApplyCompletedSignOutState()
+            expect(store.heldFormText.isEmpty && !store.hasHeldFormText(formID: heldFormID),
+                   "forms held text: an account boundary scrubs held text")
         }
 
         // --- I7(b): apply a mute, cross a boundary, relaunch/reactivate, and
@@ -5146,7 +5984,7 @@ struct StoreIntegrationTests {
                 description: "Monthly service", amount: 120, dueDays: 30,
                 cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
                 occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: "2026-12-01",
-                isActive: true, createdAt: "2026-09-01", autoSendEnabled: false)
+                isActive: true, createdAt: "2026-09-01", autoSendEnabled: false, autopayEnabled: nil)
             expect(store.createRecurringInvoice(rule), "m5 fixture plan creates")
             expect(store.scheduleBookingTestLatestGeneratedInvoiceID(ruleID: rule.id) == nil,
                    "m5 sanity: nothing has generated for the rule yet")
@@ -5587,6 +6425,59 @@ private final class ScheduleBookingTestDelta: NativeInitialSyncServing, NativeDe
         if let handler { return handler(localSnapshot, cursor) }
         return NativeDeltaPullOutcome(snapshot: localSnapshot, cursor: cursor,
                                       failedTables: [], lastDiagnosticCode: nil)
+    }
+}
+
+/// Phase 24 §6.1: an injected Stripe delivery service. It records every mint
+/// and can run a main-actor hook during the await (a payment landing while
+/// the link is minted).
+private final class StoreTestStripeDelivery: NativeInvoiceDelivering, @unchecked Sendable {
+    var mintedAmounts: [Decimal] = []
+    var duringMint: (@MainActor () -> Void)?
+
+    func createPaymentLink(invoice: Canonical.Invoice, amount: Decimal, sessionBytes: Data) async throws -> URL {
+        mintedAmounts.append(amount)
+        if let hook = duringMint { await MainActor.run { hook() } }
+        return URL(string: "https://gettradereadyapp.com/pay.html?t=mint\(mintedAmounts.count)")!
+    }
+
+    func uploadPDF(invoiceID: String, pdf: Data, sessionBytes: Data) async throws {}
+}
+
+/// Phase 24 §6.3: an injected owner-route autopay service. `holdsRemove`
+/// parks a remove until `releaseRemove()`, so a test can act while it is in
+/// flight; `duringStatus` runs on the main actor during a status read.
+private final class StoreTestAutopayService: NativeAutopayServing, @unchecked Sendable {
+    var statusCalls = 0
+    var statusResult: Result<NativeAutopayStatusSnapshot, NativeAutopayServiceError> = .success(.empty)
+    var duringStatus: (@MainActor () -> Void)?
+    var removedIDs: [String] = []
+    var removeError: NativeAutopayServiceError?
+    var holdsRemove = false
+    var removeStarted = false
+    private var parkedRemove: CheckedContinuation<Void, Never>?
+
+    func status(sessionBytes: Data) async throws -> NativeAutopayStatusSnapshot {
+        statusCalls += 1
+        if let hook = duringStatus { await MainActor.run { hook() } }
+        return try statusResult.get()
+    }
+
+    func removeCard(enrollmentID: String, sessionBytes: Data) async throws {
+        removedIDs.append(enrollmentID)
+        if holdsRemove {
+            await withCheckedContinuation { continuation in
+                parkedRemove = continuation
+                removeStarted = true
+            }
+        }
+        if let removeError { throw removeError }
+    }
+
+    func releaseRemove() {
+        holdsRemove = false
+        parkedRemove?.resume()
+        parkedRemove = nil
     }
 }
 

@@ -403,6 +403,8 @@ let scrollRootInventory: [String: Int] = [
     "JobsView.swift|JobsView|List": 1,
     "JobsView.swift|JobDetailView|List": 1,
     "JobsView.swift|JobEditor|Form": 1,
+    // Phase 32: job detail › "Extend estimate…" / "Change valid-until date…".
+    "JobsView.swift|NativeEstimateValidityEditorView|Form": 1,
     "MoneyView.swift|MoneyView|ScrollView": 1,
     "MoneyView.swift|MoneyView|List": 1,
     "NativeAuthView.swift|NativeAuthView|ScrollView": 1,
@@ -432,6 +434,10 @@ let scrollRootInventory: [String: Int] = [
     "NativePricebookEntryView.swift|NativePricebookEntryView|Form": 1,
     "NativePricebookView.swift|NativePricebookView|List": 1,
     "NativePricingCalculator.swift|NativePricingCalculatorView|Form": 1,
+    // Phase 21: property detail (pushed) and the property and equipment sheets.
+    "NativePropertiesViews.swift|NativePropertyDetailView|List": 1,
+    "NativePropertiesViews.swift|NativePropertyEditor|Form": 1,
+    "NativePropertiesViews.swift|NativeEquipmentEditor|Form": 1,
     // Phase 25: the quote-options sheet, its add-on editor and owner choice.
     "NativeQuoteOptionsView.swift|NativeQuoteOptionsView|Form": 1,
     "NativeQuoteOptionsView.swift|NativeQuoteAddOnEditorView|Form": 1,
@@ -443,6 +449,15 @@ let scrollRootInventory: [String: Int] = [
     "NativeJobFormEditorView.swift|NativeFormItemsEditor|List": 1,
     "NativeJobFormEditorView.swift|NativeFormItemSheet|Form": 1,
     "NativeJobFormEditorView.swift|NativeFormTemplatesView|List": 1,
+    // Phase 33: tags, the list filter's tag picker and the campaign screens.
+    "NativeCustomerTagsSheet.swift|NativeCustomerTagsSheet|Form": 1,
+    "NativeCustomerMarketingViews.swift|NativeCustomerTagFilterSheet|List": 1,
+    "NativeCampaignListView.swift|NativeCampaignListView|List": 1,
+    "NativeCampaignBuilderView.swift|NativeCampaignBuilderView|Form": 1,
+    "NativeCampaignBuilderView.swift|NativeCampaignExclusionsSheet|List": 1,
+    "NativeCampaignBuilderView.swift|NativeCampaignPreviewSheet|List": 1,
+    "NativeCampaignSendView.swift|NativeCampaignSendView|List": 1,
+    "NativeCampaignDetailView.swift|NativeCampaignDetailView|List": 1,
     // Phase 26: Settings › Calendar sync and its first-enable explainer sheet.
     "NativeCalendarSyncSettingsView.swift|NativeCalendarSyncSettingsView|Form": 1,
     "NativeCalendarSyncSettingsView.swift|NativeCalendarChecksExplainer|ScrollView": 1,
@@ -453,6 +468,12 @@ let scrollRootInventory: [String: Int] = [
     // Phase 12 (12.00b.1, D3): Settings › Cloud Sync › changes not saved.
     "NativeRejectedChangesView.swift|NativeRejectedChangesView|Form": 1,
     "NativeReviewRequestView.swift|NativeReviewRequestView|Form": 1,
+    // Phase 34: the referral share and thank-you sheets, the "Referred by"
+    // picker and Money › Referrals.
+    "NativeReferralShareView.swift|NativeReferralShareView|Form": 1,
+    "NativeReferralRewardSheet.swift|NativeReferralRewardSheet|Form": 1,
+    "NativeCustomerReferralsSection.swift|NativeReferredByPicker|List": 1,
+    "NativeReferralsView.swift|NativeReferralsView|List": 1,
     "NativeRouteView.swift|NativeRouteView|List": 1,
     "NativeScheduleEditorView.swift|NativeScheduleEditorView|Form": 1,
     "NativeScheduleSettingsView.swift|NativeScheduleSettingsView|Form": 1,
@@ -475,6 +496,8 @@ let horizontalChipRows: [String: Int] = [
     "NativeMileageLogView.swift": 1, "NativeInvoiceOutreachView.swift": 1, "NativeTripEditor.swift": 1,
     // Phase 20: a form item's photo thumbnails.
     "NativeJobFormsView.swift": 1,
+    // Phase 33: the one shared tag-chip scroller (`NativeTagChipRow`).
+    "NativeCustomerTagsSheet.swift": 1,
 ]
 
 /// Every `SettingsPage` screen shares the capped `SettingsPage` Form.

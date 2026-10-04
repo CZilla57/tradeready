@@ -53,6 +53,18 @@ Written 2026-07-18.
       when the migration is applied in the Supabase SQL editor and
       `public.forms` exists with RLS enabled, the `users manage own forms`
       policy and `set_updated_at_trg`; then delete this entry.
+- [ ] **Campaigns (Phase 33, `feat/campaigns`) — apply `supabase/migrations/20261003_campaigns.sql` before shipping the native build.**
+      The native app pulls and pushes a new `campaigns` table. Without it the
+      initial full pull fails on the missing table, so signing in on a new
+      device (or after a reinstall) breaks, and every campaign edit stays
+      queued for retry. The migration also attaches `set_updated_at_trg`
+      (needs `20260831_updated_at_server_authority.sql` applied first).
+      Unblocked when the migration is applied in the Supabase SQL editor and
+      `public.campaigns` exists with RLS enabled, the `users manage own
+      campaigns` policy and `set_updated_at_trg`; then delete this entry.
+      The campaign-code Worker validator and `book.html` `?c=` (spec §9.1,
+      §9.3) are not in this branch; without them campaign links still open
+      and only the 30-day window attributes bookings.
 
 ---
 

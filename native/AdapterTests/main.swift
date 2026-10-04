@@ -111,6 +111,141 @@ run("customer lead source projects, edits and clears without touching siblings")
     expect(projected.leadSource == "yelp", "the UI projection carries the source")
 }
 
+// Phase 34 (spec 2026-10-03-referral-program-design.md §2, §7): the editor
+// sets only `referredByCustomerId`; the code, its aliases and the reward are
+// canonical-only and survive every editor save through the baseline merge.
+run("customer referrer round-trips and editor saves keep the canonical-only referral fields") {
+    let source: Canonical.Customer = try field("customer", rich)
+    let sourceFields = try object(source)
+    var edit = try CanonicalUIAdapters.edit(source)
+    expect(edit.value.referredByCustomerId == "c-7", "the referrer projects into the UI model")
+
+    edit.value.name = "Ada L."
+    edit.value.notes = "Gate code 1234"
+    let saved = try CanonicalUIAdapters.canonical(from: edit)
+    let savedFields = try object(saved)
+    for key in ["referralCode", "referralCodeAliases", "referralReward", "referredByCustomerId"] {
+        expect(savedFields[key] == sourceFields[key], "an editor save keeps \(key)")
+    }
+
+    edit.value.referredByCustomerId = "c-9"
+    let changed = try CanonicalUIAdapters.canonical(from: edit)
+    expect(changed.referredByCustomerId == "c-9", "the editor can change the referrer")
+    expect(changed.referralReward?.amount == 25, "changing the referrer keeps the reward (it moves with the referral)")
+    edit.value.referredByCustomerId = nil
+    let cleared = try CanonicalUIAdapters.canonical(from: edit)
+    let clearedFields = try object(cleared)
+    expect(clearedFields["referredByCustomerId"] == nil, "clearing the referrer removes the key")
+    expect(clearedFields["referralCode"] == sourceFields["referralCode"], "clearing the referrer keeps the code")
+
+    var draft = Customer(name: "Word Of Mouth")
+    draft.leadSource = "referral"
+    draft.referredByCustomerId = "c-42"
+    let created = try CanonicalUIAdapters.canonical(from: draft)
+    expect(created.referredByCustomerId == "c-42", "a new customer's referrer is written")
+    let projected = try CanonicalUIAdapters.customer(from: created)
+    expect(projected.referredByCustomerId == "c-42", "the UI projection carries the referrer")
+    let plain = try object(CanonicalUIAdapters.canonical(from: Customer(name: "No Referrer")))
+    expect(plain["referredByCustomerId"] == nil && plain["referralCode"] == nil, "a new customer without a referrer has no keys")
+}
+
+// Phase 21 (spec 2026-10-02-properties-equipment-design.md §1-§3): customer
+// edits never touch the nested properties (the primary's address follows the
+// customer's), and the job editor's property pick writes through the merge.
+run("customer edits keep properties; job propertyId projects, edits and clears") {
+    let source: Canonical.Customer = try field("customer", rich)
+    let sourceFields = try object(source)
+    var edit = try CanonicalUIAdapters.edit(source)
+    edit.value.address = "99 New Rd"
+    edit.value.name = "Ada King"
+    let changed = try CanonicalUIAdapters.canonical(from: edit)
+    let changedFields = try object(changed)
+    expect(changedFields["properties"] == sourceFields["properties"], "a customer edit keeps properties byte-identical")
+    expect(changed.properties?.first?.address == nil, "the primary still stores no address after an address edit")
+
+    let job: Canonical.Job = try field("job", rich)
+    let jobFields = try object(job)
+    var jobEdit = try CanonicalUIAdapters.edit(job)
+    expect(jobEdit.value.propertyId == "pr1759500000000_home", "propertyId projects into the UI model")
+    jobEdit.value.propertyId = "pr_other"
+    var expected = jobFields
+    expected["propertyId"] = .string("pr_other")
+    let picked = try object(CanonicalUIAdapters.canonical(from: jobEdit))
+    expect(picked == expected, "a property pick writes propertyId and nothing else")
+    jobEdit.value.propertyId = nil
+    var withoutProperty = jobFields
+    withoutProperty.removeValue(forKey: "propertyId")
+    let cleared = try object(CanonicalUIAdapters.canonical(from: jobEdit))
+    expect(cleared == withoutProperty, "clearing the pick removes the key and keeps siblings")
+
+    var draft = Job(customerId: "c-42", customerName: "Ada", title: "New", address: "44 Elm St")
+    draft.propertyId = "pr_rental"
+    let created = try CanonicalUIAdapters.canonical(from: draft)
+    expect(created.propertyId == "pr_rental", "a new job's property is written")
+    let plainFields = try object(CanonicalUIAdapters.canonical(from: Job(title: "Plain")))
+    expect(plainFields["propertyId"] == nil, "a new job without a property has no key")
+
+    let duplicate = try CanonicalUIAdapters.duplicateJob(job, id: "dup", createdAt: Date(timeIntervalSince1970: 0))
+    expect(duplicate.canonicalTemplate.propertyId == job.propertyId, "Duplicate job keeps the property (whitelist)")
+    let rule = try CanonicalUIAdapters.recurringJob(
+        from: job, id: "rj", startDate: "2026-09-15", cadence: .monthly, endCondition: .never,
+        endCount: nil, endDate: nil, createdAt: "2026-09-01"
+    )
+    expect(rule.propertyId == job.propertyId, "Set up repeat keeps the property (whitelist)")
+}
+
+// Phase 33 (campaigns spec §2): the editor sets tags and the opt-out through
+// the edit merge; a job's campaignId is canonical-only and survives edits.
+run("customer tags and opt-out round-trip through the editor; campaignId survives") {
+    let source: Canonical.Customer = try field("customer", rich)
+    let sourceFields = try object(source)
+    var edit = try CanonicalUIAdapters.edit(source)
+    expect(edit.value.tags == nil && edit.value.marketingOptOutOn == nil, "nothing projects when absent")
+    let untouched = try object(CanonicalUIAdapters.canonical(from: edit))
+    expect(untouched == sourceFields, "an untouched edit invents no tags or opt-out keys")
+
+    edit.value.tags = ["AC", "VIP"]
+    edit.value.marketingOptOutOn = "2026-03-04"
+    edit.value.marketingOptOutVia = "asked"
+    let tagged = try CanonicalUIAdapters.canonical(from: edit)
+    var expected = sourceFields
+    expected["tags"] = .array([.string("AC"), .string("VIP")])
+    expected["marketingOptOutOn"] = .string("2026-03-04")
+    expected["marketingOptOutVia"] = .string("asked")
+    let taggedFields = try object(tagged)
+    expect(taggedFields == expected, "tags and the opt-out are written and nothing else changes")
+
+    var reEdit = try CanonicalUIAdapters.edit(tagged)
+    expect(reEdit.value.tags == ["AC", "VIP"] && reEdit.value.marketingOptOutOn == "2026-03-04"
+           && reEdit.value.marketingOptOutVia == "asked", "tags and the opt-out project back into the editor")
+    let unchanged = try object(CanonicalUIAdapters.canonical(from: reEdit))
+    expect(unchanged == expected, "an unchanged re-edit keeps the bytes")
+    reEdit.value.tags = nil
+    reEdit.value.marketingOptOutOn = nil
+    reEdit.value.marketingOptOutVia = nil
+    let cleared = try object(CanonicalUIAdapters.canonical(from: reEdit))
+    expect(cleared == sourceFields, "clearing removes the keys and keeps siblings")
+
+    var draft = Customer(name: "New Tagged")
+    draft.tags = ["Pool"]
+    draft.marketingOptOutOn = "2026-03-05"
+    draft.marketingOptOutVia = "asked"
+    let created = try object(CanonicalUIAdapters.canonical(from: draft))
+    expect(created["tags"] == .array([.string("Pool")]) && created["marketingOptOutOn"] == .string("2026-03-05")
+           && created["marketingOptOutVia"] == .string("asked"), "a new customer writes tags and the opt-out")
+    let plainCreated = try object(CanonicalUIAdapters.canonical(from: Customer(name: "Plain")))
+    expect(plainCreated["tags"] == nil && plainCreated["marketingOptOutOn"] == nil, "a plain new customer has no keys")
+
+    guard case var .object(jobFields)? = rich["job"] else { throw NSError(domain: "AdapterTests", code: 33) }
+    jobFields["campaignId"] = .string("cmp_1")
+    let campaignJob = try decoder.decode(Canonical.Job.self, from: encoder.encode(Canonical.JSONValue.object(jobFields)))
+    var jobEdit = try CanonicalUIAdapters.edit(campaignJob)
+    jobEdit.value.title = "Renamed after booking"
+    let editedJob = try CanonicalUIAdapters.canonical(from: jobEdit)
+    expect(editedJob.campaignId == "cmp_1" && editedJob.title == "Renamed after booking",
+           "a canonical-only campaignId survives a job editor save")
+}
+
 run("settings logo reference projects, edits and clears without touching siblings") {
     let source: Canonical.Settings = try field("settings", rich)
     var edit = try CanonicalUIAdapters.edit(source)
@@ -157,6 +292,71 @@ run("job edits preserve rich and unknown fields") {
     expect(futureResult.preservation.unknownFields["futureJobField"] != nil, "unknown job field retained")
 }
 
+run("Phase 25 review: undecided quote options own the job price, not the job editor") {
+    var source: Canonical.Job = try field("job", rich)
+    source.quoteOptions = Canonical.QuoteOptions(
+        tiers: [
+            Canonical.QuoteTier(id: "qt_good", name: "Good", pricingOf: source),
+            Canonical.QuoteTier(id: "qt_better", name: "Better", pricingOf: source)
+        ],
+        addOns: [],
+        recommendedTierId: "qt_good"
+    )
+    expect(CanonicalUIAdapters.hasUndecidedQuoteOptions(source), "options without an acceptance are undecided")
+    var edit = try CanonicalUIAdapters.edit(source)
+    edit.value.estimateTotal = 400
+    edit.value.laborHours = 9
+    edit.value.laborRate = 50
+    edit.value.notes = "Bring the ladder"
+    let result = try CanonicalUIAdapters.canonical(from: edit)
+    expect(result.estimateTotal == source.estimateTotal && result.laborHours == source.laborHours
+           && result.laborRate == source.laborRate,
+           "a job-editor save keeps the recommended option's total, hours and rate")
+    expect(result.estimateTotal == result.quoteOptions?.tier(id: "qt_good")?.estimateTotal,
+           "the job total still mirrors the recommended tier (M1)")
+    expect(result.notes == "Bring the ladder", "the editor's other fields still save")
+
+    var accepted = source
+    accepted.quoteOptions?.acceptance = Canonical.QuoteAcceptance(
+        tierId: "qt_better", addOnIds: [], total: source.estimateTotal,
+        acceptedAt: "2026-10-03T09:00:00.000Z", source: Canonical.QuoteAcceptance.sourceOwner
+    )
+    expect(!CanonicalUIAdapters.hasUndecidedQuoteOptions(accepted), "accepted options are decided")
+    var acceptedEdit = try CanonicalUIAdapters.edit(accepted)
+    acceptedEdit.value.estimateTotal = 400
+    let acceptedResult = try CanonicalUIAdapters.canonical(from: acceptedEdit)
+    expect(acceptedResult.estimateTotal == 400, "after the choice the owner's price edit applies as before")
+    var plainEdit = try CanonicalUIAdapters.edit(try field("job", rich, as: Canonical.Job.self))
+    plainEdit.value.estimateTotal = 400
+    let plainResult = try CanonicalUIAdapters.canonical(from: plainEdit)
+    expect(plainResult.estimateTotal == 400, "a single-total job's price edit is unchanged")
+}
+
+run("Phase 25 review: estimate line labels fit the Worker's 300-character cap") {
+    var source: Canonical.Job = try field("job", rich)
+    source.approval = nil
+    source.jobCosts?[0].label = String(repeating: "p", count: 450)
+    source.quoteOptions = Canonical.QuoteOptions(
+        tiers: [
+            Canonical.QuoteTier(id: "qt_good", name: "Good", pricingOf: source),
+            Canonical.QuoteTier(id: "qt_better", name: "Better", pricingOf: source)
+        ],
+        addOns: [],
+        recommendedTierId: "qt_good"
+    )
+    let snapshot = try CanonicalUIAdapters.estimateApprovalSnapshot(job: source, customerName: nil, businessName: "Ada Electric")
+    let labels = snapshot.lineItems.map(\.label) + (snapshot.options?.tiers.flatMap { $0.lineItems.map(\.label) } ?? [])
+    expect(!labels.isEmpty && labels.allSatisfy { $0.utf16.count <= CanonicalUIAdapters.estimateLineLabelMaxLength },
+           "every top-level and option line label is at most 300 UTF-16 code units")
+    let capped = String(repeating: "p", count: 299) + "\u{2026}"
+    expect(labels.contains(capped), "the long direct-cost label is cut to 299 characters plus an ellipsis")
+    expect(CanonicalUIAdapters.estimateDirectCostLabel(source.jobCosts![0]) == capped,
+           "invoice and estimate direct-cost labels stay identical")
+    expect(CanonicalUIAdapters.cappedEstimateLineLabel("City permit") == "City permit"
+           && CanonicalUIAdapters.cappedEstimateLineLabel(String(repeating: "a", count: 300)).utf16.count == 300,
+           "labels within the cap are unchanged")
+}
+
 run("job duplication carries only the production whitelist") {
     let source: Canonical.Job = try field("job", rich)
     let sourceBefore = try json(source)
@@ -200,7 +400,8 @@ run("job duplication carries only the production whitelist") {
            && duplicate.approval == nil
            && duplicate.changeOrders == nil
            && duplicate.archivedAt == nil
-           && duplicate.importBatchId == nil,
+           && duplicate.importBatchId == nil
+           && duplicate.estimateValidUntil == nil,
            "duplicate clears schedule, lifecycle, recurrence, field-work, cost, and sync metadata")
     let duplicateFields = try object(duplicate)
     expect(duplicateFields["invoiceId"] == .null, "duplicate writes the React Native null invoice link")
@@ -222,6 +423,27 @@ run("job duplication carries only the production whitelist") {
     )
     expect(forwardDraft.canonicalTemplate.preservation.unknownFields["futureJobField"] == nil,
            "source-level unknown fields are not copied into a new job lifecycle")
+}
+
+// Phase 32 (spec 2026-10-03 §3): a duplicate is a new lead, never a sent
+// estimate, so the whitelist excludes the valid-until date.
+run("job duplication excludes the estimate valid-until date") {
+    var fields = try object(try field("job", rich, as: Canonical.Job.self))
+    fields["status"] = .string("estimate_sent")
+    fields["estimateSentAt"] = .string("2026-10-01")
+    fields["estimateValidUntil"] = .string("2026-10-31")
+    let dated: Canonical.Job = try decoder.decode(Canonical.Job.self, from: encoder.encode(fields))
+    expect(dated.estimateValidUntil == "2026-10-31", "the source carries a valid-until date")
+    let draft = try CanonicalUIAdapters.duplicateJob(
+        dated,
+        id: "j_dup_exp",
+        createdAt: ISO8601DateFormatter().date(from: "2026-10-03T12:00:00Z")!
+    )
+    let duplicateFields = try object(draft.canonicalTemplate)
+    expect(draft.canonicalTemplate.estimateValidUntil == nil && duplicateFields["estimateValidUntil"] == nil,
+           "the duplicate has no estimateValidUntil key")
+    expect(draft.canonicalTemplate.estimateSentAt == nil && draft.canonicalTemplate.status == "lead",
+           "the duplicate is an unsent lead")
 }
 
 run("pricing draft updates only calculator-owned canonical fields") {
@@ -380,6 +602,138 @@ run("estimate approval snapshot freezes only customer-facing saved values") {
     changedLine.lineItems[0].amount += 1
     expect(!CanonicalUIAdapters.estimateApprovalSnapshotsMatch(snapshot, changedLine),
            "line-item changes are part of the exact post-sync approval comparison")
+}
+
+// Phase 32 (spec 2026-10-03 §2.3, §6.1): the snapshot's valid-until date and
+// zone are built together, compared exactly, and ignorable for the
+// declined-revision guard and the extension check.
+run("estimate approval snapshot carries the validity date and zone") {
+    let source: Canonical.Job = try field("job", rich)
+    let undated = try CanonicalUIAdapters.estimateApprovalSnapshot(
+        job: source, customerName: nil, businessName: "Ada Electric"
+    )
+    let undatedFields = try object(undated)
+    expect(undated.validUntil == nil && undated.validUntilTimeZone == nil
+           && undatedFields["validUntil"] == nil && undatedFields["validUntilTimeZone"] == nil,
+           "the default builder call writes no validity keys")
+    let explicitNil = try CanonicalUIAdapters.estimateApprovalSnapshot(
+        job: source, customerName: nil, businessName: "Ada Electric", validUntil: nil, validUntilTimeZone: nil
+    )
+    expect(CanonicalUIAdapters.estimateApprovalSnapshotsMatch(undated, explicitNil),
+           "explicit nil validity equals the default")
+
+    let dated = try CanonicalUIAdapters.estimateApprovalSnapshot(
+        job: source, customerName: nil, businessName: "Ada Electric",
+        validUntil: "2026-11-02", validUntilTimeZone: "America/Phoenix"
+    )
+    let datedFields = try object(dated)
+    expect(dated.validUntil == "2026-11-02" && dated.validUntilTimeZone == "America/Phoenix",
+           "the builder freezes the date and zone")
+    expect(datedFields["validUntil"] == .string("2026-11-02")
+           && datedFields["validUntilTimeZone"] == .string("America/Phoenix"),
+           "the snapshot JSON carries both keys")
+    expect(dated.total == undated.total && dated.lineItems == undated.lineItems,
+           "the date does not change the priced content")
+
+    var threwForDateOnly = false
+    do {
+        _ = try CanonicalUIAdapters.estimateApprovalSnapshot(
+            job: source, customerName: nil, businessName: "Ada Electric", validUntil: "2026-11-02"
+        )
+    } catch CanonicalUIAdapterError.invalidCanonicalRecord(let record) {
+        threwForDateOnly = record == "estimate-validity"
+    }
+    expect(threwForDateOnly, "a date without a zone throws estimate-validity")
+    var threwForZoneOnly = false
+    do {
+        _ = try CanonicalUIAdapters.estimateApprovalSnapshot(
+            job: source, customerName: nil, businessName: "Ada Electric", validUntilTimeZone: "America/Phoenix"
+        )
+    } catch CanonicalUIAdapterError.invalidCanonicalRecord(let record) {
+        threwForZoneOnly = record == "estimate-validity"
+    }
+    expect(threwForZoneOnly, "a zone without a date throws estimate-validity")
+
+    expect(CanonicalUIAdapters.estimateApprovalSnapshotsMatch(dated, dated), "identical dated snapshots match")
+    expect(!CanonicalUIAdapters.estimateApprovalSnapshotsMatch(dated, undated),
+           "a dated and an undated snapshot do not match")
+    var laterDate = dated
+    laterDate.validUntil = "2026-12-01"
+    expect(!CanonicalUIAdapters.estimateApprovalSnapshotsMatch(dated, laterDate), "a different date breaks the match")
+    var otherZone = dated
+    otherZone.validUntilTimeZone = "America/Denver"
+    expect(!CanonicalUIAdapters.estimateApprovalSnapshotsMatch(dated, otherZone), "a different zone breaks the match")
+
+    expect(CanonicalUIAdapters.estimateApprovalSnapshotsMatch(dated, undated, ignoringValidity: true),
+           "ignoringValidity treats dated and undated as equal")
+    expect(CanonicalUIAdapters.estimateApprovalSnapshotsMatch(dated, laterDate, ignoringValidity: true),
+           "ignoringValidity ignores a fresh date")
+    expect(CanonicalUIAdapters.estimateApprovalSnapshotsMatch(dated, otherZone, ignoringValidity: true),
+           "ignoringValidity ignores the zone")
+    var repriced = laterDate
+    repriced.total += 1
+    expect(!CanonicalUIAdapters.estimateApprovalSnapshotsMatch(dated, repriced, ignoringValidity: true),
+           "ignoringValidity still compares the priced content")
+    var retitled = laterDate
+    retitled.jobTitle = "Changed title"
+    expect(!CanonicalUIAdapters.estimateApprovalSnapshotsMatch(dated, retitled, ignoringValidity: true),
+           "ignoringValidity still compares the title")
+
+    var datedApproval = source.approval!
+    datedApproval.snapshot = dated
+    var redatedApproval = datedApproval
+    redatedApproval.snapshot.validUntil = "2026-12-01"
+    expect(!CanonicalUIAdapters.estimateApprovalsMatch(datedApproval, redatedApproval),
+           "an archived approval's frozen date is part of the exact approval match")
+}
+
+// Phase 32 (spec 2026-10-03 §6.1): absent reads as 30, a new settings record
+// writes the value, and an edit writes it only when it changed.
+run("settings estimate validity reads, creates and edits") {
+    let source: Canonical.Settings = try field("settings", rich)
+    expect(source.estimateValidityDays == nil, "the rich fixture has no validity key")
+    var edit = try CanonicalUIAdapters.edit(source)
+    expect(edit.value.estimateValidityDays == 30, "absent reads as 30")
+    expect(BusinessSettings().estimateValidityDays == 30, "the UI default is 30")
+
+    edit.value.laborRate += 1
+    let unrelated = try CanonicalUIAdapters.canonical(from: edit)
+    let unrelatedFields = try object(unrelated)
+    expect(unrelated.estimateValidityDays == nil && unrelatedFields["estimateValidityDays"] == nil,
+           "an unrelated edit does not write the default")
+
+    edit.value.estimateValidityDays = 14
+    let changed = try CanonicalUIAdapters.canonical(from: edit)
+    expect(changed.estimateValidityDays == 14, "a changed value is written")
+    var zeroEdit = try CanonicalUIAdapters.edit(changed)
+    expect(zeroEdit.value.estimateValidityDays == 14, "a stored value projects")
+    zeroEdit.value.estimateValidityDays = 0
+    let zero = try CanonicalUIAdapters.canonical(from: zeroEdit)
+    expect(zero.estimateValidityDays == 0, "0 (no expiry) is written")
+    let zeroProjected = try CanonicalUIAdapters.edit(zero)
+    expect(zeroProjected.value.estimateValidityDays == 0, "0 projects as 0, not the default")
+    var backTo30 = try CanonicalUIAdapters.edit(zero)
+    backTo30.value.estimateValidityDays = 30
+    let explicit30 = try CanonicalUIAdapters.canonical(from: backTo30)
+    expect(explicit30.estimateValidityDays == 30, "changing back to 30 writes 30 explicitly")
+
+    var malformedFields = try object(source)
+    malformedFields["estimateValidityDays"] = .number(9_999)
+    let malformed: Canonical.Settings = try decoder.decode(Canonical.Settings.self, from: encoder.encode(malformedFields))
+    var malformedEdit = try CanonicalUIAdapters.edit(malformed)
+    expect(malformedEdit.value.estimateValidityDays == 365, "a malformed stored value projects clamped")
+    malformedEdit.value.businessName = "Renamed"
+    let untouched = try CanonicalUIAdapters.canonical(from: malformedEdit)
+    expect(untouched.estimateValidityDays == 9_999, "an untouched malformed value is not rewritten by an unrelated edit")
+
+    let created = try CanonicalUIAdapters.canonical(from: BusinessSettings())
+    let createdFields = try object(created)
+    expect(created.estimateValidityDays == 30 && createdFields["estimateValidityDays"] == .number(30),
+           "a new settings record writes the value")
+    var custom = BusinessSettings()
+    custom.estimateValidityDays = 7
+    let customCreated = try CanonicalUIAdapters.canonical(from: custom)
+    expect(customCreated.estimateValidityDays == 7, "a new settings record writes a custom value")
 }
 
 run("invoice and payment edits preserve payment metadata") {
@@ -545,6 +899,53 @@ run("React Native blank and ISO schedule values project without loss") {
     let sourceISOJSON = try json(isoJob)
     expect(mergedISOJSON == sourceISOJSON,
            "untouched ISO legacy schedule survives canonical merge")
+}
+
+// Phase 24: Stripe-booked payments (pay link, pay page, autopay) label as
+// "Stripe", never "Other", and an autopay entry's extra keys and note ride
+// through untouched edits and a void.
+run("stripe payments label as Stripe and keep autopay keys") {
+    var fields = try object(try field("invoice", rich, as: Canonical.Invoice.self))
+    let autopayEntry: Canonical.JSONValue = .object([
+        "id": .string("stripe_pi_3Qtest"), "amount": .number(120), "date": .string("2026-11-01"),
+        "method": .string("stripe"), "stripePaymentIntentId": .string("pi_3Qtest"),
+        "channel": .string("autopay"), "note": .string("Autopay · Visa •••• 4242"),
+    ])
+    guard case var .array(entries) = fields["payments"] ?? .array([]) else { fatalError("payments array") }
+    entries.append(autopayEntry)
+    fields["payments"] = .array(entries)
+    let source: Canonical.Invoice = try decoder.decode(Canonical.Invoice.self, from: encoder.encode(fields))
+    var edit = try CanonicalUIAdapters.edit(source)
+    let projected = edit.value.payments.first { $0.id == "stripe_pi_3Qtest" }
+    expect(projected?.method == "Stripe", "an autopay payment shows Stripe in the Payments section")
+    expect(projected?.note == "Autopay · Visa •••• 4242", "the autopay note shows as the payment note")
+    expect(edit.value.payments.count == entries.count, "sanity: every payment projects")
+
+    edit.value.description = "Edited after autopay"
+    let untouched = try CanonicalUIAdapters.canonical(from: edit)
+    let kept = untouched.payments?.first { $0.id == "stripe_pi_3Qtest" }
+    expect(kept?.method == "stripe", "an unrelated edit keeps the method stripe")
+    expect(kept?.preservation.unknownFields["channel"] == .string("autopay")
+           && kept?.preservation.unknownFields["stripePaymentIntentId"] == .string("pi_3Qtest"),
+           "an unrelated edit keeps channel and stripePaymentIntentId")
+
+    // A Stripe-labelled payment written fresh round-trips to `stripe`, never `other`.
+    var added = edit
+    added.value.payments.append(Payment(id: "pay-p24-new", amount: 5, date: Date(timeIntervalSince1970: 1_793_000_000),
+                                        method: "Stripe", note: ""))
+    let addedResult = try CanonicalUIAdapters.canonical(from: added)
+    expect(addedResult.payments?.first { $0.id == "pay-p24-new" }?.method == "stripe",
+           "the Stripe label round-trips to stripe")
+
+    if let index = edit.value.payments.firstIndex(where: { $0.id == "stripe_pi_3Qtest" }) {
+        edit.value.payments[index].voidedAt = Date(timeIntervalSince1970: 1_793_000_000)
+    }
+    let voided = try CanonicalUIAdapters.canonical(from: edit)
+    let voidedEntry = voided.payments?.first { $0.id == "stripe_pi_3Qtest" }
+    expect(voidedEntry?.voidedAt != nil && voidedEntry?.method == "stripe"
+           && voidedEntry?.note == "Autopay · Visa •••• 4242"
+           && voidedEntry?.preservation.unknownFields["channel"] == .string("autopay"),
+           "voiding an autopay payment keeps its method, note and keys")
 }
 
 if failures == 0 { print("PASS: canonical SwiftUI adapter tests") }

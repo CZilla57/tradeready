@@ -32,6 +32,19 @@ struct JobInvoiceApprovedChangeOrder: Equatable {
     var amount: Decimal
 }
 
+/// Phase 25 review fix (spec 2026-10-02 §12 "Review fixes (2026-10-03)"):
+/// the quoted lines exactly as the customer approved them through the link
+/// (the frozen approval snapshot, or the tier lines plus add-ons of their
+/// option selection), billed in place of lines re-derived from the job's
+/// current pricing when those no longer reproduce what was approved — so
+/// the lines always add up to the amount the customer agreed to. Built by
+/// `NativeQuoteOptions.approvedInvoiceQuote(job:)`.
+struct JobInvoiceApprovedQuote: Equatable {
+    /// The approved lines in approved order, already categorized. At most
+    /// one `labor` line: the quoted labor that tracked time replaces.
+    var lines: [JobInvoiceLineDraft]
+}
+
 struct JobInvoiceBillableBreakdown: Equatable {
     /// Hours on the labor line — tracked when `usedTrackedTime`, else quoted.
     var laborHours: Decimal
@@ -49,6 +62,10 @@ struct JobInvoiceBillableBreakdown: Equatable {
     /// Phase 25: one line per accepted good/better/best add-on (flat price,
     /// already inside the quoted total). Empty for a single-total estimate.
     var addOnLines: [JobInvoiceLineDraft] = []
+    /// Phase 25 review fix: the customer-approved lines when they stand in
+    /// for the derived ones (`JobInvoiceApprovedQuote`); `nil` otherwise.
+    /// When set, the derived line fields above only summarize them.
+    var approvedLines: [JobInvoiceLineDraft]? = nil
     var usedTrackedTime: Bool
     /// Σ approved, non-cancelled change-order amounts (0 when none).
     var changeOrderTotal: Decimal
@@ -180,8 +197,15 @@ enum JobInvoiceDomain {
         status: String,
         timeSessions: [JobInvoiceTimeSession],
         changeOrders: [NativeJobListChangeOrder],
-        addOnLines: [JobInvoiceLineDraft] = []
+        addOnLines: [JobInvoiceLineDraft] = [],
+        approvedQuote: JobInvoiceApprovedQuote? = nil
     ) -> JobInvoiceBillableBreakdown {
+        if let approvedQuote {
+            return approvedBreakdown(
+                approvedQuote, estimateTotal: estimateTotal, laborHours: laborHours, laborRate: laborRate,
+                status: status, timeSessions: timeSessions, changeOrders: changeOrders
+            )
+        }
         let quotedLaborCost = laborHours * laborRate
         let materialBase = materials.reduce(Decimal.zero) { $0 + $1.quantity * $1.unitCost }
         let materialCost = materialBase * (1 + materialMarkup / 100)
@@ -219,9 +243,42 @@ enum JobInvoiceDomain {
         )
     }
 
+    /// The breakdown over customer-approved lines: the quoted labor is the
+    /// approved labor line, and tracked time (same rule as the derived path)
+    /// replaces it at the job's rate, moving the total by the same delta.
+    /// The other approved lines bill exactly as approved.
+    private static func approvedBreakdown(
+        _ quote: JobInvoiceApprovedQuote,
+        estimateTotal: Decimal,
+        laborHours: Decimal,
+        laborRate: Decimal,
+        status: String,
+        timeSessions: [JobInvoiceTimeSession],
+        changeOrders: [NativeJobListChangeOrder]
+    ) -> JobInvoiceBillableBreakdown {
+        func sum(_ category: String) -> Decimal {
+            quote.lines.filter { $0.category == category }.reduce(Decimal.zero) { $0 + $1.amount }
+        }
+        let quotedLaborCost = sum("labor")
+        let changeOrderTotal = approvedChangeOrderTotal(changeOrders)
+        let (billedHours, usedTrackedTime) = billableLaborHours(
+            estimatedHours: laborHours, laborRate: laborRate, status: status, timeSessions: timeSessions
+        )
+        let laborCost = usedTrackedTime ? FinancialDecimal.javascriptCents(billedHours * laborRate) : quotedLaborCost
+        return JobInvoiceBillableBreakdown(
+            laborHours: billedHours, laborCost: laborCost, materialCost: sum("materials"),
+            hasMaterials: quote.lines.contains { $0.category == "materials" }, directCostLines: [],
+            overheadLine: sum("overhead"), addOnLines: [], approvedLines: quote.lines,
+            usedTrackedTime: usedTrackedTime, changeOrderTotal: changeOrderTotal,
+            total: FinancialDecimal.javascriptCents(estimateTotal + laborCost - quotedLaborCost + changeOrderTotal)
+        )
+    }
+
     /// The invoice line items for a job — extracted from
     /// `CreateInvoiceFromJobScreen`'s save path, tracked-time-aware via
-    /// `computeBillableBreakdown`.
+    /// `computeBillableBreakdown`. Customer-approved lines
+    /// (`breakdown.approvedLines`) bill as approved, with tracked labor in
+    /// place of the approved labor line.
     static func buildInvoiceLineItems(
         breakdown: JobInvoiceBillableBreakdown,
         laborRate: Decimal,
@@ -230,14 +287,19 @@ enum JobInvoiceDomain {
         approvedChangeOrders: [JobInvoiceApprovedChangeOrder]
     ) -> [JobInvoiceLineDraft] {
         var items: [JobInvoiceLineDraft] = []
+        if let approvedLines = breakdown.approvedLines {
+            for line in approvedLines {
+                guard line.category == "labor" else { items.append(line); continue }
+                guard breakdown.laborCost > 0 else { continue }
+                items.append(breakdown.usedTrackedTime
+                    ? laborLine(hours: breakdown.laborHours, rate: laborRate, amount: breakdown.laborCost)
+                    : line)
+            }
+            items.append(contentsOf: changeOrderLines(approvedChangeOrders))
+            return items
+        }
         if breakdown.laborCost > 0 {
-            let hours = NSDecimalNumber(decimal: breakdown.laborHours).stringValue
-            let rate = currencyText(laborRate)
-            items.append(JobInvoiceLineDraft(
-                description: "Labor — \(hours) hrs @ \(rate)/hr",
-                amount: breakdown.laborCost,
-                category: "labor"
-            ))
+            items.append(laborLine(hours: breakdown.laborHours, rate: laborRate, amount: breakdown.laborCost))
         }
         if breakdown.hasMaterials {
             let label: String
@@ -258,12 +320,56 @@ enum JobInvoiceDomain {
         // Phase 25: accepted add-ons follow the quoted lines, matching the
         // accepted estimate's line order (tier lines, then add-ons).
         items.append(contentsOf: breakdown.addOnLines)
-        for changeOrder in approvedChangeOrders {
-            items.append(JobInvoiceLineDraft(
-                description: "Change order — \(changeOrder.title)", amount: changeOrder.amount, category: "other"
+        items.append(contentsOf: changeOrderLines(approvedChangeOrders))
+        return items
+    }
+
+    private static func laborLine(hours: Decimal, rate: Decimal, amount: Decimal) -> JobInvoiceLineDraft {
+        JobInvoiceLineDraft(
+            description: "Labor — \(NSDecimalNumber(decimal: hours).stringValue) hrs @ \(currencyText(rate))/hr",
+            amount: amount,
+            category: "labor"
+        )
+    }
+
+    private static func changeOrderLines(_ changeOrders: [JobInvoiceApprovedChangeOrder]) -> [JobInvoiceLineDraft] {
+        changeOrders.map {
+            JobInvoiceLineDraft(description: "Change order — \($0.title)", amount: $0.amount, category: "other")
+        }
+    }
+
+    // MARK: Referral credit (Phase 34, spec 2026-10-03-referral-program-design.md §5.6)
+
+    /// Must equal `NativeReferrals.creditLineCategory`/`creditLineDescription`
+    /// (pinned by the referral suite); duplicated so this file keeps its
+    /// standalone compile.
+    static let referralCreditCategory = "referral_credit"
+    static let referralCreditDescription = "Referral credit \u{2014} thank you!"
+
+    /// The invoice-from-job lines with referral credits kept and added: the
+    /// job's recomputed lines, then (finalize) every `referral_credit` line
+    /// the existing invoice already carries, so a recompute never drops an
+    /// applied credit, then one new `-credit` line when `credit > 0`.
+    static func appendingReferralCredit(
+        _ jobLines: [JobInvoiceLineDraft],
+        existingInvoiceLines: [JobInvoiceLineDraft],
+        credit: Decimal
+    ) -> [JobInvoiceLineDraft] {
+        var lines = jobLines.filter { $0.category != referralCreditCategory }
+        lines.append(contentsOf: existingInvoiceLines.filter { $0.category == referralCreditCategory })
+        if credit > 0 {
+            lines.append(JobInvoiceLineDraft(
+                description: referralCreditDescription,
+                amount: -FinancialDecimal.javascriptCents(credit),
+                category: referralCreditCategory
             ))
         }
-        return items
+        return lines
+    }
+
+    /// Σ of the (negative) `referral_credit` line amounts.
+    static func referralCreditTotal(_ lines: [JobInvoiceLineDraft]) -> Decimal {
+        lines.reduce(Decimal.zero) { $0 + ($1.category == referralCreditCategory ? $1.amount : 0) }
     }
 
     /// Default payment terms: 30 days from today.

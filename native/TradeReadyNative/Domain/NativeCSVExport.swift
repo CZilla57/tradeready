@@ -91,24 +91,40 @@ enum NativeCSVExport {
         "Date", "Customer", "Invoice #", "Invoice Description", "Method", "Note", "Amount",
     ]
 
+    /// Phase 28 (tips spec §6.3): the Note a tip row carries.
+    static let tipRowNote = "Tip"
+
     /// Income rows are PAYMENTS. Semantics match `collectedInRange`: voided
     /// entries excluded, legacy paid invoices contribute their one implicit
     /// entry (dated `paidAt ?? due`) with the method blanked.
+    ///
+    /// Phase 28 (tips spec §6.3): a payment with a tip is followed by one more
+    /// row — same Date / Customer / Invoice # / Description / Method, Note
+    /// "Tip", Amount = the tip. The header is unchanged and Σ Amount is the
+    /// cash actually received (`NativeCashBasis.received`). The stable date
+    /// sort keeps each tip row right after its payment.
     static func buildIncomeCsv(invoices: [Canonical.Invoice], start: Date, end: Date) -> String {
         var rows: [(date: String, fields: [String])] = []
         for invoice in invoices {
             for payment in NativeCashBasis.paymentsInRange(invoice, start: start, end: end) {
                 if payment.voidedAt != nil { continue }
                 let isLegacy = payment.id.hasPrefix("legacy_")
+                let method = isLegacy ? "" : payment.method.rawValue
                 rows.append((payment.date, [
                     payment.date,
                     invoice.customer,
                     invoice.number,
                     invoice.desc,
-                    isLegacy ? "" : payment.method.rawValue,
+                    method,
                     payment.note ?? "",
                     money(payment.amount),
                 ]))
+                if payment.countedTip > 0 {
+                    rows.append((payment.date, [
+                        payment.date, invoice.customer, invoice.number, invoice.desc,
+                        method, tipRowNote, money(payment.countedTip),
+                    ]))
+                }
             }
         }
         let sorted = stableSorted(rows) { dateAscending($0.date, $1.date) }

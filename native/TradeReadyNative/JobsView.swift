@@ -235,6 +235,11 @@ struct JobDetailView: View {
     @State private var showingRecurringJobs = false
     @State private var showingQuoteOptions = false
     @State private var showingQuoteOwnerChoice = false
+    // Phase 32 (spec 2026-10-03 §6.5): extend / change the valid-until date.
+    @State private var showingValidityEditor = false
+    @State private var pendingExtension: NativeEstimateExtensionResult?
+    @State private var extensionResult: NativeEstimateExtensionResult?
+    @State private var extensionNoticeDraft: NativeEstimateFollowUpDraft?
 
     private var job: Job? { store.jobs.first { $0.id == jobID } }
     private var reviewSent: Bool { store.reviewRequestRecords.first(where: { $0.jobId == jobID })?.sentAt != nil }
@@ -304,6 +309,27 @@ struct JobDetailView: View {
                 .sheet(item: estimateFollowUpDraft(jobID: job.id)) { draft in
                     NativeEstimateFollowUpView(draft: draft)
                 }
+                .sheet(isPresented: $showingValidityEditor, onDismiss: presentPendingExtension) {
+                    NativeEstimateValidityEditorView(jobID: job.id) { pendingExtension = $0 }
+                }
+                .sheet(item: $extensionNoticeDraft) { draft in
+                    NativeEstimateFollowUpView(draft: draft, purpose: .extensionNotice)
+                }
+                .alert(
+                    extensionResult?.title ?? "Estimate extended",
+                    isPresented: extensionResultIsPresented,
+                    presenting: extensionResult
+                ) { result in
+                    // The notice says "I've extended your estimate", so it is
+                    // offered only when the customer actually got more time.
+                    if result.isExtension,
+                       let notice = store.estimateExtensionNoticeDraft(jobID: result.jobID, link: result.link) {
+                        Button("Let the customer know") { extensionNoticeDraft = notice }
+                    }
+                    Button("Done", role: .cancel) {}
+                } message: { result in
+                    Text(result.message)
+                }
             }
         }
         .nativeAnalyticsScreen(.jobDetail)
@@ -358,7 +384,7 @@ struct JobDetailView: View {
             } else {
                 Text("Needs scheduling").foregroundStyle(.secondary)
             }
-            if !job.address.isEmpty { Label(job.address, systemImage: "mappin.and.ellipse") }
+            NativeJobAddressRow(job: job) // Phase 21: property label + the job's own address
             if job.scheduledAt != nil && [.approved, .scheduled, .inProgress].contains(job.status) {
                 Button { store.requestAppointmentConfirmationReview(jobID: job.id, fromNotification: false) } label: {
                     Label("Send confirmation", systemImage: "checkmark.message")
@@ -368,6 +394,7 @@ struct JobDetailView: View {
                 }
             }
         }
+        NativeJobPropertySection(jobID: job.id) // Phase 21
         let quoteOptions = store.quoteOptionsState(jobID: job.id)
         let optionsUndecided = quoteOptions.map { $0.hasOptions && $0.acceptance == nil } ?? false
         Section("Estimate") {
@@ -436,11 +463,22 @@ struct JobDetailView: View {
                     }
                 }
             case .estimateSent:
+                let validity = store.estimateValidity(jobID: job.id)
+                estimateValidityRow(validity)
                 Button("Review or resend estimate", systemImage: "paperplane") {
                     estimateReviewDraft = store.estimateReviewDraft(jobID: job.id)
                 }
                 Button("Send follow-up", systemImage: "hourglass") {
                     store.requestEstimateFollowUpReview(jobID: job.id, source: .jobDetail)
+                }
+                // Phase 32 (spec §6.5): same prices, a new date.
+                if store.canChangeEstimateValidity(jobID: job.id) {
+                    Button(
+                        isExpired(validity) ? "Extend estimate…" : "Change valid-until date…",
+                        systemImage: "calendar.badge.clock"
+                    ) {
+                        showingValidityEditor = true
+                    }
                 }
                 Button("Mark as approved by customer", systemImage: "checkmark.seal") {
                     // Phase 25 (spec §6.4): with open options the owner picks
@@ -450,6 +488,13 @@ struct JobDetailView: View {
                     } else {
                         store.advanceJobLifecycle(id: job.id, from: .estimateSent)
                     }
+                }
+                // Phase 32 (spec §3): approving after expiry is the owner's
+                // call; the note asks them to check the price first.
+                if case .expired(let validUntil, _)? = validity {
+                    Text("This estimate expired on \(NativeQuoteExpiry.displayDate(validUntil, style: .medium)). Check your pricing before accepting it.")
+                        .font(.footnote)
+                        .foregroundStyle(Color.tradeWarningText)
                 }
             case .approved:
                 Button("Schedule this job", systemImage: "calendar.badge.plus") {
@@ -504,22 +549,75 @@ struct JobDetailView: View {
                     }
                 }
             case .declined:
-                if let reason = store.activeEstimateApproval(jobID: job.id)?.declineReason,
-                   !reason.isEmpty {
-                    LabeledContent("Customer reason", value: reason)
-                }
-                Button {
-                    showingRevisionConfirmation = true
-                } label: {
-                    if isBeginningRevision {
-                        Label("Preparing revision…", systemImage: "hourglass")
-                    } else {
-                        Label("Revise declined estimate", systemImage: "arrow.uturn.backward.circle")
+                if store.activeEstimateApproval(jobID: job.id)?.decision == "approved" {
+                    // Phase 25 review fix: the customer approved on the same
+                    // link after declining. There is nothing to revise; the
+                    // decision reconciler moves the job to Approved.
+                    Label("The customer approved this estimate after declining it. It moves to Approved on the next sync.",
+                          systemImage: "checkmark.seal")
+                } else {
+                    if let reason = store.activeEstimateApproval(jobID: job.id)?.declineReason,
+                       !reason.isEmpty {
+                        LabeledContent("Customer reason", value: reason)
                     }
+                    Button {
+                        showingRevisionConfirmation = true
+                    } label: {
+                        if isBeginningRevision {
+                            Label("Preparing revision…", systemImage: "hourglass")
+                        } else {
+                            Label("Revise declined estimate", systemImage: "arrow.uturn.backward.circle")
+                        }
+                    }
+                    .disabled(isBeginningRevision)
                 }
-                .disabled(isBeginningRevision)
             }
         }
+    }
+
+    /// Phase 32 (spec §6.5): "Valid until · Nov 2, 2026 (in 12 days)" or,
+    /// in warning text with an icon, "Expired · Nov 2, 2026". Nothing for an
+    /// undated estimate. Each row reads as one VoiceOver element.
+    @ViewBuilder
+    private func estimateValidityRow(_ validity: NativeQuoteExpiry.State?) -> some View {
+        switch validity {
+        case .open(let validUntil, let daysLeft)?:
+            LabeledContent(
+                "Valid until",
+                value: "\(NativeQuoteExpiry.displayDate(validUntil, style: .medium)) (\(NativeQuoteExpiry.relativePhrase(daysLeft: daysLeft)))"
+            )
+        case .expired(let validUntil, _)?:
+            LabeledContent {
+                Text(NativeQuoteExpiry.displayDate(validUntil, style: .medium))
+                    .foregroundStyle(Color.tradeWarningText)
+            } label: {
+                Label("Expired", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(Color.tradeWarningText)
+            }
+            .accessibilityElement(children: .combine)
+        case nil:
+            EmptyView()
+        }
+    }
+
+    private func isExpired(_ validity: NativeQuoteExpiry.State?) -> Bool {
+        if case .expired? = validity { return true }
+        return false
+    }
+
+    private var extensionResultIsPresented: Binding<Bool> {
+        Binding(
+            get: { extensionResult != nil },
+            set: { presented in if !presented { extensionResult = nil } }
+        )
+    }
+
+    /// The editor sheet hands its result over on dismiss, so the alert is
+    /// never presented while the sheet is still on screen.
+    private func presentPendingExtension() {
+        guard let pendingExtension else { return }
+        self.pendingExtension = nil
+        extensionResult = pendingExtension
     }
 
     private func quoteOptionsSummary(_ state: NativeQuoteOptionsState) -> String {
@@ -593,6 +691,150 @@ struct JobDetailView: View {
     }
 }
 
+/// Phase 32 (spec §6.5): the "Valid-until date" sheet for a sent estimate.
+/// Same prices, a new date: with an approval link the store refreshes it
+/// under the same token before saving, so Save stays disabled until the
+/// round trip ends.
+struct NativeEstimateValidityEditorView: View {
+    @EnvironmentObject private var store: AppStore
+    @Environment(\.dismiss) private var dismiss
+    let jobID: String
+    let onExtended: (NativeEstimateExtensionResult) -> Void
+
+    @State private var doesNotExpire = false
+    @State private var date = Date()
+    @State private var didLoad = false
+    @State private var isSaving = false
+    @State private var errorMessage: String?
+    @State private var originalValidUntil: String?
+    @State private var wasExpired = false
+
+    private var today: String { store.estimateValidityToday() }
+    private var hasLink: Bool { store.hasUndecidedEstimateApprovalLink(jobID: jobID) }
+    /// Review fix 2026-10-03: the customer's link shows another date.
+    private var linkDateNote: String? { store.estimateLinkValidityNote(jobID: jobID) }
+
+    private var currentText: String {
+        switch store.estimateValidity(jobID: jobID) {
+        case .open(let validUntil, let daysLeft)?:
+            "Valid until \(NativeQuoteExpiry.displayDate(validUntil, style: .medium)) (\(NativeQuoteExpiry.relativePhrase(daysLeft: daysLeft)))"
+        case .expired(let validUntil, _)?:
+            "Expired \(NativeQuoteExpiry.displayDate(validUntil, style: .medium))"
+        case nil:
+            "Doesn’t expire"
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    LabeledContent("Currently", value: currentText)
+                    Toggle("Doesn’t expire", isOn: $doesNotExpire)
+                    if !doesNotExpire {
+                        DatePicker(
+                            "Valid until",
+                            selection: $date,
+                            in: NativeValidUntilPicker.range(today: today),
+                            displayedComponents: .date
+                        )
+                    }
+                    if let linkDateNote {
+                        Text(linkDateNote)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                } footer: {
+                    Text(hasLink
+                         ? "Prices stay the same. The customer’s approval link is updated to match, so they can approve it online until the new date. To change prices, review and resend the estimate instead."
+                         : "Prices stay the same. To change prices, review and resend the estimate instead.")
+                }
+                if isSaving {
+                    Section {
+                        Label(hasLink ? "Updating the approval link…" : "Saving…", systemImage: "hourglass")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .nativeContentColumn(.list)
+            .scrollContentBackground(.hidden)
+            .background(Color.tradeCanvas)
+            .navigationTitle("Valid-until date")
+            .navigationBarTitleDisplayMode(.inline)
+            .interactiveDismissDisabled(isSaving)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                        .disabled(isSaving)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                        .fontWeight(.semibold)
+                        .keyboardShortcut("s", modifiers: .command)
+                        .disabled(isSaving)
+                }
+            }
+            .alert("Couldn’t change the date", isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) { errorMessage = nil }
+            } message: {
+                Text(errorMessage ?? "Please try again.")
+            }
+            .onAppear(perform: load)
+        }
+    }
+
+    /// An open date is kept; an expired or absent one starts at
+    /// today + the default validity.
+    private func load() {
+        guard !didLoad else { return }
+        didLoad = true
+        let stored = store.estimateValidUntil(jobID: jobID)
+        originalValidUntil = stored
+        if case .expired? = store.estimateValidity(jobID: jobID) { wasExpired = true }
+        doesNotExpire = stored == nil
+        let start = NativeValidUntilPicker.fallback(
+            lastChosen: stored,
+            validityDays: store.settings.estimateValidityDays,
+            today: today
+        )
+        date = NativeValidUntilPicker.date(from: start) ?? Date()
+    }
+
+    private func save() {
+        guard !isSaving else { return }
+        let validUntil = doesNotExpire ? nil : NativeValidUntilPicker.ymd(from: date)
+        // Nothing changed (an open date kept, or still "Doesn't expire",
+        // and the customer's link already shows it): no save, no link
+        // refresh, no alert. A link showing another date is refreshed.
+        if !wasExpired, store.isEstimateValidityUnchanged(jobID: jobID, validUntil: validUntil) {
+            dismiss()
+            return
+        }
+        isSaving = true
+        Task { @MainActor in
+            let outcome = await store.extendEstimateValidity(jobID: jobID, validUntil: validUntil)
+            isSaving = false
+            switch outcome {
+            case .extended(let link):
+                onExtended(NativeEstimateExtensionResult(
+                    jobID: jobID,
+                    previousValidUntil: originalValidUntil,
+                    validUntil: validUntil,
+                    link: link,
+                    wasExpired: wasExpired
+                ))
+                dismiss()
+            case .failure(let error):
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+}
+
 private struct EstimateApprovalHistorySection: View {
     let approvals: [Canonical.EstimateApproval]
 
@@ -644,8 +886,22 @@ struct JobEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State var job: Job
     @State private var isScheduled: Bool
+    @State private var showingQuoteOptions = false
     private let isNewRecord: Bool
     private let duplicateTemplate: Canonical.Job?
+
+    /// Phase 25 review fix: the recommended option's total while the job (or
+    /// the duplicated template) carries undecided good/better/best options;
+    /// `nil` when the editor owns the price.
+    private var undecidedOptionsTotal: Decimal? {
+        if let duplicateTemplate {
+            return CanonicalUIAdapters.hasUndecidedQuoteOptions(duplicateTemplate) ? duplicateTemplate.estimateTotal : nil
+        }
+        guard let state = store.quoteOptionsState(jobID: job.id), state.hasOptions, state.acceptance == nil else {
+            return nil
+        }
+        return state.jobTotal
+    }
 
     init(job: Job, isNewRecord: Bool = false) {
         _job = State(initialValue: job)
@@ -669,7 +925,8 @@ struct JobEditor: View {
                         Text("Choose a customer").tag("")
                         ForEach(store.customers) { Text($0.name).tag($0.id) }
                     }
-                    .onChange(of: job.customerId) { _, id in if let c = store.customers.first(where: { $0.id == id }) { job.customerName = c.name; if job.address.isEmpty { job.address = c.address } } }
+                    .onChange(of: job.customerId) { _, id in job.propertyId = nil; if let c = store.customers.first(where: { $0.id == id }) { job.customerName = c.name; if job.address.isEmpty { job.address = c.address } } }
+                    NativeJobPropertyPicker(job: $job) // Phase 21
                 }
                 Section("Work") {
                     LabeledField(label: "Job title") { TextField("Replace kitchen faucet", text: $job.title) }
@@ -690,12 +947,32 @@ struct JobEditor: View {
                         DatePicker("Ends", selection: Binding(get: { job.scheduledEnd ?? (job.scheduledAt ?? .now).addingTimeInterval(3600) }, set: { job.scheduledEnd = $0 }), displayedComponents: [.date, .hourAndMinute])
                     }
                 }
-                Section("Estimate") {
-                    CurrencyField(title: "Estimate total", value: $job.estimateTotal)
-                    LabeledContent("Labor hours") {
-                        TextField("0", value: $job.laborHours, format: .number).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                if let recommendedTotal = undecidedOptionsTotal {
+                    // Phase 25 review fix (invariant M1): the price is the
+                    // recommended option's until the customer chooses, so it
+                    // is edited in the options sheet, never typed here.
+                    Section {
+                        LabeledContent("Total (recommended option)", value: NSDecimalNumber(decimal: recommendedTotal).doubleValue.currency)
+                        if duplicateTemplate == nil {
+                            Button("Edit prices in Options", systemImage: "square.stack.3d.up") {
+                                showingQuoteOptions = true
+                            }
+                        }
+                    } header: {
+                        Text("Estimate")
+                    } footer: {
+                        Text(duplicateTemplate == nil
+                             ? "Prices come from your good / better / best options. Edit them in Options."
+                             : "Prices come from the copied options. Edit them in Options after saving.")
                     }
-                    CurrencyField(title: "Hourly rate", value: $job.laborRate)
+                } else {
+                    Section("Estimate") {
+                        CurrencyField(title: "Estimate total", value: $job.estimateTotal)
+                        LabeledContent("Labor hours") {
+                            TextField("0", value: $job.laborHours, format: .number).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                        }
+                        CurrencyField(title: "Hourly rate", value: $job.laborRate)
+                    }
                 }
                 Section {
                     LabeledField(label: "Notes") { TextField("Anything worth remembering", text: $job.notes, axis: .vertical) }
@@ -708,6 +985,7 @@ struct JobEditor: View {
             )
             .navigationBarTitleDisplayMode(.inline)
             .nativeKeyboardDoneBar()
+            .sheet(isPresented: $showingQuoteOptions) { NativeQuoteOptionsView(jobID: job.id) }
             .toolbar {
                 DismissableFormToolbar(title: duplicateTemplate != nil ? "Duplicate" : isNewRecord ? "New Job" : "Job") {
                     if !isScheduled {

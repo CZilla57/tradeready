@@ -48,10 +48,19 @@ async function markLog(env, logId, patch) {
   }
 }
 
-// Runs one sweep. Returns { scanned, sent, failed, capped, waitingOnPdf };
-// throws on a fatal (whole-batch) error — callers map that to a 500 /
-// scheduled-run log.
-async function runInvoiceEmails(env) {
+// Runs one sweep. Returns { scanned, sent, failed, capped, waitingOnPdf,
+// superseded }; throws on a fatal (whole-batch) error — callers map that to
+// a 500 / scheduled-run log.
+//
+// Phase 24 (spec §4.10): the autopay sweep runs first in the same */15 tick
+// and hands over
+//   - autopayHandled: invoice ids whose customer already got an autopay
+//     failure/skip email (with a pay link) this run. Their claim row is
+//     written as 'superseded' instead of sending, so the customer gets one
+//     email, not two.
+//   - autopayByInvoice: Map invoiceId → { card, chargeOn, manageUrl } for
+//     invoices an active enrollment will charge; the email says so.
+async function runInvoiceEmails(env, { autopayHandled = new Set(), autopayByInvoice = new Map() } = {}) {
   if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY || !env.RESEND_API_KEY) {
     throw new Error("Server misconfiguration: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, RESEND_API_KEY required.");
   }
@@ -62,6 +71,7 @@ async function runInvoiceEmails(env) {
   let failed = 0;
   let capped = 0;
   let waitingOnPdf = 0;
+  let superseded = 0;
   let warnedMissingBucket = false;
 
   const [invRows, setRows, logRows] = await Promise.all([
@@ -106,6 +116,26 @@ async function runInvoiceEmails(env) {
       // so a later run picks it up (within the 7-day freshness window).
       if (claimedToday >= MAX_INVOICE_EMAILS_PER_USER_PER_DAY) {
         deferred++;
+        continue;
+      }
+
+      // Autopay already emailed this customer a failure/skip notice with a
+      // pay link this run: record the invoice as handled, send nothing.
+      if (autopayHandled.has(invoice.id)) {
+        try {
+          const supRes = await sbFetch(env, "auto_invoice_email_log?on_conflict=user_id,invoice_id", {
+            method: "POST",
+            headers: { Prefer: "return=representation,resolution=ignore-duplicates" },
+            body: JSON.stringify({ user_id: userId, invoice_id: invoice.id, to_email: invoice.email, status: "superseded" }),
+          });
+          const rows = supRes.ok ? await supRes.json().catch(() => []) : [];
+          if (Array.isArray(rows) && rows.length) {
+            superseded++;
+            claimedToday++;
+          }
+        } catch (supErr) {
+          console.error("[send-invoice-emails] superseded claim failed", invoice.id, supErr.message);
+        }
         continue;
       }
 
@@ -168,7 +198,7 @@ async function runInvoiceEmails(env) {
 
         // SEND, then record the outcome via best-effort markLog (never throws).
         try {
-          const email = buildInvoiceEmail({ invoice, settings, attachment });
+          const email = buildInvoiceEmail({ invoice, settings, attachment, autopay: autopayByInvoice.get(invoice.id) });
           const r = await fetch("https://api.resend.com/emails", {
             method: "POST",
             headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
@@ -201,7 +231,7 @@ async function runInvoiceEmails(env) {
     }
   }
 
-  return { scanned, sent, failed, capped, waitingOnPdf };
+  return { scanned, sent, failed, capped, waitingOnPdf, superseded };
 }
 
 module.exports = { runInvoiceEmails, MAX_INVOICE_EMAILS_PER_USER_PER_DAY };

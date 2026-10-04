@@ -128,6 +128,17 @@ struct NativeQuoteOptionsState: Equatable {
     let isReadOnly: Bool
     /// The calculator's job total (the recommended tier before acceptance).
     let jobTotal: Decimal
+    /// Phase 25 review fix: the customer's approval link is still live
+    /// (no approval yet) and shows options other than these — options
+    /// edited, started or removed since it was sent. The sheet says the link
+    /// shows the sent version until the estimate is re-sent; edits stay
+    /// allowed, and if the customer approves the sent version the decision
+    /// reconciler applies exactly that.
+    let linkShowsEarlierVersion: Bool
+    /// The customer's approval landed without an option choice (an options
+    /// snapshot approved on a page that sends none, spec §10): the job keeps
+    /// the recommended option's price and nothing further is applied.
+    let approvedWithoutChoice: Bool
 
     var hasOptions: Bool { !tiers.isEmpty }
     var canDuplicateTier: Bool { isEditable && tiers.count < NativeQuoteOptions.maxTiers }
@@ -178,6 +189,22 @@ struct NativeQuoteOptionsState: Equatable {
         isEditable = NativeQuoteOptions.isEditable(job)
         isReadOnly = NativeQuoteOptions.isReadOnly(job)
         jobTotal = job.estimateTotal
+        if let approval = job.approval, approval.decision != "approved" {
+            do {
+                linkShowsEarlierVersion = try CanonicalUIAdapters.estimateApprovalSnapshotOptions(job: job)
+                    != approval.snapshot.options
+            } catch {
+                // A shape the Worker would refuse cannot be what was sent.
+                linkShowsEarlierVersion = true
+            }
+        } else {
+            linkShowsEarlierVersion = false
+        }
+        approvedWithoutChoice = acceptance == nil
+            && options != nil
+            && job.approval?.decision == "approved"
+            && job.approval?.selection == nil
+            && job.approval?.snapshot.options != nil
     }
 }
 
@@ -378,6 +405,10 @@ enum NativeQuoteOptions {
         )
     }
 
+    /// Appends a validated add-on (max 10). Idempotent per id: the add-on
+    /// editor mints its id once per sheet (`NativeQuoteAddOnEditorDraft`), so
+    /// a repeated Save — a double tap — finds that id already present and
+    /// rewrites the same add-on instead of creating a second one.
     static func addAddOn(
         job: Canonical.Job,
         draft: NativeQuoteAddOnDraft,
@@ -385,9 +416,13 @@ enum NativeQuoteOptions {
     ) throws -> Canonical.Job {
         var options = try editableOptions(job)
         let valid = try validated(draft)
+        let id = makeAddOnID()
+        if options.addOn(id: id) != nil {
+            return try editAddOn(job: job, addOnID: id, draft: valid)
+        }
         guard options.addOns.count < maxAddOns else { throw NativeQuoteOptionsError.addOnLimitReached }
         options.addOns.append(Canonical.QuoteAddOn(
-            id: makeAddOnID(),
+            id: id,
             label: valid.label,
             description: valid.description,
             price: valid.price,
@@ -542,12 +577,27 @@ enum NativeQuoteOptions {
     /// real changes). Run it on every non-deleted job after each pull.
     ///
     /// - Status moves forward only: from `lead`/`estimate_sent`, approved goes
-    ///   to `approved` and declined to `declined`
-    ///   (`JobLifecycleRules.statusAfterEstimateDecision`); any other status,
-    ///   including an unknown one, is left alone.
-    /// - On approval with a server `selection`, quote options and no
-    ///   acceptance yet, the selection is applied once as a link acceptance
-    ///   with the consented `selection.total` (accepted at `consentAt`).
+    ///   to `approved` and declined to `declined`; a `declined` job whose
+    ///   same-token approval is now approved (the customer approved after
+    ///   declining) moves to `approved`
+    ///   (`JobLifecycleRules.statusAfterEstimateDecision`). Any other status,
+    ///   including an unknown one, is left alone. Only the job's *current*
+    ///   approval counts: a revised declined estimate has none (the old one
+    ///   is archived in `approvalHistory`, its link revoked), so a stale
+    ///   decision cannot resurrect it.
+    /// - On approval, with no acceptance recorded yet, the approved snapshot
+    ///   decides the price — whatever the job's options look like now
+    ///   (spec §12 "Review fixes (2026-10-03)"):
+    ///   - an options snapshot with the server's `selection`: the job's
+    ///     options are rebuilt as the customer saw them
+    ///     (`optionsAsApproved`) and the selection is applied once as a link
+    ///     acceptance with the consented `selection.total` (accepted at
+    ///     `consentAt`). This also covers options removed, restarted or
+    ///     re-tiered after sending.
+    ///   - a single-price snapshot while the job holds never-sent draft
+    ///     options: the customer approved that single price, so the drafts
+    ///     are dropped and the job's total becomes the snapshot total
+    ///     (`applyingSinglePriceApproval`).
     static func reconcileEstimateDecision(job: Canonical.Job) -> Canonical.Job? {
         guard let approval = job.approval, let decisionText = approval.decision else { return nil }
         let decision: EstimateDecision
@@ -566,24 +616,106 @@ enum NativeQuoteOptions {
                 changed = true
             }
         }
-        if decision == .approved,
-           let selection = approval.selection,
-           let options = result.quoteOptions,
-           options.acceptance == nil,
-           let accepted = try? applyAcceptance(
-               job: result,
-               tierId: selection.tierId,
-               addOnIds: selection.addOnIds,
-               // The server stamps consentAt with every decision; sentAt only
-               // guards a malformed record.
-               acceptedAt: approval.consentAt ?? approval.sentAt,
-               source: Canonical.QuoteAcceptance.sourceLink,
-               consentedTotal: selection.total
-           ) {
-            result = accepted
+        guard decision == .approved, result.quoteOptions?.acceptance == nil else {
+            return changed ? result : nil
+        }
+        if let selection = approval.selection {
+            var base = result
+            if let frozen = approval.snapshot.options {
+                base.quoteOptions = optionsAsApproved(frozen, job: base)
+            }
+            if base.quoteOptions != nil,
+               let accepted = try? applyAcceptance(
+                   job: base,
+                   tierId: selection.tierId,
+                   addOnIds: selection.addOnIds,
+                   // The server stamps consentAt with every decision; sentAt
+                   // only guards a malformed record.
+                   acceptedAt: approval.consentAt ?? approval.sentAt,
+                   source: Canonical.QuoteAcceptance.sourceLink,
+                   consentedTotal: selection.total
+               ) {
+                result = accepted
+                changed = true
+            }
+        } else if approval.snapshot.options == nil, result.quoteOptions != nil {
+            result = applyingSinglePriceApproval(result, snapshot: approval.snapshot)
             changed = true
         }
         return changed ? result : nil
+    }
+
+    /// The job's quote options exactly as the approved snapshot froze them:
+    /// the snapshot's tiers (name, description, total) and add-ons (label,
+    /// description, amount as `price`), in its order, with its recommended
+    /// tier. Calculator fields and internal add-on `cost` are not in the
+    /// snapshot, so they carry over by id from the job's current options;
+    /// a tier the job no longer has takes the job's current pricing (the
+    /// spec §6.3 missing-tier rule: the pricing stays, the consented total
+    /// wins). Tiers and add-ons the customer never saw are dropped; the
+    /// options are read-only from here on (M3).
+    static func optionsAsApproved(
+        _ frozen: Canonical.EstimateApprovalSnapshot.Options,
+        job: Canonical.Job
+    ) -> Canonical.QuoteOptions {
+        let current = job.quoteOptions
+        let tiers = frozen.tiers.map { sent -> Canonical.QuoteTier in
+            var tier = current?.tier(id: sent.id)
+                ?? Canonical.QuoteTier(id: sent.id, name: sent.name, pricingOf: job)
+            tier.name = sent.name
+            tier.description = sent.description
+            tier.estimateTotal = sent.total
+            return tier
+        }
+        let addOns = frozen.addOns.map { sent -> Canonical.QuoteAddOn in
+            var addOn = current?.addOn(id: sent.id)
+                ?? Canonical.QuoteAddOn(id: sent.id, label: sent.label, price: sent.amount)
+            addOn.label = sent.label
+            addOn.description = sent.description
+            addOn.price = sent.amount
+            return addOn
+        }
+        var options = current
+            ?? Canonical.QuoteOptions(tiers: [], addOns: [], recommendedTierId: frozen.recommendedTierId)
+        options.tiers = tiers
+        options.addOns = addOns
+        options.recommendedTierId = frozen.recommendedTierId
+        return options
+    }
+
+    /// The customer approved a single-price snapshot while the job held
+    /// draft options that were never sent. The drafts are dropped (they can
+    /// no longer be sent or chosen) and the job's total becomes the approved
+    /// snapshot total. When a draft tier still prices exactly what was sent
+    /// (same total and customer lines; the recommended tier is tried first),
+    /// its calculator fields become the job's; otherwise the job keeps its
+    /// current pricing and the invoice bills the approved lines
+    /// (`approvedInvoiceQuote`).
+    private static func applyingSinglePriceApproval(
+        _ job: Canonical.Job,
+        snapshot: Canonical.EstimateApprovalSnapshot
+    ) -> Canonical.Job {
+        var result = job
+        let sent = snapshot.lineItems.map { LineKey(label: $0.label, amount: $0.amount) }
+        let tiers = job.quoteOptions?.tiers ?? []
+        let ordered = tiers.filter { $0.id == job.quoteOptions?.recommendedTierId }
+            + tiers.filter { $0.id != job.quoteOptions?.recommendedTierId }
+        if let match = ordered.first(where: { tier in
+            tier.estimateTotal == snapshot.total
+                && CanonicalUIAdapters.estimateLineItems(for: tier).map { LineKey(label: $0.label, amount: $0.amount) } == sent
+        }) {
+            result.applyCalculatorPricing(of: match)
+        }
+        result.estimateTotal = snapshot.total
+        result.quoteOptions = nil
+        return result
+    }
+
+    /// A customer line compared by what the customer sees (label and
+    /// amount), ignoring preservation metadata.
+    private struct LineKey: Equatable {
+        let label: String
+        let amount: Decimal
     }
 
     /// Spec §6.3 rebase graft: when a pulled `server` job and a pending
@@ -646,6 +778,60 @@ enum NativeQuoteOptions {
     /// part of `NativeJobProfitability.input`'s estimated direct cost.
     static func acceptedAddOnCost(job: Canonical.Job) -> Decimal {
         job.quoteOptions?.acceptedAddOnCost ?? 0
+    }
+
+    /// Phase 25 review fix: the customer-approved lines an invoice from this
+    /// job bills, or `nil` to bill the lines derived from the job's current
+    /// pricing (today's path). Pass to
+    /// `JobInvoiceDomain.computeBillableBreakdown(approvedQuote:)`.
+    ///
+    /// Non-nil only while a link approval is still the job's price
+    /// (`CanonicalUIAdapters.linkApprovedEstimateLines(job:)`), its lines add
+    /// up to that price, and the current pricing no longer derives the same
+    /// lines — e.g. a tier edited, deleted or removed after sending, or a
+    /// single price approved over never-sent draft options. When nothing
+    /// drifted the derived lines are the approved ones, so today's invoice
+    /// wording is kept. Owner-recorded choices always bill current pricing.
+    ///
+    /// Categories: the first approved line is the labor line when it is the
+    /// derivation's "Labor (…)" line, a "Materials (…)" line right after it
+    /// is materials, the trailing "Overhead & operating costs" line of the
+    /// tier is overhead, a line matching a current customer-visible direct
+    /// cost's label takes that cost's category, and everything else
+    /// (including add-ons) is `other`.
+    static func approvedInvoiceQuote(job: Canonical.Job) -> JobInvoiceApprovedQuote? {
+        guard let approved = CanonicalUIAdapters.linkApprovedEstimateLines(job: job), !approved.isEmpty else {
+            return nil
+        }
+        let approvedSum = approved.reduce(Decimal.zero) { $0 + $1.amount }
+        guard FinancialDecimal.cents(approvedSum) == FinancialDecimal.cents(job.estimateTotal) else { return nil }
+        let key = { (line: Canonical.EstimateApprovalSnapshot.LineItem) in LineKey(label: line.label, amount: line.amount) }
+        guard CanonicalUIAdapters.currentEstimateLines(job: job).map(key) != approved.map(key) else { return nil }
+
+        let addOnCount = job.quoteOptions == nil ? 0 : (job.approval?.selection?.addOns.count ?? 0)
+        let tierCount = max(approved.count - addOnCount, 0)
+        let directCostCategories = Dictionary(
+            (job.jobCosts ?? []).filter(\.customerVisible).map {
+                (CanonicalUIAdapters.estimateDirectCostLabel($0), $0.category)
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let lines = approved.enumerated().map { index, line -> JobInvoiceLineDraft in
+            let category: String
+            if index >= tierCount {
+                category = "other"
+            } else if index == 0, line.label.hasPrefix("Labor (") {
+                category = "labor"
+            } else if index == 1, line.label.hasPrefix("Materials ("), approved[0].label.hasPrefix("Labor (") {
+                category = "materials"
+            } else if index == tierCount - 1, line.label == CanonicalUIAdapters.estimateOverheadLineLabel {
+                category = "overhead"
+            } else {
+                category = directCostCategories[line.label] ?? "other"
+            }
+            return JobInvoiceLineDraft(description: line.label, amount: line.amount, category: category)
+        }
+        return JobInvoiceApprovedQuote(lines: lines)
     }
 
     // MARK: - Private

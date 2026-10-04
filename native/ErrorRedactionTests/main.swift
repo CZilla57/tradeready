@@ -1242,7 +1242,8 @@ struct ErrorRedactionTests {
             "UserID": "linked=true tracking=false Analytics+AppFunctionality",
             "ProductInteraction": "linked=true tracking=false Analytics",
             "OtherUsageData": "linked=true tracking=false Analytics",
-            "OtherFinancialInfo": "linked=true tracking=false Analytics",
+            "OtherFinancialInfo": "linked=true tracking=false Analytics+AppFunctionality",
+            "PaymentInfo": "linked=true tracking=false AppFunctionality",
             "PurchaseHistory": "linked=true tracking=false Analytics",
             "CrashData": "linked=true tracking=false AppFunctionality",
             "PerformanceData": "linked=true tracking=false AppFunctionality",
@@ -1255,7 +1256,7 @@ struct ErrorRedactionTests {
             // Phase 26 (Q3): also covers calendar busy start/end times (a
             // comment-only manifest edit; no new collected-data type).
             "OtherUserContent": "linked=true tracking=false AppFunctionality",
-        ], "manifest: collected-data types (§8.2 + §8.3 decisions + OI-1 first-party data; no Device ID)")
+        ], "manifest: collected-data types (§8.2 + §8.3 decisions + OI-1 first-party data + Phase 24 Q5 Payment Info and 28-Q1 Financial Info purpose; no Device ID)")
         let widget = plist("native/TradeReadyWidgets/PrivacyInfo.xcprivacy")
         expectEqual((widget["NSPrivacyCollectedDataTypes"] as? [Any])?.count, 0, "widget manifest: still no collected data")
     }

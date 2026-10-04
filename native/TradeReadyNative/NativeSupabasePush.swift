@@ -92,10 +92,11 @@ struct NativeSupabaseMutationPushService {
     /// in a `data` column. Everything else (`settings`, `customer_notes`) has a
     /// bespoke row shape handled explicitly below.
     /// Phase 20 adds `forms` (custom form templates and job form instances).
+    /// Phase 33 adds `campaigns` (past-customer campaigns).
     private static let collectionTables: Set<String> = [
         "jobs", "invoices", "customers", "expenses", "pricebook",
         "recurringJobs", "recurringInvoices", "trips", "bookingRequests", "jobPhotos",
-        "forms"
+        "forms", "campaigns"
     ]
 
     private struct StoredSession: Decodable {

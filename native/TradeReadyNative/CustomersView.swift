@@ -13,9 +13,13 @@ struct CustomersView: View {
     @State private var showingArchived = false
     @State private var path: [NativeCustomerRoute] = []
     @State private var isRootVisible = true
+    // Phase 33: the list filter (per session), campaigns and the tag picker.
+    @State private var listFilter = NativeCustomerListFilter()
+    @State private var showingCampaigns = false
+    @State private var showingTagFilter = false
 
     /// Task 11.11 fix round 1: anything this screen presents over itself.
-    private var isPresentingAnything: Bool { showingEditor }
+    private var isPresentingAnything: Bool { showingEditor || showingCampaigns || showingTagFilter }
 
     /// ⌘N (new customer) only while the list is on top: never under the
     /// editor sheet, nor under a pushed customer.
@@ -28,13 +32,13 @@ struct CustomersView: View {
     }
 
     private var customers: [NativeCustomerListEntry] {
-        allCustomers.filter { customer in
+        NativeCustomerListFilter.apply(allCustomers.filter { customer in
             customer.isArchived == showingArchived
                 && (search.isEmpty
                     || customer.name.localizedCaseInsensitiveContains(search)
                     || customer.email.localizedCaseInsensitiveContains(search)
                     || customer.phone.localizedCaseInsensitiveContains(search))
-        }
+        }, customers: store.canonicalCustomers, filter: listFilter)
     }
 
     private var activeCustomers: [NativeCustomerListEntry] {
@@ -49,7 +53,8 @@ struct CustomersView: View {
         NativeContentState.collection(
             visibleCount: customers.count,
             totalCount: customersInSelectedScope.count,
-            query: search
+            query: search,
+            isFiltering: listFilter.isActive
         )
     }
 
@@ -77,6 +82,10 @@ struct CustomersView: View {
                         value: activeCustomers.reduce(0) { $0 + $1.totalSpent }.currency
                     )
                     Toggle("Show archived", isOn: $showingArchived)
+                }
+
+                if listFilter.isActive {
+                    Section { NativeCustomerListFilterChips(filter: $listFilter, vocabulary: store.customerTagVocabulary) }
                 }
 
                 if !showingArchived,
@@ -137,7 +146,7 @@ struct CustomersView: View {
                                 ? "Archived customers will appear here."
                                 : "Add a customer or create an invoice to get started.",
                             symbol: showingArchived ? "archivebox" : "person.2",
-                            resetAction: { search = "" }
+                            resetAction: { search = ""; listFilter = .init() }
                         )
                         .listRowBackground(Color.clear)
                     }
@@ -149,6 +158,11 @@ struct CustomersView: View {
             .navigationTitle("Customers")
             .searchable(text: $search)
             .toolbar {
+                NativeCustomerListFilterMenu(
+                    filter: $listFilter, showingTagPicker: $showingTagFilter, vocabulary: store.customerTagVocabulary
+                )
+                Button("Campaigns", systemImage: "megaphone") { showingCampaigns = true }
+                    .accessibilityLabel("Campaigns")
                 Button {
                     guard !isPresentingAnything else { return }
                     showingEditor = true
@@ -162,6 +176,10 @@ struct CustomersView: View {
             }
             .sheet(isPresented: $showingEditor) {
                 CustomerEditor(customer: Customer(), mode: .create)
+            }
+            .sheet(isPresented: $showingCampaigns) { NativeCampaignListView() }
+            .sheet(isPresented: $showingTagFilter) {
+                NativeCustomerTagFilterSheet(filter: $listFilter, vocabulary: store.customerTagVocabulary)
             }
             .onChange(of: store.deepLinkedCustomerID) { _, id in
                 openRequestedCustomer(id)
@@ -205,6 +223,7 @@ struct CustomersView: View {
                 Text(customerSummary(customer))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                if customer.isManual { NativeCustomerRowMarketingCaption(customerID: customer.id) }
             }
         }
         .padding(.vertical, 3)
@@ -340,12 +359,24 @@ struct CustomerDetailView: View {
                         }
                     }
 
+                    if let storedCustomer {
+                        NativeCustomerTagsSection(customerID: storedCustomer.id, customerName: storedCustomer.name)
+                    }
+
                     if !customer.phone.isEmpty || !customer.email.isEmpty || !(storedCustomer?.address ?? "").isEmpty {
                         Section("Contact") {
                             if !customer.phone.isEmpty { LabeledContent("Phone", value: customer.phone) }
                             if !customer.email.isEmpty { LabeledContent("Email", value: customer.email) }
                             if let address = storedCustomer?.address, !address.isEmpty { Text(address) }
                         }
+                    }
+                    if let storedCustomer { NativeCustomerPropertiesSection(customerID: storedCustomer.id) } // Phase 21
+
+                    // Phase 34: referrals (renders nothing for an unsaved customer).
+                    NativeCustomerReferralsSection(customerID: storedCustomer?.id ?? customer.id, customerName: customer.name)
+
+                    if let storedCustomer {
+                        NativeCustomerMarketingSection(customerID: storedCustomer.id, customerName: storedCustomer.name)
                     }
 
                     // Customer Portal section
@@ -675,6 +706,7 @@ struct CustomerEditor: View {
                     }
                 }
                 leadSourceSection
+                NativeCustomerEditorMarketingSection(customer: $customer)
                 Section("Notes") {
                     TextField("Access details, preferences…", text: $customer.notes, axis: .vertical)
                         .lineLimit(3...8)
@@ -781,6 +813,10 @@ struct CustomerEditor: View {
                 Text("Other…").tag(Self.otherLeadSourceTag)
             }
             .pickerStyle(.menu)
+            // Phase 34 (§5.4): who referred them, while the source is Referral.
+            if NativeLeadSource.normalize(customer.leadSource) == "referral" {
+                NativeReferredByRow(customerID: customer.id, referredByCustomerId: $customer.referredByCustomerId)
+            }
             if showsOtherField {
                 TextField("Home show, radio ad…", text: Binding(
                     get: { customer.leadSource ?? "" },

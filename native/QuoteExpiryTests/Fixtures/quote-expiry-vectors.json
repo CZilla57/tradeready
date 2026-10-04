@@ -1,0 +1,20 @@
+{
+  "description": "Shared parity vectors for the quote expiry rule (docs/superpowers/specs/2026-10-03-quote-expiration-design.md §2.4): expired iff validUntil is present and today(now, zone) > validUntil, where zone is timeZone when the runtime resolves it, else Etc/GMT+12 (anywhere on Earth). A null timeZone also uses Etc/GMT+12. 'now' is always second-precision UTC with a Z suffix. Loaded by native/QuoteExpiryTests and backend-workers/tests/estimateExpiry.test.cjs.",
+  "vectors": [
+    { "name": "phoenix well before the date", "validUntil": "2026-11-02", "timeZone": "America/Phoenix", "now": "2026-10-03T06:30:00Z", "expired": false },
+    { "name": "phoenix 23:30 local on the date is still valid", "validUntil": "2026-11-02", "timeZone": "America/Phoenix", "now": "2026-11-03T06:30:00Z", "expired": false },
+    { "name": "phoenix 23:59:59 local on the date is still valid", "validUntil": "2026-11-02", "timeZone": "America/Phoenix", "now": "2026-11-03T06:59:59Z", "expired": false },
+    { "name": "phoenix local midnight after the date is expired", "validUntil": "2026-11-02", "timeZone": "America/Phoenix", "now": "2026-11-03T07:00:00Z", "expired": true },
+    { "name": "new york after the DST end is not expired at the EDT midnight", "validUntil": "2026-11-01", "timeZone": "America/New_York", "now": "2026-11-02T04:30:00Z", "expired": false },
+    { "name": "new york 23:59:59 EST on the DST-end date is still valid", "validUntil": "2026-11-01", "timeZone": "America/New_York", "now": "2026-11-02T04:59:59Z", "expired": false },
+    { "name": "new york EST midnight after the DST-end date is expired", "validUntil": "2026-11-01", "timeZone": "America/New_York", "now": "2026-11-02T05:00:00Z", "expired": true },
+    { "name": "auckland 23:59:59 NZDT on the date is still valid", "validUntil": "2026-11-02", "timeZone": "Pacific/Auckland", "now": "2026-11-02T10:59:59Z", "expired": false },
+    { "name": "auckland is expired while the UTC date is still the date", "validUntil": "2026-11-02", "timeZone": "Pacific/Auckland", "now": "2026-11-02T11:00:00Z", "expired": true },
+    { "name": "unknown zone is not expired at the phoenix midnight", "validUntil": "2026-11-02", "timeZone": "Mars/Olympus", "now": "2026-11-03T07:00:00Z", "expired": false },
+    { "name": "unknown zone uses anywhere on Earth and is valid until 11:59:59 UTC next day", "validUntil": "2026-11-02", "timeZone": "Mars/Olympus", "now": "2026-11-03T11:59:59Z", "expired": false },
+    { "name": "unknown zone uses anywhere on Earth and is expired at 12:00 UTC next day", "validUntil": "2026-11-02", "timeZone": "Mars/Olympus", "now": "2026-11-03T12:00:00Z", "expired": true },
+    { "name": "null zone uses anywhere on Earth and is still valid", "validUntil": "2026-11-02", "timeZone": null, "now": "2026-11-03T11:59:59Z", "expired": false },
+    { "name": "null zone uses anywhere on Earth and is expired", "validUntil": "2026-11-02", "timeZone": null, "now": "2026-11-03T12:00:00Z", "expired": true },
+    { "name": "no date never expires", "validUntil": null, "timeZone": null, "now": "2099-01-01T00:00:00Z", "expired": false }
+  ]
+}

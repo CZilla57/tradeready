@@ -13,6 +13,7 @@
 
 const { selectInvoicesToRemind } = require("./selectInvoicesToRemind");
 const { buildReminderEmail } = require("./reminderEmail");
+const { autopayReminderExclusions } = require("./autopay/runAutopayCharges");
 
 // Owner-tunable per-user daily ceiling. Reminders are one-and-done per
 // invoice, so honest volume is bounded by NEW overdue invoices in a day — 25
@@ -79,6 +80,12 @@ async function runReminders(env) {
     sbFetch(env, "jobs?deleted=is.false&select=id,user_id,data").then((r) => r.json()),
   ]);
 
+  // Phase 24 (spec §4.10): an invoice an active autopay enrollment is about
+  // to charge (window open, no claim yet) gets no reminder — a 0-day rule
+  // could otherwise race the charge. Kept out of the pure selector, which is
+  // byte-identical with the dormant Vercel twin.
+  const autopayPending = await autopayReminderExclusions(env, { now: today });
+
   const settingsByUser = new Map((setRows || []).map((r) => [r.user_id, r.data]));
   const dayStart = new Date(today);
   dayStart.setUTCHours(0, 0, 0, 0);
@@ -113,7 +120,8 @@ async function runReminders(env) {
     const settings = settingsByUser.get(userId);
     const alreadySent = [...(sentByUser.get(userId) || [])];
     const jobs = jobsByUser.get(userId) || [];
-    const toSend = selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds: alreadySent, jobs, today });
+    const toSend = selectInvoicesToRemind({ invoices, settings, alreadySentInvoiceIds: alreadySent, jobs, today })
+      .filter((invoice) => !autopayPending.has(invoice.id));
     // Rows this user already claimed today plus claims made in this run.
     let claimedToday = todayCountByUser.get(userId) || 0;
     let deferred = 0;

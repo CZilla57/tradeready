@@ -18,10 +18,33 @@ function sanitizeSubjectPart(name) {
   return String(name || '').replace(/[\r\n]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
 }
 
+// Phase 34: a booking that came in through a customer's referral link. The
+// server never resolves the code, so the line names nobody, and the code
+// itself is never echoed (the owner's app resolves it at intake).
+const REFERRAL_LINE = "Came in through a customer's referral link — open TradeReady to see who referred them.";
+
+function hasReferralCode(request) {
+  return typeof request.referralCode === 'string' && request.referralCode !== '';
+}
+
+// Phase 33: a booking that came in through one of the owner's past-customer
+// campaign links. The server never resolves the code, so the line names no
+// campaign, and the code itself is never echoed (the owner's app resolves it
+// at intake). The line is a fixed plain-text string: nothing from the request
+// is interpolated into it, so there is nothing to escape.
+const CAMPAIGN_LINE = 'Came in through one of your campaign links. Open TradeReady to see which one.';
+
+function hasCampaignCode(request) {
+  return typeof request.campaignCode === 'string' && request.campaignCode !== '';
+}
+
 function buildBookingEmail({ to, request }) {
   // Accurate status wording (Phase 11 spec §2 Phase C): a slot booking is a
   // confirmed appointment on the calendar, not a quote request.
   const booked = request.kind === 'booked' && request.slot;
+  const closing = booked
+    ? `The slot is held for them. Open TradeReady to see it on your calendar.`
+    : `Open TradeReady to see the new lead in Jobs.`;
   const lines = booked
     ? [
         `New booked appointment via your booking link:`,
@@ -35,7 +58,6 @@ function buildBookingEmail({ to, request }) {
         `What they need:`,
         request.details,
         ``,
-        `The slot is held for them. Open TradeReady to see it on your calendar.`,
       ]
     : [
         `New quote request via your booking link:`,
@@ -49,8 +71,10 @@ function buildBookingEmail({ to, request }) {
         `What they need:`,
         request.details,
         ``,
-        `Open TradeReady to see the new lead in Jobs.`,
       ];
+  if (hasReferralCode(request)) lines.push(REFERRAL_LINE);
+  if (hasCampaignCode(request)) lines.push(CAMPAIGN_LINE);
+  lines.push(closing);
   return {
     from: SENDER,
     to,
@@ -109,6 +133,8 @@ async function notifyOwner(env, { userId, settingsData, request }) {
 const UPDATE_TITLES = {
   request_reschedule: 'Reschedule requested',
   cancel: 'Booking cancelled',
+  // Phase 32: a customer asked for an updated version of an expired estimate.
+  quote_update: 'Updated estimate requested',
 };
 
 /**
@@ -124,9 +150,12 @@ async function notifyOwnerUpdate(env, { userId, settingsData, request, event, no
   try {
     const to = await fetchOwnerEmail(env, userId);
     if (to && env.RESEND_API_KEY) {
+      // A quote-update row's details name the estimate (and carry the note),
+      // so an owner with several open estimates knows which one.
+      const details = event === 'quote_update' && typeof request.details === 'string' ? request.details : '';
       const lines = [
         `${title} — ${request.name}${when ? ` (${when})` : ''}.`,
-        ...(note ? [``, `Their note:`, note] : []),
+        ...(details ? [``, details] : note ? [``, `Their note:`, note] : []),
         ``,
         `Open TradeReady to respond.`,
       ];
@@ -156,7 +185,8 @@ async function notifyOwnerUpdate(env, { userId, settingsData, request, event, no
           to: token,
           title,
           body: `${request.name}${when ? ` — ${when}` : ''}`,
-          data: { type: 'booking_update', jobId: request.convertedJobId },
+          // Booking rows carry convertedJobId; estimate/portal rows carry jobRef.
+          data: { type: 'booking_update', jobId: request.convertedJobId || request.jobRef },
         }),
       });
       if (!r.ok) throw new Error(`Expo push ${r.status}: ${await r.text()}`);

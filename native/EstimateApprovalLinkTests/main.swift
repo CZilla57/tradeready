@@ -143,6 +143,43 @@ struct EstimateApprovalLinkTests {
             expect(false, "422 must report an unsynced job")
         } catch NativeEstimateApprovalLinkError.jobNotSynced { expect(true, "422 is classified") }
 
+        // Phase 32 (spec 2026-10-03 §6.10): a 400 from create-link is the
+        // Worker refusing the snapshot's details (e.g. a past valid-until
+        // date), never "unavailable".
+        let datedSnapshot = try CanonicalUIAdapters.estimateApprovalSnapshot(
+            job: job,
+            customerName: "Ada Lovelace",
+            businessName: "Ada Electric",
+            validUntil: "2026-11-02",
+            validUntilTimeZone: "America/Phoenix"
+        )
+        let rejectedDetailsLoader = RecordingLoader()
+        rejectedDetailsLoader.enqueue(#"{"error":"The valid-until date is in the past."}"#, status: 400)
+        do {
+            _ = try await NativeEstimateApprovalLinkService(endpoint: endpoint, loader: rejectedDetailsLoader)
+                .createLink(jobID: job.id, snapshot: datedSnapshot, sessionBytes: session)
+            expect(false, "400 must report rejected estimate details")
+        } catch NativeEstimateApprovalLinkError.estimateRejected {
+            expect(true, "400 is classified as estimateRejected")
+        }
+        expect(NativeEstimateApprovalLinkError.estimateRejected.errorDescription
+               == "The approval service couldn't accept this estimate's details. Review the estimate, check its valid-until date, and try again.",
+               "estimateRejected copy names the valid-until date")
+        if let body = rejectedDetailsLoader.requests.first?.httpBody,
+           let fields = try JSONSerialization.jsonObject(with: body) as? [String: Any],
+           let snapshotFields = fields["snapshot"] as? [String: Any] {
+            expect(snapshotFields["validUntil"] as? String == "2026-11-02"
+                   && snapshotFields["validUntilTimeZone"] as? String == "America/Phoenix",
+                   "the dated snapshot is sent with its date and zone")
+        } else { expect(false, "dated approval request body decodes") }
+        let serverErrorLoader = RecordingLoader()
+        serverErrorLoader.enqueue(#"{"error":"boom"}"#, status: 500)
+        do {
+            _ = try await NativeEstimateApprovalLinkService(endpoint: endpoint, loader: serverErrorLoader)
+                .createLink(jobID: job.id, snapshot: datedSnapshot, sessionBytes: session)
+            expect(false, "500 must report unavailable")
+        } catch NativeEstimateApprovalLinkError.unavailable { expect(true, "500 stays unavailable") }
+
         let malformedLoader = RecordingLoader()
         malformedLoader.enqueue(#"{"url":"http://approve.example/x","token":"short","sentAt":"x"}"#, status: 200)
         do {

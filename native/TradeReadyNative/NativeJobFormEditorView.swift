@@ -14,7 +14,11 @@ struct NativeFormItemsEditor: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
     let formID: String
+    /// The typed title, cleared only once saved. A refused one stays, marked
+    /// "Not saved" with its reason, and is handed to the store if the editor
+    /// closes (review fix 2026-10-03).
     @State private var titleDraft: String?
+    @State private var titleRefusal: NativeJobForms.FormError?
     @FocusState private var titleFocused: Bool
     @State private var itemSheet: NativeFormItemSheetTarget?
     @State private var pendingDeleteID: String?
@@ -51,7 +55,8 @@ struct NativeFormItemsEditor: View {
         } message: {
             Text(errorMessage ?? "")
         }
-        .onDisappear { commitTitle() }
+        .onAppear(perform: restoreHeldTitle)
+        .onDisappear(perform: holdUnsavedTitle)
     }
 
     private func editor(_ form: Canonical.Form) -> some View {
@@ -65,6 +70,11 @@ struct NativeFormItemsEditor: View {
                     .onSubmit { commitTitle() }
                     .disabled(!editable)
                     .accessibilityLabel("Form title")
+                if let titleRefusal {
+                    Label(NativeJobFormsPresentation.unsavedFieldText(titleRefusal), systemImage: "exclamationmark.triangle")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(Color.tradeWarningText)
+                }
             }
             Section {
                 ForEach(Array(form.items.enumerated()), id: \.element.id) { index, item in
@@ -163,13 +173,33 @@ struct NativeFormItemsEditor: View {
         )
     }
 
-    private func commitTitle() {
-        guard let draft = titleDraft else { return }
-        titleDraft = nil
-        guard let form = store.form(id: formID),
-              draft.trimmingCharacters(in: .whitespacesAndNewlines) != form.title
+    /// Saves the typed title if it differs from the stored one. It is
+    /// cleared only once saved; a new refusal is shown once.
+    private func commitTitle(announce: Bool = true) {
+        let outcome = NativeJobFormsPresentation.commitTitle(
+            titleDraft, refusal: titleRefusal, stored: store.form(id: formID)?.title
+        ) { store.renameForm(id: formID, title: $0) }
+        if titleDraft != outcome.draft { titleDraft = outcome.draft }
+        if titleRefusal != outcome.refusal { titleRefusal = outcome.refusal }
+        if announce, let problem = outcome.newProblem {
+            errorMessage = NativeJobFormsPresentation.message(for: problem)
+        }
+    }
+
+    /// A title this editor closed without saving comes back, with a notice.
+    private func restoreHeldTitle() {
+        guard let held = store.takeHeldFormTitle(formID: formID),
+              let title = NativeJobFormsPresentation.restoredTitle(held.title, stored: store.form(id: formID)?.title)
         else { return }
-        report(store.renameForm(id: formID, title: draft))
+        titleDraft = title
+        titleRefusal = held.refusal
+        errorMessage = NativeJobFormsPresentation.restoredTitleMessage(reason: held.refusal)
+    }
+
+    /// Closing makes a last try; a title still refused is held by the store.
+    private func holdUnsavedTitle() {
+        commitTitle(announce: false)
+        store.holdFormTitle(NativeJobFormsPresentation.titleToHold(titleDraft), refusal: titleRefusal, formID: formID)
     }
 
     private func move(_ index: Int, by step: Int, in form: Canonical.Form) {
@@ -357,6 +387,11 @@ struct NativeFormTemplatesView: View {
                             Text(NativeJobFormsPresentation.itemCountLabel(template.items.count))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                            if store.hasHeldFormText(formID: template.id) {
+                                Label(NativeJobFormsPresentation.unsavedTextLabel, systemImage: "exclamationmark.triangle")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(Color.tradeWarningText)
+                            }
                         }
                         .accessibilityElement(children: .combine)
                     }

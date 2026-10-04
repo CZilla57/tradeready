@@ -1371,7 +1371,7 @@ struct PoorNetworkTests {
                 description: "Maintenance", amount: 150, dueDays: 30,
                 cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
                 occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: today,
-                isActive: true, createdAt: today, autoSendEnabled: false)
+                isActive: true, createdAt: today, autoSendEnabled: false, autopayEnabled: nil)
         }
         let firstPlan = plan("rinv-h-first"), secondPlan = plan("rinv-h-second")
 
@@ -1494,7 +1494,7 @@ struct PoorNetworkTests {
             description: "Maintenance", amount: 150, dueDays: 30,
             cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
             occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: today,
-            isActive: true, createdAt: today, autoSendEnabled: false)
+            isActive: true, createdAt: today, autoSendEnabled: false, autopayEnabled: nil)
         expect(h.store.createRecurringInvoice(invoiceRule), "L237.d fixture plan rule creates")
         let jobsBefore = h.store.jobs.count
         let invoicesBefore = h.store.invoices.count

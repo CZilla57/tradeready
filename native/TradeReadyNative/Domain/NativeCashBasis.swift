@@ -220,7 +220,8 @@ enum NativeCashBasis {
     /// Unknown method strings fall back to `.other`; the ledger only
     /// special-cases `.stripe` (fees) and voided entries (contribute nothing),
     /// so the fallback is safe. Matches `NativeJobProfitability.ledgerInvoice`
-    /// and `AppStore.ledgerInvoice`.
+    /// and `AppStore.ledgerInvoice`, except that this income-path bridge also
+    /// carries the Phase 28 `tipAmount` (balances never read it).
     static func ledgerInvoice(_ invoice: Canonical.Invoice) -> LedgerInvoice {
         LedgerInvoice(
             id: invoice.id,
@@ -235,7 +236,8 @@ enum NativeCashBasis {
                     date: payment.date,
                     method: LedgerPaymentMethod(rawValue: payment.method) ?? .other,
                     note: payment.note,
-                    voidedAt: payment.voidedAt
+                    voidedAt: payment.voidedAt,
+                    tip: payment.tipAmount
                 )
             },
             depositRequest: invoice.depositRequest.map { DepositRequest(amount: $0.amount) }
@@ -275,6 +277,49 @@ enum NativeCashBasis {
                 for index in ranges.indices
                 where isInRange(payment.date, start: ranges[index].start, end: ranges[index].end) {
                     totals[index] += payment.amount
+                }
+            }
+        }
+        return totals
+    }
+
+    // MARK: - Phase 28 tips (spec §6.2)
+    //
+    // Income, cash and tax surfaces count tips; invoice, receivables and
+    // customer-attribution surfaces stay on `collected`. Same FA-039-safe
+    // local-date filter as `collected`; voided entries contribute nothing.
+
+    /// Tips on non-voided payments dated inside the window.
+    static func tipsCollected(invoices: [Canonical.Invoice], start: Date, end: Date) -> Decimal {
+        invoices.reduce(Decimal.zero) { total, invoice in
+            total + paymentsInRange(invoice, start: start, end: end).reduce(Decimal.zero) {
+                $0 + ($1.voidedAt == nil ? $1.countedTip : 0)
+            }
+        }
+    }
+
+    /// Cash actually received in the window: `collected` + `tipsCollected`.
+    static func received(invoices: [Canonical.Invoice], start: Date, end: Date) -> Decimal {
+        invoices.reduce(Decimal.zero) { total, invoice in
+            total + paymentsInRange(invoice, start: start, end: end).reduce(Decimal.zero) {
+                $0 + ($1.voidedAt == nil ? $1.amount + $1.countedTip : 0)
+            }
+        }
+    }
+
+    /// `collectedByPeriod` with each payment's tip added: one ledger walk, and
+    /// a payment inside two overlapping windows counts in both.
+    static func receivedByPeriod(
+        invoices: [Canonical.Invoice],
+        ranges: [NativeDateRange]
+    ) -> [Decimal] {
+        var totals = Array(repeating: Decimal.zero, count: ranges.count)
+        for invoice in invoices {
+            for payment in PaymentLedger.materializeLegacyLedger(ledgerInvoice(invoice))
+            where payment.voidedAt == nil {
+                for index in ranges.indices
+                where isInRange(payment.date, start: ranges[index].start, end: ranges[index].end) {
+                    totals[index] += payment.amount + payment.countedTip
                 }
             }
         }

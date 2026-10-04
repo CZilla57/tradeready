@@ -176,38 +176,56 @@ struct NativeLeadSourceReport: Equatable {
 
     // MARK: Attribution
 
-    private struct Attribution {
-        var bucketByCustomerId: [String: String] = [:]
-        /// Normalized name → the buckets of every customer with that name.
-        var bucketsByName: [String: Set<String>] = [:]
-        /// Bucket key → display name (first-seen custom spelling).
+    /// The id-first / unique-name rule. Phase 34 (referrals, spec §5.7)
+    /// generalized it from the lead-source bucket to any per-customer `key`
+    /// (the bucket stays the default), so the referral report attributes an
+    /// invoice to a referrer by exactly the rule that put it in `referral`.
+    /// `key(customerId:name:)` is nil when the record resolves to no customer
+    /// or to a name shared by customers with different keys.
+    struct Attribution {
+        var keyByCustomerId: [String: String] = [:]
+        /// Normalized name → the keys of every customer with that name.
+        var keysByName: [String: Set<String>] = [:]
+        /// Bucket key → display name (first-seen custom spelling). Filled for
+        /// the default bucket key only.
         var displayNames: [String: String] = [:]
 
         init(customers: [Canonical.Customer]) {
+            self.init(customers: customers, key: { NativeLeadSource.bucketKey($0.leadSource) })
             for customer in customers {
                 let key = NativeLeadSource.bucketKey(customer.leadSource)
                 if displayNames[key] == nil {
                     displayNames[key] = NativeLeadSource.displayName(customer.leadSource)
                 }
-                // First record wins for a duplicated id (a sync artifact; the
-                // ids should be unique).
-                if !customer.id.isEmpty, bucketByCustomerId[customer.id] == nil {
-                    bucketByCustomerId[customer.id] = key
-                }
-                let name = NativeLeadSourceReport.normalizedName(customer.name)
-                if !name.isEmpty { bucketsByName[name, default: []].insert(key) }
             }
         }
 
-        func bucket(customerId: String?, name: String) -> String {
-            if let customerId, !customerId.isEmpty, let key = bucketByCustomerId[customerId] {
-                return key
+        init(customers: [Canonical.Customer], key: (Canonical.Customer) -> String) {
+            for customer in customers {
+                let value = key(customer)
+                // First record wins for a duplicated id (a sync artifact; the
+                // ids should be unique).
+                if !customer.id.isEmpty, keyByCustomerId[customer.id] == nil {
+                    keyByCustomerId[customer.id] = value
+                }
+                let name = NativeLeadSourceReport.normalizedName(customer.name)
+                if !name.isEmpty { keysByName[name, default: []].insert(value) }
+            }
+        }
+
+        func key(customerId: String?, name: String) -> String? {
+            if let customerId, !customerId.isEmpty, let value = keyByCustomerId[customerId] {
+                return value
             }
             let nameKey = NativeLeadSourceReport.normalizedName(name)
-            if !nameKey.isEmpty, let keys = bucketsByName[nameKey], keys.count == 1, let key = keys.first {
-                return key
+            if !nameKey.isEmpty, let values = keysByName[nameKey], values.count == 1, let value = values.first {
+                return value
             }
-            return NativeLeadSource.unknownBucketKey
+            return nil
+        }
+
+        func bucket(customerId: String?, name: String) -> String {
+            key(customerId: customerId, name: name) ?? NativeLeadSource.unknownBucketKey
         }
     }
 }
