@@ -766,5 +766,52 @@ run("React Native blank and ISO schedule values project without loss") {
            "untouched ISO legacy schedule survives canonical merge")
 }
 
+// Phase 24: Stripe-booked payments (pay link, pay page, autopay) label as
+// "Stripe", never "Other", and an autopay entry's extra keys and note ride
+// through untouched edits and a void.
+run("stripe payments label as Stripe and keep autopay keys") {
+    var fields = try object(try field("invoice", rich, as: Canonical.Invoice.self))
+    let autopayEntry: Canonical.JSONValue = .object([
+        "id": .string("stripe_pi_3Qtest"), "amount": .number(120), "date": .string("2026-11-01"),
+        "method": .string("stripe"), "stripePaymentIntentId": .string("pi_3Qtest"),
+        "channel": .string("autopay"), "note": .string("Autopay · Visa •••• 4242"),
+    ])
+    guard case var .array(entries) = fields["payments"] ?? .array([]) else { fatalError("payments array") }
+    entries.append(autopayEntry)
+    fields["payments"] = .array(entries)
+    let source: Canonical.Invoice = try decoder.decode(Canonical.Invoice.self, from: encoder.encode(fields))
+    var edit = try CanonicalUIAdapters.edit(source)
+    let projected = edit.value.payments.first { $0.id == "stripe_pi_3Qtest" }
+    expect(projected?.method == "Stripe", "an autopay payment shows Stripe in the Payments section")
+    expect(projected?.note == "Autopay · Visa •••• 4242", "the autopay note shows as the payment note")
+    expect(edit.value.payments.count == entries.count, "sanity: every payment projects")
+
+    edit.value.description = "Edited after autopay"
+    let untouched = try CanonicalUIAdapters.canonical(from: edit)
+    let kept = untouched.payments?.first { $0.id == "stripe_pi_3Qtest" }
+    expect(kept?.method == "stripe", "an unrelated edit keeps the method stripe")
+    expect(kept?.preservation.unknownFields["channel"] == .string("autopay")
+           && kept?.preservation.unknownFields["stripePaymentIntentId"] == .string("pi_3Qtest"),
+           "an unrelated edit keeps channel and stripePaymentIntentId")
+
+    // A Stripe-labelled payment written fresh round-trips to `stripe`, never `other`.
+    var added = edit
+    added.value.payments.append(Payment(id: "pay-p24-new", amount: 5, date: Date(timeIntervalSince1970: 1_793_000_000),
+                                        method: "Stripe", note: ""))
+    let addedResult = try CanonicalUIAdapters.canonical(from: added)
+    expect(addedResult.payments?.first { $0.id == "pay-p24-new" }?.method == "stripe",
+           "the Stripe label round-trips to stripe")
+
+    if let index = edit.value.payments.firstIndex(where: { $0.id == "stripe_pi_3Qtest" }) {
+        edit.value.payments[index].voidedAt = Date(timeIntervalSince1970: 1_793_000_000)
+    }
+    let voided = try CanonicalUIAdapters.canonical(from: edit)
+    let voidedEntry = voided.payments?.first { $0.id == "stripe_pi_3Qtest" }
+    expect(voidedEntry?.voidedAt != nil && voidedEntry?.method == "stripe"
+           && voidedEntry?.note == "Autopay · Visa •••• 4242"
+           && voidedEntry?.preservation.unknownFields["channel"] == .string("autopay"),
+           "voiding an autopay payment keeps its method, note and keys")
+}
+
 if failures == 0 { print("PASS: canonical SwiftUI adapter tests") }
 else { print("\(failures) adapter test(s) failed"); exit(1) }

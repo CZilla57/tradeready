@@ -1290,15 +1290,21 @@ private extension CanonicalUIAdapters {
         }
         return result
     }
+    /// Phase 24: `stripe` (pay-link, pay-page and autopay payments booked by
+    /// the Worker) shows as "Stripe", matching RN `PaymentHistoryList`'s
+    /// METHOD_LABELS; it read "Other" before. The two maps round-trip it, so
+    /// a re-canonicalized Stripe payment never becomes `other`.
     static func displayPaymentMethod(_ value: String) -> String {
         switch value.lowercased() {
         case "cash": return "Cash"; case "check", "cheque": return "Check"; case "card": return "Card"
+        case "stripe": return "Stripe"
         case "ach", "bank_transfer", "bank transfer": return "ACH"; default: return "Other"
         }
     }
     static func canonicalPaymentMethod(_ value: String) -> String {
         switch value.lowercased() {
         case "cash": return "cash"; case "check", "cheque": return "check"; case "card": return "card"
+        case "stripe": return "stripe"
         case "ach", "bank_transfer", "bank transfer": return "bank_transfer"; default: return "other"
         }
     }

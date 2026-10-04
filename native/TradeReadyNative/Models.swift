@@ -250,6 +250,7 @@ private extension Payment {
         case "cash": .cash
         case "check", "cheque": .check
         case "card": .card
+        case "stripe": .stripe
         case "ach", "bank transfer", "bank_transfer": .bankTransfer
         default: .other
         }

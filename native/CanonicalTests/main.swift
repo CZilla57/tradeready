@@ -370,6 +370,48 @@ run("quote expiry fields are typed and preserved") {
            "0 (no expiry) is kept, not dropped")
 }
 
+// Phase 24 §3.2/§6.2: the plan's "Offer autopay" is typed, absent means off,
+// and unknown plan keys still ride along.
+run("recurring invoice autopayEnabled is typed and preserved") {
+    guard case var .object(planFields)? = rich["recurringInvoice"] else {
+        throw NSError(domain: "CanonicalTests", code: 18, userInfo: [NSLocalizedDescriptionKey: "Missing recurring invoice"])
+    }
+    let plain: Canonical.RecurringInvoice = try field("recurringInvoice", from: rich)
+    let plainFields = try object(plain)
+    expect(plain.autopayEnabled == nil && plainFields["autopayEnabled"] == nil,
+           "a plan without the key decodes nil and encodes without it (absent means off)")
+
+    planFields["autopayEnabled"] = .bool(true)
+    planFields["futurePlanField"] = .string("kept")
+    let source = Canonical.JSONValue.object(planFields)
+    let plan = try decoder.decode(Canonical.RecurringInvoice.self, from: encoder.encode(source))
+    expect(plan.autopayEnabled == true && plan.preservation.unknownFields["autopayEnabled"] == nil,
+           "autopayEnabled decodes as a typed field")
+    expect(plan.preservation.unknownFields["futurePlanField"] == .string("kept"), "an unknown plan key is preserved")
+    let roundTripped = try json(plan)
+    expect(roundTripped == source, "a plan offering autopay round-trips exactly")
+
+    var edited = plan
+    edited.description = "Renamed plan"
+    let editedFields = try object(edited)
+    expect(editedFields["autopayEnabled"] == .bool(true) && editedFields["futurePlanField"] == .string("kept"),
+           "an unrelated edit keeps autopayEnabled and unknown keys")
+
+    var off = plan
+    off.autopayEnabled = false
+    let offFields = try object(off)
+    expect(offFields["autopayEnabled"] == .bool(false), "turning autopay off writes false, not a missing key")
+    var cleared = plan
+    cleared.autopayEnabled = nil
+    let clearedFields = try object(cleared)
+    expect(clearedFields["autopayEnabled"] == nil, "clearing autopayEnabled removes the key")
+
+    let legacyPlan: Canonical.RecurringInvoice = try field("recurringInvoice", from: legacy)
+    let legacyPlanFields = try object(legacyPlan)
+    expect(legacyPlan.autopayEnabled == nil && legacyPlanFields["autopayEnabled"] == nil,
+           "a legacy plan stays without autopayEnabled")
+}
+
 run("versioned envelope") {
     let job: Canonical.Job = try field("job", from: rich)
     var envelope = Canonical.Envelope(schemaVersion: 7, payload: job)

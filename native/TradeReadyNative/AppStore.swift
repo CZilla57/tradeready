@@ -378,6 +378,13 @@ final class AppStore: ObservableObject {
     @Published private(set) var stripeConnectStatus: NativeStripeConnectStatus?
     @Published private(set) var stripeConnectLoading = false
     @Published private(set) var stripeConnectError: String?
+    /// Phase 24 §6.3: the Worker's autopay enrollments and charge rows for
+    /// this owner, in memory only (server-owned, never persisted or synced).
+    /// nil until the first successful read; a failed read keeps the last one.
+    @Published private(set) var autopayStatus: NativeAutopayStatusSnapshot?
+    @Published private(set) var autopayStatusError: String?
+    /// Enrollments with a remove request in flight (no double submit).
+    @Published private(set) var autopayRemovalsInFlight: Set<String> = []
     /// Phase 12 (12.00b.1, I2; owner decision D3): the changes the server
     /// refused that are waiting for Retry or Discard in Settings › Cloud Sync.
     @Published private(set) var rejectedChanges: [NativeRejectedChange] = []
@@ -615,6 +622,13 @@ final class AppStore: ObservableObject {
     private let injectedEstimateApprovalLinkService: (any NativeEstimateApprovalLinking)?
     private let injectedChangeOrderApprovalLinkService: (any NativeChangeOrderApprovalLinking)?
     private let injectedInvoiceDeliveryService: (any NativeInvoiceDelivering)?
+    private let injectedAutopayService: (any NativeAutopayServing)?
+    private var autopayStatusFetchedAt: Date?
+    /// Every status read and every local removal takes the next number; a
+    /// read applies only while it is still the newest, so a read that began
+    /// before a removal can't bring the removed card back.
+    private var autopayReadSequence: UInt64 = 0
+    private var autopayReadsInFlight = 0
     /// Advisory receipt-OCR / pricebook-suggestion transport. Injected so tests
     /// and previews never touch the network; defaults to the live client-key +
     /// backend-bearer implementation.
@@ -752,6 +766,7 @@ final class AppStore: ObservableObject {
         estimateApprovalLinkService: (any NativeEstimateApprovalLinking)? = nil,
         changeOrderApprovalLinkService: (any NativeChangeOrderApprovalLinking)? = nil,
         invoiceDeliveryService: (any NativeInvoiceDelivering)? = nil,
+        autopayService: (any NativeAutopayServing)? = nil,
         advisoryAITransport: (any NativeAdvisoryAITransport)? = nil,
         coachTransport: NativeCoachTransport? = nil,
         analytics: NativeAnalytics = NativeNoOpAnalytics(),
@@ -783,6 +798,7 @@ final class AppStore: ObservableObject {
         self.injectedEstimateApprovalLinkService = estimateApprovalLinkService
         self.injectedChangeOrderApprovalLinkService = changeOrderApprovalLinkService
         self.injectedInvoiceDeliveryService = invoiceDeliveryService
+        self.injectedAutopayService = autopayService
         self.advisoryAITransport = advisoryAITransport ?? NativeAITransport.live()
         self.coachTransport = coachTransport ?? NativeCoachTransport(backendBaseURL: BuildEnvironment.backendBaseURL)
         self.migrationJournal = Canonical.MigrationJournal(
@@ -2276,6 +2292,168 @@ final class AppStore: ObservableObject {
         }
     }
 
+    // MARK: - Phase 24 autopay status and controls (spec §6.3)
+
+    private func configuredAutopayService() -> (any NativeAutopayServing)? {
+        if let injectedAutopayService { return injectedAutopayService }
+        guard let status = try? BuildEnvironment.endpoint("api/autopay/status", sendsUserData: true),
+              let manage = try? BuildEnvironment.endpoint("api/autopay/manage", sendsUserData: true)
+        else { return nil }
+        return NativeAutopayService(statusEndpoint: status, manageEndpoint: manage)
+    }
+
+    /// The owner identity an autopay read or write belongs to. Rechecked
+    /// across every await so one owner's cards never land under another.
+    private struct AutopayOwnerFence: Equatable {
+        let subject: String?
+        let binding: String?
+        let boundary: UInt64
+    }
+
+    private var autopayOwnerFence: AutopayOwnerFence {
+        AutopayOwnerFence(subject: authenticatedUserSubject, binding: verifiedAccountBinding, boundary: accountBoundaryGeneration)
+    }
+
+    /// Reads autopay status: on foreground at most every 10 minutes (and
+    /// not while another read runs), on opening the plans list, and after a
+    /// remove. Skipped without plans, a sign-in or a configured backend. One
+    /// verified session-refresh retry on a rejected session. Returns whether
+    /// a fresh status was applied.
+    @discardableResult
+    func refreshAutopayStatus(trigger: NativeAutopayRefreshTrigger, now: Date = Date()) async -> Bool {
+        guard !(trigger == .foreground && autopayReadsInFlight > 0),
+              !recurringInvoiceRules.isEmpty,
+              NativeAutopay.shouldRefresh(trigger, lastFetchedAt: autopayStatusFetchedAt, now: now),
+              authenticatedUserSubject != nil,
+              let service = configuredAutopayService(),
+              let credentials = currentSyncCredentials()
+        else { return false }
+        autopayReadsInFlight += 1
+        defer { autopayReadsInFlight -= 1 }
+        autopayReadSequence &+= 1
+        let sequence = autopayReadSequence
+        let fence = autopayOwnerFence
+        func isCurrent() -> Bool { autopayOwnerFence == fence && autopayReadSequence == sequence }
+        let unavailable = "Autopay status couldn't be loaded. Plans show their own settings until it can."
+        do {
+            let fresh = try await service.status(sessionBytes: credentials.sessionBytes)
+            guard isCurrent() else { return false }
+            applyAutopayStatus(fresh, at: now)
+            return true
+        } catch NativeAutopayServiceError.rejectedSession {
+            guard await refreshSyncSession(), isCurrent(), let retry = currentSyncCredentials() else {
+                if isCurrent() { autopayStatusError = "Your session expired. Sign in again to see autopay status." }
+                return false
+            }
+            do {
+                let fresh = try await service.status(sessionBytes: retry.sessionBytes)
+                guard isCurrent() else { return false }
+                applyAutopayStatus(fresh, at: now)
+                return true
+            } catch {
+                if isCurrent() { autopayStatusError = unavailable }
+                return false
+            }
+        } catch {
+            if isCurrent() { autopayStatusError = unavailable }
+            return false
+        }
+    }
+
+    private func applyAutopayStatus(_ fresh: NativeAutopayStatusSnapshot, at now: Date) {
+        autopayStatus = fresh
+        autopayStatusError = nil
+        autopayStatusFetchedAt = now
+    }
+
+    enum AutopayRemoveOutcome: Equatable {
+        case removed
+        /// A remove for this card is already running; nothing was sent.
+        case alreadyInProgress
+        case failed(String)
+    }
+
+    /// "Remove saved card": revokes the enrollment as the owner on the
+    /// Worker (which detaches the card on Stripe and emails the customer),
+    /// marks it removed in memory at once, then rereads status.
+    func removeAutopayCard(enrollmentID: String) async -> AutopayRemoveOutcome {
+        guard !autopayRemovalsInFlight.contains(enrollmentID) else { return .alreadyInProgress }
+        guard let service = configuredAutopayService(), let credentials = currentSyncCredentials() else {
+            return .failed("Removing a saved card needs an internet connection and an active sign-in.")
+        }
+        autopayRemovalsInFlight.insert(enrollmentID)
+        defer { autopayRemovalsInFlight.remove(enrollmentID) }
+        let fence = autopayOwnerFence
+        let failure = "The card couldn't be removed. Check your connection and try again."
+        func finish() async -> AutopayRemoveOutcome {
+            guard autopayOwnerFence == fence else { return .failed(failure) }
+            // Discard any read that began before the removal, show the card
+            // removed at once, then confirm with a fresh read.
+            autopayReadSequence &+= 1
+            autopayStatus = autopayStatus?.markingRemoved(enrollmentID: enrollmentID, at: Date())
+            await refreshAutopayStatus(trigger: .afterRemove)
+            return .removed
+        }
+        do {
+            try await service.removeCard(enrollmentID: enrollmentID, sessionBytes: credentials.sessionBytes)
+            return await finish()
+        } catch NativeAutopayServiceError.rejectedSession {
+            guard await refreshSyncSession(), autopayOwnerFence == fence, let retry = currentSyncCredentials() else {
+                return .failed("Your session expired. Sign in again to remove the card.")
+            }
+            do {
+                try await service.removeCard(enrollmentID: enrollmentID, sessionBytes: retry.sessionBytes)
+                return await finish()
+            } catch {
+                return .failed(failure)
+            }
+        } catch NativeAutopayServiceError.notFound {
+            if autopayOwnerFence == fence { await refreshAutopayStatus(trigger: .afterRemove) }
+            return .failed("This card is no longer on file. The list has been refreshed.")
+        } catch {
+            return .failed(failure)
+        }
+    }
+
+    /// The plan facts autopay status reads.
+    private static func autopayPlanFacts(_ rule: Canonical.RecurringInvoice) -> NativeAutopayPlanFacts {
+        NativeAutopayPlanFacts(id: rule.id, customerId: rule.customerId, autopayEnabled: rule.autopayEnabled == true)
+    }
+
+    private func autopayInvoiceFacts(_ record: Canonical.Invoice) -> NativeAutopayInvoiceFacts {
+        NativeAutopayInvoiceFacts(
+            id: record.id,
+            recurringInvoiceId: record.recurringInvoiceId,
+            due: record.due,
+            balanceDue: Self.ledgerBalance(record),
+            customerName: record.customer,
+            isImported: record.importBatchId != nil)
+    }
+
+    /// One plan's autopay status for its list row and actions.
+    func autopayPlanStatus(planID: String) -> NativeAutopayPlanStatus {
+        guard let rule = recurringInvoiceRules.first(where: { $0.id == planID }) else { return .off }
+        let planInvoices = (snapshot.payload.invoices ?? [])
+            .filter { $0.recurringInvoiceId == planID }
+            .map(autopayInvoiceFacts)
+        return NativeAutopay.planStatus(plan: Self.autopayPlanFacts(rule), invoices: planInvoices, snapshot: autopayStatus)
+    }
+
+    /// The plan's active enrollment (a saved card), if any.
+    func autopayActiveEnrollment(planID: String) -> NativeAutopayEnrollment? {
+        autopayStatus?.activeEnrollment(planID: planID)
+    }
+
+    /// The invoice-detail banner for a plan invoice, or nil.
+    func autopayInvoiceBanner(invoiceID: String, now: Date = Date()) -> NativeAutopayInvoiceBanner? {
+        guard let record = snapshot.payload.invoices?.first(where: { $0.id == invoiceID }),
+              let planID = record.recurringInvoiceId
+        else { return nil }
+        let plan = recurringInvoiceRules.first(where: { $0.id == planID }).map(Self.autopayPlanFacts)
+        return NativeAutopay.invoiceBanner(
+            invoice: autopayInvoiceFacts(record), plan: plan, snapshot: autopayStatus, now: now)
+    }
+
     /// A bulk settlement's result. P12-008 review (fix round 1, R41):
     /// `failure` says why nothing was settled when the commit did not happen
     /// (writes are blocked, or the save failed), so the Invoices list never
@@ -2412,16 +2590,23 @@ final class AppStore: ObservableObject {
         guard let service = configuredInvoiceDeliveryService(), let credentials = currentSyncCredentials() else {
             throw NativeInvoiceDeliveryError.invalidConfiguration
         }
-        // Recheck the request across the network await so a concurrent
-        // payment cannot leave a stale-amount link persisted as current.
+        // Phase 24 §6.1: a request may be the full balance or a deposit below
+        // it, never above it. Refused before the mint, so nothing is created
+        // on the owner's Stripe account for a request that can't be used.
+        let epsilon = NativeInvoicePaymentLinks.epsilon
+        let balanceBefore = NSDecimalNumber(decimal: PaymentLedger.balanceDue(Self.ledgerInvoice(record))).doubleValue
+        guard requested <= balanceBefore + epsilon else { throw NativeInvoiceDeliveryError.invalidAmount }
+        // Recheck across the network await: a payment that arrived meanwhile
+        // (the balance moved) refuses the link, so a stale-amount link is
+        // never persisted as current. The old check compared the request to
+        // the latest balance, which refused every deposit after minting it.
         let owner = authenticatedUserSubject
         let url = try await service.createPaymentLink(invoice: record, amount: amount, sessionBytes: credentials.sessionBytes)
         guard authenticatedUserSubject == owner,
               let latest = snapshot.payload.invoices?.first(where: { $0.id == invoiceID })
         else { throw NativeInvoiceDeliveryError.rejectedSession }
-        let latestBalance = PaymentLedger.balanceDue(Self.ledgerInvoice(latest))
-        let latestBalanceDouble = NSDecimalNumber(decimal: latestBalance).doubleValue
-        guard abs(latestBalanceDouble - requested) <= NativeInvoicePaymentLinks.epsilon else {
+        let latestBalance = NSDecimalNumber(decimal: PaymentLedger.balanceDue(Self.ledgerInvoice(latest))).doubleValue
+        guard abs(latestBalance - balanceBefore) <= epsilon, requested <= latestBalance + epsilon else {
             throw NativeInvoiceDeliveryError.invalidAmount
         }
         var updated = latest
@@ -6157,6 +6342,11 @@ final class AppStore: ObservableObject {
         stripeConnectStatus = nil
         stripeConnectLoading = false
         stripeConnectError = nil
+        // Phase 24: another owner's cards and charges never outlive the boundary.
+        autopayStatus = nil
+        autopayStatusError = nil
+        autopayStatusFetchedAt = nil
+        autopayRemovalsInFlight = []
         deepLinkedOutreachInvoiceID = nil
         authenticatedAccountState = .noMigratedSession
         authenticationGateState = .signedOut
@@ -8717,6 +8907,9 @@ final class AppStore: ObservableObject {
         refreshRecurringJobs()
         refreshRecurringInvoices()
         rescheduleInvoiceDeliveries()
+        // Phase 24 §6.3: autopay status, at most every 10 minutes. Detached so
+        // a slow Worker read never holds up the rest of the refresh.
+        Task { [weak self] in await self?.refreshAutopayStatus(trigger: .foreground) }
         // Phase 12 (12.00b.2-K, P12-016): customer bookings the pull brought
         // become lead jobs and customers (RN: `syncIfOnline`, then
         // `applyBookingRequests`, `context/AuthContext.tsx:118-120`). Only

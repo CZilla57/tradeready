@@ -57,6 +57,8 @@ sh "$ROOT_DIR/native/run-lead-source-tests.sh"
 # Phase 32: quote expiration dates (pure policy + shared expiry vectors with the Worker).
 sh "$ROOT_DIR/native/run-quote-expiry-tests.sh"
 sh "$ROOT_DIR/native/run-quote-expiry-store-tests.sh"
+# Phase 24: card on file + autopay (pure status policy + owner-route transport).
+sh "$ROOT_DIR/native/run-autopay-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-pdf-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-delivery-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-message-draft-tests.sh"

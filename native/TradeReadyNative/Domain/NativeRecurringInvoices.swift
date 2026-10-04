@@ -227,7 +227,10 @@ extension Canonical.Invoice {
 extension Canonical.RecurringInvoice {
     /// Manual construction for rule create/edit sheets. `Canonical` models
     /// are otherwise decoder-built; every stored property is assigned here so
-    /// unknown-field preservation stays intact through encode.
+    /// unknown-field preservation stays intact through encode. Phase 24:
+    /// `autopayEnabled` has no default, so an edit site can't silently drop
+    /// the owner's "Offer autopay" (a typed key no longer rides
+    /// `preservation`).
     init(
         id: String,
         customerId: String,
@@ -245,6 +248,7 @@ extension Canonical.RecurringInvoice {
         isActive: Bool,
         createdAt: Canonical.DateString,
         autoSendEnabled: Bool?,
+        autopayEnabled: Bool?,
         preservation: Canonical.Preservation = Canonical.Preservation()
     ) {
         self.id = id
@@ -263,13 +267,14 @@ extension Canonical.RecurringInvoice {
         self.isActive = isActive
         self.createdAt = createdAt
         self.autoSendEnabled = autoSendEnabled
+        self.autopayEnabled = autopayEnabled
         self.preservation = preservation
     }
 }
 
 /// Final review I1: the maintenance-plan screen's hand-off from the plan
 /// actions dialog to a destructive confirmation ("Cancel plan", "Delete
-/// plan"). SwiftUI clears the dialog's plan through its `isPresented` setter
+/// plan", and Phase 24's "Remove saved card"). SwiftUI clears the dialog's plan through its `isPresented` setter
 /// as the dialog dismisses, right after a destructive button runs, so the
 /// destructive target is held separately: it survives that dismissal and is
 /// what the confirmation alert acts on. Foundation-only (no view policy).
@@ -277,6 +282,8 @@ struct NativeRecurringPlanActionState<Rule> {
     enum DestructiveKind: Equatable {
         case cancelPlan
         case deletePlan
+        /// Phase 24 §6.3: "Remove saved card" (the plan's autopay card).
+        case removeSavedCard
     }
 
     struct PendingDestructive {

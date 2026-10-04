@@ -1529,6 +1529,9 @@ public extension Canonical {
         public var isActive: Bool
         public var createdAt: DateString
         public var autoSendEnabled: Bool?
+        /// Phase 24 §3.2: the owner's per-plan "Offer autopay". Absent means
+        /// off. The Worker reads it at pay-view and charge time.
+        public var autopayEnabled: Bool?
         public var preservation: Preservation
         public init(from decoder: Decoder) throws {
             var o = try ObjectReader(decoder); id = try o.required("id"); customerId = try o.required("customerId")
@@ -1537,7 +1540,8 @@ public extension Canonical {
             endCount = try o.optional("endCount"); endDate = try o.optional("endDate"); occurrenceCount = try o.required("occurrenceCount")
             lastGeneratedDate = try o.optional("lastGeneratedDate"); nextDueDate = try o.required("nextDueDate")
             isActive = try o.required("isActive"); createdAt = try o.required("createdAt")
-            autoSendEnabled = try o.optional("autoSendEnabled"); preservation = o.finish()
+            autoSendEnabled = try o.optional("autoSendEnabled"); autopayEnabled = try o.optional("autopayEnabled")
+            preservation = o.finish()
         }
         public func encode(to encoder: Encoder) throws {
             var o = ObjectWriter(preservation); try o.put(id, for: "id"); try o.put(customerId, for: "customerId")
@@ -1546,7 +1550,8 @@ public extension Canonical {
             try o.putOptional(endCount, for: "endCount"); try o.putOptional(endDate, for: "endDate"); try o.put(occurrenceCount, for: "occurrenceCount")
             try o.putOptional(lastGeneratedDate, for: "lastGeneratedDate"); try o.put(nextDueDate, for: "nextDueDate")
             try o.put(isActive, for: "isActive"); try o.put(createdAt, for: "createdAt")
-            try o.putOptional(autoSendEnabled, for: "autoSendEnabled"); try o.encode(to: encoder)
+            try o.putOptional(autoSendEnabled, for: "autoSendEnabled"); try o.putOptional(autopayEnabled, for: "autopayEnabled")
+            try o.encode(to: encoder)
         }
     }
 

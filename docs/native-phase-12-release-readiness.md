@@ -302,6 +302,13 @@ None of these are for tracking (no cross-app/cross-site use; `NSPrivacyTracking`
 analytics/crash types in §4.2 (UserID, Product Interaction, Other Usage Data, Crash
 Data, Performance Data, Other Diagnostic Data, Other Financial Info, Purchase History).
 
+**Update 2026-10-03 (owner decisions 24-Q5 and 28-Q1, applied to `N/PrivacyInfo.xcprivacy`
+in Phase 24):** the manifest now also declares **Payment Info** (linked, not tracking,
+App Functionality), because autopay shows the owner's customers' saved-card brand, last
+four digits and expiry; and **Other Financial Info** gains the App Functionality purpose
+next to Analytics, because payment amounts sync for app functionality. Enter both labels
+in App Store Connect with the rest (`docs/app-store-listing.md` has the rows).
+
 **Owner action:** enter these App Functionality labels in App Store Connect (Stage C
 entry per the evidence index prerequisites table) and approve a `N/PrivacyInfo.xcprivacy`
 edit adding the corresponding `NSPrivacyCollectedDataTypes` entries (not applied here,

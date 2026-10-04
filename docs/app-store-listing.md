@@ -258,7 +258,8 @@ tracking = No**; **linked to the user's identity = Yes** unless noted):
 | Contact Info → Name | Yes | App Functionality | account + business profile (Supabase) |
 | Contact Info → Email Address | Yes | App Functionality | sign-in identity |
 | Contact Info → Phone Number | Yes | App Functionality | business profile, synced |
-| Financial Info → Other Financial Info | Yes | App Functionality | invoice/job amounts in the user's records (no card data — Stripe hosts payment pages) |
+| Financial Info → Payment Info | Yes (declared 2026-10-03, Phase 24 Q5) | App Functionality | autopay: the app shows the owner's customers' saved-card brand, last four digits and expiry (full card numbers stay with Stripe; card entry is on Stripe's hosted page) |
+| Financial Info → Other Financial Info | Yes | App Functionality, Analytics | invoice/job amounts in the user's records; payment amounts in analytics events (Phase 28 Q1 added App Functionality to the manifest 2026-10-03) |
 | Purchases → Purchase History | Yes | App Functionality | RevenueCat subscription receipts |
 | User Content → Other User Content | Yes | App Functionality | customer records, jobs, notes, mileage trips (synced to Supabase; snapshots sent to AI providers) |
 | User Content → Photos or Videos | Yes (declared 2026-08-06) | App Functionality | receipt scans sent via the authenticated backend to Groq for OCR, not stored server-side; job photos stay device-local |

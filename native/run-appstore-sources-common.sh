@@ -16,6 +16,10 @@
 #
 # Phase 12 (12.00b.2-L): `NativeBookingOwnerResponses.swift` extends AppStore
 # (the owner-response outcomes and their notices), so it follows AppStore.swift.
+#
+# Phase 24 (autopay): `Domain/NativeAutopay.swift` (pure status policy) and
+# `NativeAutopayService.swift` (the owner-route transport) are AppStore
+# dependencies.
 APPSTORE_TEST_SOURCES="
 $ROOT_DIR/native/HostTestSupport/HostInMemoryKeychain.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/FinancialDomain.swift
@@ -84,6 +88,8 @@ $ROOT_DIR/native/TradeReadyNative/NativeSetupChecklistStore.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeInsightMutes.swift
 $ROOT_DIR/native/TradeReadyNative/NativeInsightMuteStore.swift
 $ROOT_DIR/native/TradeReadyNative/NativeInvoiceDelivery.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeAutopay.swift
+$ROOT_DIR/native/TradeReadyNative/NativeAutopayService.swift
 $ROOT_DIR/native/TradeReadyNative/NativeInvoicePDF.swift
 $ROOT_DIR/native/TradeReadyNative/NativeEstimateDelivery.swift
 $ROOT_DIR/native/TradeReadyNative/NativeEstimateFollowUp.swift

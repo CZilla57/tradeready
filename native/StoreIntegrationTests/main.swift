@@ -966,7 +966,7 @@ struct StoreIntegrationTests {
             description: "Maintenance", amount: 150, dueDays: 30,
             cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
             occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: "2026-09-01",
-            isActive: true, createdAt: "2026-09-01", autoSendEnabled: false)
+            isActive: true, createdAt: "2026-09-01", autoSendEnabled: false, autopayEnabled: nil)
         let prePlanCount = empty.invoices.count
         expect(empty.createRecurringInvoice(planRule), "maintenance plan creates")
         expect(empty.createRecurringInvoice(planRule) == false, "duplicate plan id refused")
@@ -1046,6 +1046,193 @@ struct StoreIntegrationTests {
         let partialURL = try await empty.generateInvoicePaymentLink(
             invoiceID: storedLinkID, amount: 200, provider: .paypal)
         expect(partialURL.absoluteString == "https://paypal.me/acme-shop/200.00", "changed amount mints fresh, never reuses stale")
+
+        // Phase 24 §6.1: Stripe links through an injected delivery service.
+        // The old post-await check required the requested amount to equal the
+        // latest balance, so every deposit link failed after minting. The
+        // check now compares the balance before and after the await (a payment
+        // arrived) and refuses only a request above the balance.
+        do {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tradeready-p24-deposit-\(UUID().uuidString)", isDirectory: true)
+            let stripe = StoreTestStripeDelivery()
+            let store = AppStore(fileURL: dir.appendingPathComponent("store.json"), seedIfMissing: false,
+                                 invoiceDeliveryService: stripe, secureSettingsStore: hostTestSecureSettingsStore())
+            store.scheduleBookingTestSeedSignedInOwner(subject: "user-p24", binding: String(repeating: "4", count: 64))
+            store.scheduleBookingTestCredentials = NativeSyncCredentials(
+                subject: "user-p24", sessionBytes: Data("{\"access_token\":\"p24\"}".utf8))
+            let depositInvoice = Invoice(customer: "Deposit Customer", number: "INV-P24", amount: 400)
+            store.upsert(depositInvoice)
+            func stored() -> Canonical.Invoice? {
+                store.canonicalInvoices.first { $0.id == depositInvoice.id }
+            }
+            func refusal(_ amount: Decimal) async -> NativeInvoiceDeliveryError? {
+                do {
+                    _ = try await store.generateInvoicePaymentLink(invoiceID: depositInvoice.id, amount: amount, provider: .stripe)
+                    return nil
+                } catch { return error as? NativeInvoiceDeliveryError ?? .unavailable }
+            }
+
+            // Full balance.
+            let full = try? await store.generateInvoicePaymentLink(invoiceID: depositInvoice.id, amount: 400, provider: .stripe)
+            expect(full?.absoluteString == "https://gettradereadyapp.com/pay.html?t=mint1"
+                       && stored()?.paymentLinkUrl == full?.absoluteString && stored()?.paymentLinkAmount == 400,
+                   "§6.1 a full-balance Stripe link mints and persists against its amount")
+
+            // 50% deposit: strictly below the balance by construction, now succeeds.
+            let deposit = try? await store.generateInvoicePaymentLink(invoiceID: depositInvoice.id, amount: 200, provider: .stripe)
+            expect(deposit?.absoluteString == "https://gettradereadyapp.com/pay.html?t=mint2",
+                   "§6.1 a 50% deposit Stripe link succeeds (it always failed before)")
+            expect(stored()?.paymentLinkUrl == deposit?.absoluteString && stored()?.paymentLinkAmount == 200,
+                   "§6.1 the deposit link persists against the deposit amount")
+            let cachedDeposit = try? await store.generateInvoicePaymentLink(invoiceID: depositInvoice.id, amount: 200, provider: .stripe)
+            expect(cachedDeposit == deposit && stripe.mintedAmounts.count == 2,
+                   "§6.1 the deposit link is reused for the same amount without another mint")
+
+            // Above the balance: refused before any mint, nothing persisted.
+            let aboveBalance = await refusal(500)
+            expect(aboveBalance == .invalidAmount, "§6.1 a request above the balance is refused")
+            expect(stripe.mintedAmounts.count == 2, "§6.1 a request above the balance never reaches the Worker")
+            expect(stored()?.paymentLinkAmount == 200, "§6.1 a refused request leaves the stored link alone")
+
+            // A payment lands while the full-balance mint is in flight.
+            stripe.duringMint = {
+                _ = store.recordPayment(invoiceID: depositInvoice.id,
+                                        payment: Payment(id: "pay-p24-race-1", amount: 100, date: Date(), method: "Cash"))
+            }
+            let racedFull = await refusal(400)
+            expect(racedFull == .invalidAmount, "§6.1 a concurrent payment during the await refuses the full-balance link")
+            expect(stripe.mintedAmounts.count == 3, "§6.1 sanity: the racing request did mint")
+            expect(stored()?.paymentLinkUrl == deposit?.absoluteString && stored()?.paymentLinkAmount == 200,
+                   "§6.1 the stale-amount link is never persisted as current")
+            // And while a deposit mint is in flight.
+            stripe.duringMint = {
+                _ = store.recordPayment(invoiceID: depositInvoice.id,
+                                        payment: Payment(id: "pay-p24-race-2", amount: 50, date: Date(), method: "Cash"))
+            }
+            let racedDeposit = await refusal(150)
+            expect(racedDeposit == .invalidAmount, "§6.1 a concurrent payment during the await refuses a deposit link")
+            expect(stored()?.paymentLinkAmount == 200, "§6.1 the racing deposit link is not persisted")
+            stripe.duringMint = nil
+            // With the balance settled at 250, a fresh deposit request works again.
+            let after = try? await store.generateInvoicePaymentLink(invoiceID: depositInvoice.id, amount: 125, provider: .stripe)
+            expect(after != nil && stored()?.paymentLinkAmount == 125, "§6.1 a deposit after the payments mints against the new balance")
+        }
+
+        // Phase 24 §6.2/§6.3: the plan's "Offer autopay" persists and pushes,
+        // and the owner's autopay status and "Remove saved card" run through
+        // an injected owner-route service.
+        do {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tradeready-p24-autopay-\(UUID().uuidString)", isDirectory: true)
+            let storeURL = dir.appendingPathComponent("store.json")
+            let autopay = StoreTestAutopayService()
+            let store = AppStore(fileURL: storeURL, seedIfMissing: false,
+                                 autopayService: autopay, secureSettingsStore: hostTestSecureSettingsStore())
+            store.scheduleBookingTestSeedSignedInOwner(subject: "user-p24-ap", binding: String(repeating: "5", count: 64))
+            store.scheduleBookingTestCredentials = NativeSyncCredentials(
+                subject: "user-p24-ap", sessionBytes: Data("{\"access_token\":\"p24\"}".utf8))
+            let noPlans = await store.refreshAutopayStatus(trigger: .plansList)
+            expect(!noPlans && autopay.statusCalls == 0, "§6.3 an owner without plans makes no autopay read")
+
+            let apCustomer = Customer(name: "Autopay Customer", email: "autopay@example.com")
+            store.upsert(apCustomer)
+            let apPlan = Canonical.RecurringInvoice(
+                id: "rinv-p24", customerId: apCustomer.id, customerName: apCustomer.name,
+                description: "Monthly service", amount: 120, dueDays: 0,
+                cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
+                occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: "2026-11-01",
+                isActive: true, createdAt: "2026-10-01", autoSendEnabled: false, autopayEnabled: nil)
+            expect(store.createRecurringInvoice(apPlan), "§6.2 the plan creates without autopay")
+            var offering = apPlan
+            offering.autopayEnabled = true
+            expect(store.updateRecurringInvoice(offering), "§6.2 the plan saves with Offer autopay on")
+            let apReloaded = AppStore(fileURL: storeURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
+            expect(apReloaded.recurringInvoiceRules.first { $0.id == "rinv-p24" }?.autopayEnabled == true,
+                   "§6.2 Offer autopay persists across a reload")
+            let apQueued = Canonical.NativeMutationQueue(
+                fileURL: storeURL.deletingLastPathComponent().appendingPathComponent("mutation-queue.json")
+            ).load().last { $0.table == "recurringInvoices" && $0.recordId == "rinv-p24" }
+            if case let .object(payload)? = apQueued?.payload {
+                expect(apQueued?.op == .upsert && payload["autopayEnabled"] == .bool(true),
+                       "§6.2 Offer autopay pushes with the plan (the Worker reads it from the synced row)")
+            } else { expect(false, "§6.2 the plan upsert is queued with an object payload") }
+            expect(store.setRecurringInvoiceActive(id: "rinv-p24", isActive: false)
+                   && store.recurringInvoiceRules.first { $0.id == "rinv-p24" }?.autopayEnabled == true,
+                   "§6.2 pausing a plan keeps its autopay choice")
+            expect(store.setRecurringInvoiceActive(id: "rinv-p24", isActive: true, today: "2026-10-01"), "the plan resumes")
+            expect(store.autopayPlanStatus(planID: "rinv-p24") == .offered,
+                   "§6.3 before any status read the row follows the plan's toggle")
+
+            // A status read, then the 10-minute foreground rule.
+            let readAt = Date(timeIntervalSince1970: 1_792_000_000)
+            let apCard = NativeAutopayCard(brand: "visa", last4: "4242", expMonth: 8, expYear: 2027, wallet: nil)
+            let activeEnrollment = NativeAutopayEnrollment(
+                id: "enr-p24", recurringInvoiceId: "rinv-p24", customerId: apCustomer.id, status: "active",
+                card: apCard, maxAmount: 120, activatedAt: ISO8601DateFormatter().date(from: "2026-10-02T15:00:00Z"),
+                revokedAt: nil, revokedBy: nil, revokeReason: nil)
+            autopay.statusResult = .success(NativeAutopayStatusSnapshot(enrollments: [activeEnrollment], charges: []))
+            let firstRead = await store.refreshAutopayStatus(trigger: .plansList, now: readAt)
+            expect(firstRead && autopay.statusCalls == 1, "§6.3 opening the plans list reads autopay status")
+            expect(store.autopayPlanStatus(planID: "rinv-p24") == .on(apCard)
+                   && NativeAutopay.planRowText(store.autopayPlanStatus(planID: "rinv-p24")) == "Autopay on · Visa •••• 4242",
+                   "§6.3 the plan row reads Autopay on with the card")
+            let soon = await store.refreshAutopayStatus(trigger: .foreground, now: readAt.addingTimeInterval(300))
+            expect(!soon && autopay.statusCalls == 1, "§6.3 a foreground within 10 minutes reuses the last read")
+            let later = await store.refreshAutopayStatus(trigger: .foreground, now: readAt.addingTimeInterval(600))
+            expect(later && autopay.statusCalls == 2, "§6.3 a foreground after 10 minutes reads again")
+
+            // The invoice banner for the plan's next invoice.
+            expect(store.runRecurringInvoiceGeneration(today: "2026-11-01"), "the plan generates its Nov 1 invoice")
+            let apInvoiceID = store.canonicalInvoices.first { $0.recurringInvoiceId == "rinv-p24" }?.id ?? ""
+            expect(store.autopayInvoiceBanner(invoiceID: apInvoiceID, now: readAt)?.text
+                   == "Will be charged automatically on Nov 1, 2026 (Visa •••• 4242)",
+                   "§6.3 the plan invoice shows when it will be charged")
+            expect(store.autopayInvoiceBanner(invoiceID: "no-such-invoice", now: readAt) == nil, "no banner for a missing invoice")
+
+            // A failed remove leaves the card shown; a rejected session asks to sign in.
+            autopay.removeError = .unavailable
+            let failedRemove = await store.removeAutopayCard(enrollmentID: "enr-p24")
+            expect(failedRemove == .failed("The card couldn't be removed. Check your connection and try again."),
+                   "§6.3 a failed remove reports a text error")
+            expect(store.autopayPlanStatus(planID: "rinv-p24") == .on(apCard) && store.autopayRemovalsInFlight.isEmpty,
+                   "§6.3 a failed remove changes nothing")
+            autopay.removeError = .rejectedSession
+            let expiredRemove = await store.removeAutopayCard(enrollmentID: "enr-p24")
+            expect(expiredRemove == .failed("Your session expired. Sign in again to remove the card."),
+                   "§6.3 a rejected session without a refresh asks to sign in again")
+            autopay.removeError = nil
+
+            // The remove itself: no double submit while in flight, the card
+            // reads removed at once, and status is reread afterwards.
+            autopay.holdsRemove = true
+            let callsBeforeRemove = autopay.statusCalls
+            let firstRemove = Task { await store.removeAutopayCard(enrollmentID: "enr-p24") }
+            var spins = 0
+            while !autopay.removeStarted && spins < 100_000 { await Task.yield(); spins += 1 }
+            expect(autopay.removeStarted, "sanity: the remove reached the service")
+            expect(store.autopayRemovalsInFlight.contains("enr-p24"), "§6.3 the card reads as being removed while in flight")
+            let doubleTap = await store.removeAutopayCard(enrollmentID: "enr-p24")
+            expect(doubleTap == .alreadyInProgress, "§6.3 a second remove while one is in flight sends nothing")
+            autopay.statusResult = .failure(.unavailable)
+            autopay.releaseRemove()
+            let removed = await firstRemove.value
+            expect(removed == .removed && autopay.removedIDs == ["enr-p24", "enr-p24", "enr-p24"],
+                   "§6.3 the remove posts the enrollment id (once per attempt, never for the double tap)")
+            expect(autopay.statusCalls == callsBeforeRemove + 1, "§6.3 status is reread after a remove")
+            expect(store.autopayPlanStatus(planID: "rinv-p24") == .removed(by: "owner", reason: nil)
+                   && store.autopayActiveEnrollment(planID: "rinv-p24") == nil,
+                   "§6.3 the removed card stays removed even when the reread fails")
+            expect(store.autopayRemovalsInFlight.isEmpty, "§6.3 nothing is left in flight")
+
+            // A read that lands after the owner changed is dropped.
+            let beforeSwitch = store.autopayStatus
+            autopay.statusResult = .success(NativeAutopayStatusSnapshot(enrollments: [activeEnrollment], charges: []))
+            autopay.duringStatus = { store.scheduleBookingTestSeedSignedInOwner(subject: "user-p24-other", binding: String(repeating: "6", count: 64)) }
+            let raced = await store.refreshAutopayStatus(trigger: .plansList)
+            expect(!raced && store.autopayStatus == beforeSwitch, "§6.3 another owner's autopay read is never applied")
+            autopay.duringStatus = nil
+        }
 
         let canonicalCustomer: Canonical.Customer = try field("customer")
         let canonicalSettings: Canonical.Settings = try field("settings")
@@ -3248,7 +3435,7 @@ struct StoreIntegrationTests {
                 description: "Quarterly service", amount: 200, dueDays: 30,
                 cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
                 occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: "2026-10-01",
-                isActive: true, createdAt: "2026-09-01", autoSendEnabled: false)
+                isActive: true, createdAt: "2026-09-01", autoSendEnabled: false, autopayEnabled: nil)
             expect(rinvStore.createRecurringInvoice(rule), "10.08 rinv fixture plan creates")
 
             // Success, but nothing has generated yet: routes to the plain
@@ -3379,7 +3566,7 @@ struct StoreIntegrationTests {
                 description: "Key plan", amount: 150, dueDays: 30,
                 cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
                 occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: "2026-12-01",
-                isActive: true, createdAt: "2026-09-01", autoSendEnabled: false)
+                isActive: true, createdAt: "2026-09-01", autoSendEnabled: false, autopayEnabled: nil)
             expect(keyStore.createRecurringInvoice(rinvRule), "10.08 schedule-key rinv fixture saves")
             let keyAfterRinvCreated = keyStore.estimateFollowUpNotificationScheduleKey
 
@@ -4997,7 +5184,7 @@ struct StoreIntegrationTests {
                 description: "Monthly service", amount: 120, dueDays: 30,
                 cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
                 occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: "2026-12-01",
-                isActive: true, createdAt: "2026-09-01", autoSendEnabled: false)
+                isActive: true, createdAt: "2026-09-01", autoSendEnabled: false, autopayEnabled: nil)
             expect(store.createRecurringInvoice(rule), "m5 fixture plan creates")
             expect(store.scheduleBookingTestLatestGeneratedInvoiceID(ruleID: rule.id) == nil,
                    "m5 sanity: nothing has generated for the rule yet")
@@ -5155,6 +5342,59 @@ private final class ScheduleBookingTestDelta: NativeInitialSyncServing, NativeDe
         if let handler { return handler(localSnapshot, cursor) }
         return NativeDeltaPullOutcome(snapshot: localSnapshot, cursor: cursor,
                                       failedTables: [], lastDiagnosticCode: nil)
+    }
+}
+
+/// Phase 24 §6.1: an injected Stripe delivery service. It records every mint
+/// and can run a main-actor hook during the await (a payment landing while
+/// the link is minted).
+private final class StoreTestStripeDelivery: NativeInvoiceDelivering, @unchecked Sendable {
+    var mintedAmounts: [Decimal] = []
+    var duringMint: (@MainActor () -> Void)?
+
+    func createPaymentLink(invoice: Canonical.Invoice, amount: Decimal, sessionBytes: Data) async throws -> URL {
+        mintedAmounts.append(amount)
+        if let hook = duringMint { await MainActor.run { hook() } }
+        return URL(string: "https://gettradereadyapp.com/pay.html?t=mint\(mintedAmounts.count)")!
+    }
+
+    func uploadPDF(invoiceID: String, pdf: Data, sessionBytes: Data) async throws {}
+}
+
+/// Phase 24 §6.3: an injected owner-route autopay service. `holdsRemove`
+/// parks a remove until `releaseRemove()`, so a test can act while it is in
+/// flight; `duringStatus` runs on the main actor during a status read.
+private final class StoreTestAutopayService: NativeAutopayServing, @unchecked Sendable {
+    var statusCalls = 0
+    var statusResult: Result<NativeAutopayStatusSnapshot, NativeAutopayServiceError> = .success(.empty)
+    var duringStatus: (@MainActor () -> Void)?
+    var removedIDs: [String] = []
+    var removeError: NativeAutopayServiceError?
+    var holdsRemove = false
+    var removeStarted = false
+    private var parkedRemove: CheckedContinuation<Void, Never>?
+
+    func status(sessionBytes: Data) async throws -> NativeAutopayStatusSnapshot {
+        statusCalls += 1
+        if let hook = duringStatus { await MainActor.run { hook() } }
+        return try statusResult.get()
+    }
+
+    func removeCard(enrollmentID: String, sessionBytes: Data) async throws {
+        removedIDs.append(enrollmentID)
+        if holdsRemove {
+            await withCheckedContinuation { continuation in
+                parkedRemove = continuation
+                removeStarted = true
+            }
+        }
+        if let removeError { throw removeError }
+    }
+
+    func releaseRemove() {
+        holdsRemove = false
+        parkedRemove?.resume()
+        parkedRemove = nil
     }
 }
 
