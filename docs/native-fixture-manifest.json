@@ -2236,6 +2236,10 @@
    "path": "__tests__/emailHtml.test.js",
    "sha256": "c3f0330932772b27443a4bf27b43bdba7fb99b9c070239cbf9d2d9590c00d241"
   },
+  "esignRoutesWorkers": {
+   "path": "__tests__/esignRoutesWorkers.test.js",
+   "sha256": "aacad3a500a717fbf6863ee0c475e51ab0b530df272a60aa6b47de82cb670ddc"
+  },
   "estimateApprovals": {
    "path": "__tests__/estimateApprovals.test.js",
    "sha256": "09a78160d39094b589021ba6901beafdbf3a05a7d1f0c8b27b15894e40a36472"

@@ -20,3 +20,13 @@ GROQ_API_KEY=placeholder
 # ESTIMATE_PUBLIC_ORIGIN=
 # ESTIMATE_PUBLIC_BASE=
 # CHANGE_PUBLIC_BASE=
+
+# Phase 19 e-signatures (both flags default OFF when unset). For a local seal
+# key, generate a throwaway pair (never the production key):
+#   openssl genpkey -algorithm ed25519 -out /tmp/esign-dev.pem
+#   openssl pkey -in /tmp/esign-dev.pem -pubout -outform DER | tail -c 32 | base64
+# ESIGN_V2=true
+# ESIGN_REQUIRE_CONSENT=true
+# ESIGN_SEAL_PRIVATE_KEY=<base64 PKCS#8 DER, or the PEM body>
+# ESIGN_SEAL_KEY_ID=dev
+# ESIGN_SEAL_PUBLIC_KEYS={"dev":"<base64 raw 32-byte public key>"}

@@ -10,6 +10,10 @@ import { createRateLimiter } from '../../../lib/guards.js';
 import { hasSnapshotOptions, validateSnapshotOptions } from '../../../lib/estimate/quoteOptions.js';
 import { validateSnapshotValidity } from '../../../lib/estimate/estimateExpiry.js';
 import { jsonBody } from '../../appCors.js';
+import { validateSnapshotEsign } from '../../../lib/esign/validate.js';
+import { esignActive } from '../../../lib/esign/flags.js';
+import { tokenSha256 } from '../../../lib/esign/record.js';
+import { logEvent } from '../../../lib/esign/store.js';
 
 const allow = createRateLimiter({ limit: 10 });
 
@@ -81,6 +85,10 @@ export async function estimateCreateLinkHandler(c) {
   const nowMs = Date.now();
   const validityError = validateSnapshotValidity(snapshot, nowMs);
   if (validityError) return c.json({ error: validityError }, 400);
+  // E-signature additions (Phase 19 §3.4): scope, terms, business contact,
+  // pad setting and the esign marker. Absent keys are fine.
+  const esignError = validateSnapshotEsign(snapshot);
+  if (esignError) return c.json({ error: esignError }, 400);
   if (changeOrderId !== undefined && typeof changeOrderId !== 'string') {
     return c.json({ error: 'changeOrderId must be a string' }, 400);
   }
@@ -114,6 +122,7 @@ export async function estimateCreateLinkHandler(c) {
         console.error('[estimate/create-link] upsert failed:', err.message);
         return c.json({ error: 'Database error' }, 500);
       }
+      await logLinkCreated(c.env, userId, plan.token, snapshot);
     }
     const url = `${CHANGE_PUBLIC_BASE}?j=${encodeURIComponent(jobId)}&co=${encodeURIComponent(changeOrderId)}&t=${encodeURIComponent(plan.token)}`;
     return c.json({ url, token: plan.token, sentAt: plan.sentAt }, 200);
@@ -129,8 +138,16 @@ export async function estimateCreateLinkHandler(c) {
       console.error('[estimate/create-link] upsert failed:', err.message);
       return c.json({ error: 'Database error' }, 500);
     }
+    await logLinkCreated(c.env, userId, plan.token, snapshot);
   }
 
   const url = `${PUBLIC_BASE}?j=${encodeURIComponent(jobId)}&t=${encodeURIComponent(plan.token)}`;
   return c.json({ url, token: plan.token, sentAt: plan.sentAt }, 200);
+}
+
+// Phase 19 audit trail: the authenticated owner sent (or re-sent) this link.
+// Best-effort (logEvent never throws); the owner's IP is not recorded.
+async function logLinkCreated(env, userId, token, snapshot) {
+  if (!esignActive(env, snapshot)) return;
+  await logEvent(env, { userId, tokenHash: tokenSha256(token), event: 'link_created' });
 }

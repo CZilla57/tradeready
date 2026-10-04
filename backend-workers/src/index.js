@@ -49,6 +49,11 @@ import { portalRequestHandler } from './routes/estimate/portalRequest.js';
 import { portalManageHandler } from './routes/estimate/portalManage.js';
 import { changeViewHandler } from './routes/estimate/changeView.js';
 import { changeRespondHandler } from './routes/estimate/changeRespond.js';
+import { esignCopyHandler } from './routes/esign/copy.js';
+import { esignPreviewHandler } from './routes/esign/preview.js';
+import { esignVerifyHandler } from './routes/esign/verify.js';
+import { esignPublicKeysHandler } from './routes/esign/publicKeys.js';
+import { esignRecordHandler } from './routes/esign/record.js';
 import { connectStatusHandler } from './routes/stripe/connectStatus.js';
 import { createConnectAccountHandler } from './routes/stripe/createConnectAccount.js';
 import { disconnectHandler } from './routes/stripe/disconnect.js';
@@ -90,6 +95,15 @@ app.all('/api/estimate/portal-manage', portalManageHandler);
 app.all('/api/estimate/change-view', changeViewHandler);
 app.all('/api/estimate/change-respond', changeRespondHandler);
 app.all('/api/estimate/:action', (c) => c.json({ error: 'Not found' }, 404));
+
+// Phase 19 e-signatures: signer copy, unsigned preview, public verification,
+// published keys, and the owner app's record fetch.
+app.all('/api/esign/copy', esignCopyHandler);
+app.all('/api/esign/preview', esignPreviewHandler);
+app.all('/api/esign/verify', esignVerifyHandler);
+app.all('/api/esign/public-keys', esignPublicKeysHandler);
+app.all('/api/esign/record', esignRecordHandler);
+app.all('/api/esign/:action', (c) => c.json({ error: 'Not found' }, 404));
 
 app.all('/api/stripe/connect-status', connectStatusHandler);
 app.all('/api/stripe/create-connect-account', createConnectAccountHandler);

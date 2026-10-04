@@ -1,0 +1,89 @@
+// GET /api/esign/copy?j=<jobId>&t=<token>[&c=<changeOrderId>]&format=pdf|json
+// The signer's copy (Phase 19 spec §3.5, D7). Token-gated like the estimate
+// routes, same CORS. Resolves through signature_records by the token's
+// SHA-256, so it keeps working after the job is edited or deleted; the job is
+// read only to lazily seal a record whose first insert failed. Serves the
+// deterministic PDF (default) or the sealed record envelope as JSON for
+// independent verification, and logs `copy_downloaded`.
+
+import { fetchJob } from '../../../lib/estimateStore.js';
+import { createRateLimiter } from '../../../lib/guards.js';
+import { applyCors } from '../../../lib/estimate/cors.js';
+import { clientIp } from '../../appCors.js';
+import { tokenSha256 } from '../../../lib/esign/record.js';
+import { edgeClientIp } from '../../../lib/esign/ip.js';
+import { fetchRecordByTokenHash, logEvent } from '../../../lib/esign/store.js';
+import { approvalForLink, ensureRecord, envelopeOf, signedPdfOf } from '../../../lib/esign/service.js';
+import { signedPdfFilename } from '../../../lib/esign/pdf.js';
+
+const allow = createRateLimiter({ limit: 20 });
+
+// One answer for "no such link", "not signed" and "wrong job": no oracle.
+const NOT_SIGNED = { error: 'No signed copy is available for this link.', code: 'not_signed' };
+const PENDING = { error: 'Your signed copy is still being prepared. Please try again in a few minutes.', code: 'record_pending' };
+
+export async function esignCopyHandler(c) {
+  applyCors(c, 'GET, OPTIONS');
+  if (c.req.method === 'OPTIONS') return c.body(null, 200);
+  if (c.req.method !== 'GET') return c.json({ error: 'Method not allowed' }, 405);
+  if (!allow(clientIp(c))) return c.json({ error: 'Too many requests.', code: 'rate_limited' }, 429);
+
+  const jobId = c.req.query('j');
+  const token = c.req.query('t');
+  const coId = c.req.query('c') || null;
+  const format = c.req.query('format') || 'pdf';
+  if (!jobId || !token) return c.json({ error: 'Missing link parameters.', code: 'invalid_request' }, 400);
+  if (format !== 'pdf' && format !== 'json') return c.json({ error: 'Unknown format.', code: 'invalid_request' }, 400);
+
+  const tokenHash = tokenSha256(String(token));
+  let row;
+  try {
+    row = await fetchRecordByTokenHash(c.env, tokenHash);
+  } catch (err) {
+    console.error('[esign/copy] record fetch failed:', err.message);
+    return c.json({ error: 'Database error', code: 'server_error' }, 500);
+  }
+  if (row) {
+    if (row.job_id !== String(jobId) || (row.change_order_id || null) !== (coId ? String(coId) : null)) {
+      return c.json(NOT_SIGNED, 404);
+    }
+  } else {
+    let job;
+    try {
+      job = await fetchJob(c.env, String(jobId));
+    } catch (err) {
+      console.error('[esign/copy] job fetch failed:', err.message);
+      return c.json({ error: 'Database error', code: 'server_error' }, 500);
+    }
+    const link = approvalForLink(job, { changeOrderId: coId, token: String(token) });
+    if (!link) return c.json(NOT_SIGNED, 404);
+    const ensured = await ensureRecord(c.env, {
+      userId: job.user_id,
+      jobId: String(jobId),
+      changeOrderId: link.changeOrderId,
+      documentType: link.documentType,
+      approval: link.approval,
+    });
+    if (!ensured) return c.json(NOT_SIGNED, 404);
+    if (!ensured.row) return c.json(PENDING, 503);
+    row = ensured.row;
+  }
+
+  await logEvent(c.env, {
+    userId: row.user_id,
+    tokenHash,
+    event: 'copy_downloaded',
+    ip: edgeClientIp(c),
+    userAgent: String(c.req.header('user-agent') || '').slice(0, 300),
+  });
+
+  const filename = signedPdfFilename(row.record);
+  c.header('Cache-Control', 'no-store');
+  if (format === 'json') {
+    c.header('Content-Disposition', `attachment; filename="${filename.replace(/\.pdf$/, '.json')}"`);
+    return c.json(envelopeOf(row), 200);
+  }
+  c.header('Content-Type', 'application/pdf');
+  c.header('Content-Disposition', `attachment; filename="${filename}"`);
+  return c.body(signedPdfOf(row), 200);
+}

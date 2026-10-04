@@ -30,6 +30,8 @@ begin
       ('recurringInvoices'),
       ('recurringJobs'),
       ('settings'),
+      ('signature_events'),
+      ('signature_records'),
       ('stripe_accounts'),
       ('subscriptions'),
       ('trips')

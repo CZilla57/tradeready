@@ -8,6 +8,12 @@ import { billableContext } from '../../../lib/estimate/changeOrderMath.js';
 import { createRateLimiter } from '../../../lib/guards.js';
 import { applyCors } from '../../../lib/estimate/cors.js';
 import { clientIp } from '../../appCors.js';
+import { snapshotDigest } from '../../../lib/estimate/quoteOptions.js';
+import { esignV2, esignActive } from '../../../lib/esign/flags.js';
+import { edgeClientIp } from '../../../lib/esign/ip.js';
+import { signingTexts } from '../../../lib/esign/texts.js';
+import { tokenSha256 } from '../../../lib/esign/record.js';
+import { afterResponse, ensureRecord, logViewCapped, signedViewOf } from '../../../lib/esign/service.js';
 
 const allow = createRateLimiter({ limit: 30 });
 
@@ -41,7 +47,7 @@ export async function changeViewHandler(c) {
   // A manual on-site decision also counts as decided for the viewer.
   const decision = a.decision || (co.manualDecision && co.manualDecision.decision) || null;
 
-  return c.json({
+  const body = {
     ...a.snapshot,
     description: co.description || null,
     decision,
@@ -49,5 +55,28 @@ export async function changeViewHandler(c) {
     signerName: a.signerName || null,
     signatureRequired: true,
     context: billableContext(row.data, String(coId)),
-  }, 200);
+  };
+
+  // Phase 19 (same contract as view.js): server-rendered signing texts while
+  // this change order signs through the e-signature path, the snapshot
+  // digest the signing page echoes, and the signed view.
+  delete body.esign;
+  if (esignV2(c.env)) body.snapshotDigest = snapshotDigest(a.snapshot);
+  const active = esignActive(c.env, a.snapshot);
+  if (active && !decision) body.esign = signingTexts(a.snapshot, 'change_order');
+  const signed = a.decision === 'approved'
+    ? signedViewOf(a, await ensureRecord(c.env, {
+      userId: row.user_id, jobId: String(jobId), changeOrderId: String(coId), documentType: 'change_order', approval: a,
+    }))
+    : null;
+  if (signed) body.signed = signed;
+  if (active) {
+    afterResponse(c, logViewCapped(c.env, {
+      userId: row.user_id,
+      tokenHash: tokenSha256(a.token),
+      ip: edgeClientIp(c),
+      userAgent: String(c.req.header('user-agent') || '').slice(0, 300),
+    }));
+  }
+  return c.json(body, 200);
 }

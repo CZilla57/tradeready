@@ -373,3 +373,201 @@ Rollback: turn `ESIGN_V2` off. Records already sealed stay valid and downloadabl
 | Q9 | In-person signing | Offer "Sign on this phone" (the customer signs on the owner's device at the job), recorded as `context: in_person_owner_device`, with owner-facing copy noting that in-home sales may need a cancellation notice? | **Defer to stage D.** Ship only with counsel-reviewed reminder copy (FTC Cooling-Off Rule) |
 | Q10 | Seal key | Generate an Ed25519 key pair, set the private key as a Worker secret, and publish the public key on `verify.html`? | **Yes**, at stage B |
 | Q11 | Privacy label | Confirm no App Store privacy-label change. The new data comes from customers on the web pages, not from app users, and the label already declares name, email and user content | **No change**, re-checked at ship |
+
+## 11. Build record (2026-10-03)
+
+### Worker and pages
+
+Stage A, Worker / migration / pages slice. Built on `feat/esign` (from `feat/quote-expiration`). Nothing deployed, applied or published. Sections below are filled in as the build lands; the app-facing contract (11.1) is written first because the native app codes against it.
+
+#### 11.1 App-facing contract (native engineer: code against this)
+
+**A. Snapshot additions (device-built, sent to `POST /api/estimate/create-link` as part of `snapshot`).** All optional and additive. The existing quote-options digest covers them automatically. Omit a key rather than sending `null` or `""`.
+
+| Key | Type and limits | Notes |
+|---|---|---|
+| `scope` | string, 1–4,000 UTF-16 units (Swift `utf16.count`) | Estimate: the job's customer-facing `description`. **Change order: the change order's `description`.** The esign pages show `scope` from the frozen snapshot, so what is signed is what is read. |
+| `terms` | string, 1–4,000 UTF-16 units | `settings.estimateTerms`. Estimates only (a change order may carry it too; the Worker accepts it on both). |
+| `businessContact` | object `{phone?, email?}`; `phone` string ≤ 40, `email` string ≤ 254 that looks like an address | From settings. Omit empty members; omit the object when both are empty. Used in the disclosure's paper-copy line and as the copy email's `reply_to`. |
+| `signature` | object `{drawPad: Bool}` | `settings.signatureDrawPad`, default `true`. Absent means `true`. |
+| `esign` | object `{version: 1, timeZone?: String}` | Send on every snapshot once the native Phase 19 build ships. `timeZone` (optional, IANA, ≤ 64) is the owner's zone; the signature certificate prints the signing time in it. When absent the Worker falls back to `validUntilTimeZone`, else prints UTC only. |
+
+New `create-link` 400 messages (body `{error}`, same convention as options/validity; checked before any DB contact):
+`The scope must be text of at most 4,000 characters.` · `The terms must be text of at most 4,000 characters.` · `Business contact details are malformed.` · `The business phone must be at most 40 characters.` · `The business email address is invalid.` · `Signature settings are malformed.` · `This e-signature version isn't supported. Please update the app.` · `The e-signature time zone is invalid.`
+
+**B. Approval keys the Worker now writes (server-owned; the device must round-trip them and never author them).** On an e-signed approval, `approval` (and `changeOrders[i].approval`) gains:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `signatureRecordId` | string (UUID v4, lowercase) | Id of the sealed record in `signature_records`. |
+| `recordDigest` | string (64 lowercase hex) | SHA-256 of the canonical record JSON (the "fingerprint"). |
+| `signatureMethod` | `"typed"` \| `"typed_drawn"` | |
+| `signatureEvidence` | object, **opaque** | The inputs the Worker needs to rebuild and seal the record if the first insert failed: `{v: 1, consentVersion: 1 \| null, drawn: {w, h, strokes} \| null, email: String \| null, events: [{type, at, ip?, actor?}]}`. Up to ~27 KB. Preserve it verbatim (the canonical `Preservation` round-trip does this). The drawn mark may be rendered from `signatureEvidence.drawn` offline; the authoritative copy is `POST /api/esign/record`. |
+
+`approval.ip` is now the edge address (`cf-connecting-ip`) on e-signed approvals and may be JSON `null` (local runs without the edge). The approval-preserve trigger freezes all four keys once approved (migration `20261003_esign_records.sql`). An approval **without** `signatureRecordId` is a legacy typed-name approval ("Typed-name approval (before audit trail)").
+
+`drawn` shape (also in the record): `{w: 600, h: 200, strokes: [[[x, y, tMs], ...], ...]}`, integers, `0 ≤ x ≤ 600`, `0 ≤ y ≤ 200` (y grows downward, canvas convention), `tMs ≥ 0` milliseconds since the first point. At most 40 strokes, 2,000 points, 24 KB of JSON. To draw it, scale `x * W / 600`, `y * H / 200` into a W×H box; a one-point stroke is a dot.
+
+**C. Owner route: `POST /api/esign/record`** (JWT + `appCors`, same auth as `create-link`).
+
+Request: headers `Authorization: Bearer <Supabase access token>`, `Content-Type: application/json`; body
+```json
+{ "jobId": "job-1", "changeOrderId": "co-1", "recordId": "3f0c…" }
+```
+`jobId` required (string ≤ 200). `changeOrderId` optional (omit for the estimate). `recordId` optional; when given it must be the record of that job/change order (send `approval.signatureRecordId`); when omitted the newest record for that job/change order is returned.
+
+200 response:
+```json
+{
+  "recordId": "3f0c…", "recordDigest": "<64 hex>",
+  "documentType": "estimate", "jobId": "job-1", "changeOrderId": null,
+  "signedAt": "2026-10-03T14:05:09.000Z", "signatureMethod": "typed_drawn",
+  "seal": { "alg": "Ed25519", "keyId": "k2026-10", "signature": "<base64, 64 bytes>" },
+  "record": { "recordVersion": 1, "…": "the sealed canonical record (§3.5, plus consent.text; see 11.3)" },
+  "events": [ { "type": "link_created", "at": "…", "ip": null }, { "type": "viewed", "at": "…", "ip": "203.0.113.9" },
+              { "type": "signed", "at": "…", "ip": "203.0.113.9" }, { "type": "copy_emailed", "at": "…", "ip": null } ],
+  "pdf": { "filename": "signed-estimate-3f0c1a2b.pdf", "contentType": "application/pdf", "base64": "JVBERi0xLjQK…" }
+}
+```
+`record.events` is the trail sealed at signing; top-level `events` is the live log (everything for that link, including later `copy_emailed`, `copy_email_failed`, `copy_downloaded`), unsealed, oldest first, at most 200. `ip` is `null` for owner-side and server-side events.
+
+Errors (all JSON `{error, code}`):
+
+| Status | `code` | When |
+|---|---|---|
+| 400 | `invalid_request` | missing/oversized `jobId`, non-string `changeOrderId`/`recordId` |
+| 401 | `unauthorized` | no/invalid bearer token |
+| 404 | `record_not_found` | no signed record for that job/change order (legacy approval, declined, not signed, other owner's job) |
+| 405 | — | not POST (`{error: 'Method not allowed'}`) |
+| 429 | `rate_limited` | 30 requests/min per user |
+| 500 | `server_error` | Supabase misconfigured or unreachable |
+| 503 | `record_pending` | the approval says it was signed but the record could not be sealed yet (seal key not configured, or the database is unreachable); retry later |
+
+**D. Public routes (pages only; listed so the app knows they exist).** `GET /api/esign/copy?j=&t=[&c=]&format=pdf|json` (signer copy, token-gated, works after job deletion), `GET /api/esign/preview?j=&t=[&c=]` (unsigned PDF), `GET /api/esign/verify?r=&d=` (public, no PII), `GET /api/esign/public-keys`. The app does not call these; a customer-facing "verify" link is `https://gettradereadyapp.com/verify?r=<recordId>&d=<recordDigest>`.
+
+**E. Flags.** `ESIGN_V2` (Worker var, default off): enables consent/records/events on snapshots that carry `esign`. `ESIGN_REQUIRE_CONSENT` (default off): with `ESIGN_V2` on, every approval (legacy snapshots too) must carry consent. With `ESIGN_V2` off the estimate routes behave exactly as before; records already sealed stay downloadable and the owner route keeps working.
+
+#### 11.2 What was built, by file
+
+Worker (`backend-workers/`, all CommonJS libs + ESM routes, no new dependency):
+
+| File | What |
+|---|---|
+| `lib/esign/flags.js` | `ESIGN_V2`, `ESIGN_REQUIRE_CONSENT` (default off), `esignActive(env, snapshot)` |
+| `lib/esign/ip.js` | `edgeClientIp(c)`: `cf-connecting-ip` or `null`, never XFF |
+| `lib/esign/texts.js` | The version-1 disclosure, checkbox label, intent statement (§3.1, §3.2), rendered per snapshot and document type; the single source the pages display and the record hashes |
+| `lib/esign/validate.js` | Typed name, drawing (40 strokes / 2,000 points / 24 KB / 600×200 integer box), signer email, consent version; `validateSnapshotEsign` for create-link (§3.4) |
+| `lib/esign/record.js` | `recordFromApproval` (the one record builder), `signApproval`, `recordDigest`, `eventsForRecord`, `signatureEvidence` |
+| `lib/esign/seal.js` | Ed25519 seal/verify over the digest bytes (WebCrypto), `publicKeys()`, refuses to seal unless the private key matches the published public key |
+| `lib/esign/pdf.js`, `lib/esign/pdfFontMetrics.js` | Deterministic PDF 1.4 writer, renderer `pdf-v1`: document pages + signature certificate, drawn strokes as paths, WinAnsi with `?` fallback |
+| `lib/esign/store.js` | Insert-only `signature_records` (ignore-duplicates on the token hash) and best-effort `signature_events`; logged errors carry status + PostgREST code only |
+| `lib/esign/copyEmail.js` | The signer copy email (Resend payload, PDF attached, hardened headers) |
+| `lib/esign/service.js` | Orchestration: `sealAndStore`, lazy `ensureRecord`, `finishSigning`, `sendCopyEmail`, capped view logging, `approvalForLink`, the page's `signed` block |
+| `src/routes/estimate/respond.js`, `changeRespond.js` | The e-signature approve path (decision first, then seal + insert, `signed` event, email via `waitUntil`); declines log `declined`; change orders use the conditional write on this path |
+| `src/routes/estimate/view.js`, `changeView.js` | `esign` signing texts, `signed` view with lazy re-seal, capped `viewed` events; change-view also returns `snapshotDigest` under `ESIGN_V2` |
+| `src/routes/estimate/createLink.js` | Validates the §3.4 additions; logs `link_created` |
+| `src/routes/esign/{copy,preview,verify,publicKeys,record}.js`, `src/index.js` | The five new routes (§3.5) |
+| `wrangler.toml`, `.dev.vars.example` | Comments only: the new secret/vars and flags (no values) |
+
+Database (written, never applied): `supabase/migrations/20261003_esign_records.sql`, `supabase/migrations/verify/20261003_esign_records_verify.sql`, local harness `supabase/verify/esign_records.sh`; `supabase/verify/job_approval_preserve.sh` gains section 11; `supabase/verify/account_deletion_cascade.sql` now expects both tables.
+
+Tests: `backend-workers/tests/esign.test.cjs` (+ `esignFixtures.cjs`, golden files in `backend-workers/tests/fixtures/esign/`), `__tests__/esignRoutesWorkers.test.js`; `docs/native-fixture-manifest.json` regenerated.
+
+Pages (`tradeready-legal`, uncommitted): `esign.js` (new), `verify.html` (new), `estimate.html`, `change.html` (11.5).
+
+#### 11.3 Decisions where the spec was silent (Worker and pages)
+
+1. **One source for the legal text.** The Worker renders the disclosure, checkbox label and intent statement and sends them in `view` / `change-view`; the pages display exactly that and the record hashes exactly that (§3.2's "constant shared by the page and the Worker", made literal). A page can't drift from the hashed text.
+2. **Wording variants** (all in the lawyer review, Q2/Q3): change orders swap "estimate" for "change order", and the scope line reads "this agreement covers this change order and any other change orders to this job."; with the owner's pad turned off the intent statement drops the drawing clause ("Your typed name is your signature."); with no business phone/email the paper-copy line ends after "at no charge.".
+3. **A fourth server-owned approval key, `signatureEvidence`** (`{v, consentVersion, drawn, email, events}`). The lazy re-seal (§3.5 step 4) has to rebuild the identical record from the stored approval, and the drawing, email, consent version and event trail are not otherwise in it. It is frozen by the preserve trigger with the spec's three keys.
+4. **Record additions**: `consent.text` (the exact disclosure rendering, so the record is self-contained); `consent` and `intent` are `null` when an old page signed (nothing was shown); `events` holds the trail *before* signing (`link_created` with `actor: "owner"` and no owner IP, `viewed`, `declined`; capped at 50), and the signing itself is `signedAt` + `ip`. The certificate prints it as the last trail row.
+5. **Seal**: the message is the 32 raw bytes of the record digest. A new public var **`ESIGN_SEAL_PUBLIC_KEYS`** (JSON `{keyId: base64 raw key}`) holds every key ever used, for `verify`, `public-keys` and rotation; a seal is only produced when the private key verifies against its published key.
+6. **Digest on signing**: a consenting signature must echo the snapshot digest (409 otherwise) for estimates and change orders, so the sealed document is the one on screen. Change orders on the e-signature path write with the conditional write (re-read on conflict) so two racing approvals can't seal two records; the legacy path keeps its upsert.
+7. **Typed name on the e-signature path**: trimmed, rejected over 200 characters (not silently cut) and with control characters or lone surrogates (Postgres jsonb can't store them faithfully).
+8. **`ESIGN_REQUIRE_CONSENT` on** routes every approval (legacy snapshots too) through the e-signature path.
+9. **Flag scope**: `preview` is behind `ESIGN_V2`; `copy`, `verify`, `public-keys` and `record` always answer, and `view` / `change-view` always return `signed` for an e-signed approval, so turning `ESIGN_V2` off never strands a signer's copy (§8 rollback).
+10. **Copy route**: one answer (`404 not_signed`) for a wrong token, a wrong job and an unsigned link; `503 record_pending` while a record can't be sealed; JSON format is the envelope `{format: "tradeready-esign-record", version: 1, recordId, recordDigest, seal, record}`.
+11. **Email**: sender `estimates@gettradereadyapp.com` on the verified Resend domain (any local part sends), `reply_to` the business email when valid; sent only by the request whose write recorded the approval (once per link); it carries the seal even when only the insert failed, and a "Seal: pending" certificate when no seal key is configured.
+12. **PDF**: US Letter; the preview has no `CreationDate` and its `/ID` comes from the snapshot digest; the certificate never claims anything about the signer's identity or device ("A private link the business sent to the signer").
+13. **Change-order page** shows the sealed `scope` instead of the live `description` when the snapshot carries one (contract 11.1 A tells the app to put the change order's description there).
+14. **Account deletion (Q6)**: no code change. Both tables cascade from `auth.users`, there is deliberately no delete trigger, and the cascade audit lists both tables.
+15. The PDF and email point to `gettradereadyapp.com/verify` (extensionless, like the existing `privacy` / `terms` links); the page file is `verify.html`.
+
+#### 11.4 Page-facing contract (estimate.html / change.html ↔ Worker)
+
+- `GET /api/estimate/view` and `/change-view` add, when the e-signature path is active and the document isn't approved, `esign: {version: 1, disclosure: {version, title, intro, items: [{label, text}]}, disclosureText, checkboxLabel, disclosureLinkLabel, intent, approveLabel, drawPad}`. The snapshot's own `esign` marker is never passed through. After an e-signed approval they add `signed: {recordId, recordDigest, signatureMethod, signedAt, typedName, drawn, recordPending}` (no email, no IP). `change-view` adds `snapshotDigest` under `ESIGN_V2`.
+- `POST /api/estimate/respond` and `/change-respond` accept, on approve: `consent: {accepted: true, version: 1}`, `drawn` (11.1 B shape or `null`), `signerEmail` (string or `null`), plus the existing fields; the page always sends `snapshotDigest`. 200 adds `recordId`, `recordDigest`, `signatureMethod` and, when sealing failed, `recordPending: true`. New 400 `{error, code}` codes: `name_required`, `name_too_long`, `name_invalid`, `drawing_invalid`, `drawing_too_large`, `email_invalid`, `consent_required`, `consent_version_unknown`, `reload_required`. Change orders gain a 409 for a stale digest.
+
+#### 11.5 Uncommitted `tradeready-legal` edits (owner commits and publishes at stage C)
+
+- `esign.js` (new): renders the Agree-and-sign block in §3.1 order (preview link, consent checkbox + inline disclosure toggle, name, optional pad with Clear, optional email, intent statement immediately before "Approve and sign", Decline), the vanilla pointer-event pad (normalized 600×200 integer strokes, thinned, capped below the Worker limits), the signed view (name, drawn mark as inline SVG, date/time, record id, fingerprint, "Download signed copy (PDF)", JSON record, "Check this record"), and the browser-side record check for `verify.html` (canonical JSON, SHA-256, Ed25519).
+- `estimate.html`: loads `esign.js`; when `view` sends `esign`, shows scope and terms and the block instead of the legacy form (single-total and options variants), posts consent/drawing/email, keeps the form with an inline error on a 400, and reloads into the signed view after signing; approved + `signed` renders the full signed document instead of the banner. The Phase 25/32 working-tree edits are kept. Legacy views (no `esign`) render exactly as before.
+- `change.html`: the same for change orders (`/change-respond`, `c=` links), shows the sealed `scope`.
+- `verify.html` (new): check by record id + fingerprint (`/api/esign/verify`, prefilled from `?r=&d=`), check a downloaded JSON record in the browser, list public keys. `PUBLISHED_KEYS` is empty until the owner pastes the key (stage C).
+- Not touched: `portal.html`, `pay.html` (another engineer), `terms.html`, `privacy.html`, `_headers` (the existing CSP already allows everything used: same-origin script, inline SVG, `connect-src` to the Worker).
+
+#### 11.6 Legal and privacy wording still to apply (drafts, pending one lawyer review — Q2; not legal advice)
+
+The disclosure, checkbox, intent statement and their variants are in `lib/esign/texts.js` (11.3 item 2). Pages also gained one new customer-facing sentence (footer while signing): "When you sign, a signature record is stored with this estimate: your typed name, your drawing if you add one, your email if you ask for a copy, the time, your IP address and your device." (change-order variant: "…with this change order…").
+
+**`terms.html` §8 — replace the section with (Q4):**
+
+> **8. Estimate approvals and electronic signatures**
+> TradeReady lets you send a customer a private link to review an estimate or change order and approve it or decline it.
+> Before approving, your customer must agree to use electronic records and signatures. They see a disclosure that names your business and explains how to get a paper copy, how to sign on paper instead, and what they need to open and save the records. Approving requires them to type their full name next to a statement that doing so signs the document electronically. They may also draw a signature; it's optional.
+> For each signature, TradeReady keeps a signature record: the document as shown, a fingerprint (SHA-256) of it, the disclosure and statement shown, the typed name and any drawing, the email address they gave for a copy, the time, their IP address and browser, and a history of when the link was sent and opened. The record is sealed with TradeReady's digital key so later changes can be detected, and anyone holding the record can check it at gettradereadyapp.com/verify. Your customer can view and download a signed PDF copy from the same link and, if they ask, receives one by email.
+> These records show who had the link and what they did with it. They don't verify your customer's identity. You are responsible for the content of your estimates and terms, for any notices, cancellation rights or contract formalities that apply to your business and where you work (for example, rules for home-improvement contracts or sales made at a customer's home), and for deciding whether this process meets them. TradeReady isn't a law firm and doesn't provide legal advice.
+> Declining is recorded with the time and IP address, without a signature. Signature records are deleted with your account; save any copies you need before deleting it.
+
+**`privacy.html` §1 — replace the "Estimate approval records" bullet with (Q4):**
+
+> **Estimate and change-order signature records:** if you send your customer a link to approve or decline an estimate or change order, and they act on it, we store: their decision; on approval, their typed name, their drawn signature if they add one, and the email address they enter if they ask for a signed copy (used only to send that copy); the version of the electronic-records disclosure they agreed to; a server timestamp; their IP address and browser user-agent; and a log of when the link was sent, opened, signed and downloaded (with IP address and browser for the customer's actions). Each signature record is sealed and kept for as long as your account exists, and is deleted with your account. Your customer keeps the copies they downloaded or were emailed.
+
+**Claims (Q5):** no page, email, PDF or Worker string uses any §7 "must not say" phrase; `backend-workers/tests/esign.test.cjs` and the page harness scan for them.
+
+**App copy (native engineer, §3.7):** the account-deletion line and "Typed-name approval (before audit trail)" labels are in §3.7; unchanged here.
+
+#### 11.7 Test results (2026-10-03)
+
+| Command | Result |
+|---|---|
+| `cd backend-workers && npm test` | 209 pass, 0 fail (49 new in `tests/esign.test.cjs`: flags, `edgeClientIp` ignores XFF, texts and the must-not-say scan, validation caps, golden record bytes + digests for estimate / options / change-order fixtures, Ed25519 round trip with a runtime test key and tamper rejection, PDF golden bytes for four fixtures incl. a drawn signature and non-WinAnsi names (byte-identical across runs, well-formed xref), copy email headers, store wire format, retention static checks) |
+| `TZ=America/Phoenix npx jest --runInBand --runTestsByPath __tests__/esignRoutesWorkers.test.js` + the 18 estimate/change/portal/booking/Workers suites near it | 19 suites, 230 tests pass (37 new: decision-then-record, edge IP over a spoofed XFF, consent required / old page / legacy snapshot under `ESIGN_REQUIRE_CONSENT`, payload 400s before DB contact, digest 409, expiry 410 before sealing, options selection, insert failure → `recordPending` → lazy seal on view, no seal key → sealed on copy later, double approve = one record and one email, decline = event only, email failure never fails respond, copy after soft delete (PDF + JSON, byte-identical), copy refusals, verify without PII and tamper detection, change-order parity, flags-off legacy behavior, owner route auth/scoping/lazy seal/503) |
+| `TZ=America/Phoenix npx jest --runInBand --testPathPattern='(Workers\|estimate\|change\|portal\|booking\|phase8\|deleteConfirm\|accountDeletion)'` | 54 suites, 574 tests pass |
+| `sh supabase/verify/esign_records.sh` (throwaway local Postgres 16) | 10 pass: negative control, applies + re-applies, the project verify script's 7 checks, real `auth.users` delete cascades both tables |
+| `sh supabase/verify/job_approval_preserve.sh` | 45 pass (39 existing + 6 new in section 11: control without 20261003, apply/re-apply, all four keys restored on estimates and change orders, pre-Phase-19 approvals unchanged) |
+| Page harness (jsdom, stubbed fetch; scratch `t19w/pages.test.cjs`) | 14/14 pass on the edited pages; against the pre-edit pages 11 fail and the 3 legacy checks pass (discriminates); a mutant `esign.js` with the error line between the intent statement and the button fails the static adjacency check |
+| `node scripts/parity-manifest.mjs --write` then `--check` | current |
+| `sh native/run-doc-reference-check.sh` | 0 missing |
+| esbuild bundle of `src/index.js` (local, no wrangler) | resolves |
+
+Not run here (native engineer's gates): `sh native/run-all-domain-tests.sh`, the Release compile. Manual iOS Safari / VoiceOver checks (§6 Pages) were not done; a desktop-browser render at 375 px width was checked with stubbed data (no horizontal scroll).
+
+#### 11.8 Owner ship steps
+
+Stage B:
+1. Apply `supabase/migrations/20261002_job_approval_preserve.sql` first if it isn't applied yet (20261003 replaces that function's body but does not create its trigger), then apply `supabase/migrations/20261003_esign_records.sql` in the SQL editor (Q1).
+2. `psql -v ON_ERROR_STOP=1 "$DATABASE_URL" -f supabase/migrations/verify/20261003_esign_records_verify.sql` (expects "ALL CHECKS PASSED"), then re-run `supabase/verify/account_deletion_cascade.sql`.
+3. One lawyer review of the disclosure, checkbox, intent statement, their variants and the footer sentence (`backend-workers/lib/esign/texts.js`, 11.3 item 2, 11.6), and of the terms/privacy drafts (Q2–Q4). A text change after review ships as a new consent version.
+4. Seal key (Q10), on a trusted machine:
+   - `openssl genpkey -algorithm ed25519 -out esign-seal.pem`
+   - `openssl pkey -in esign-seal.pem -outform DER | base64 | tr -d '\n'` → `wrangler secret put ESIGN_SEAL_PRIVATE_KEY`
+   - `openssl pkey -in esign-seal.pem -pubout -outform DER | tail -c 32 | base64` → in `wrangler.toml` `[vars]`: `ESIGN_SEAL_KEY_ID = "k2026-10"` (any id) and `ESIGN_SEAL_PUBLIC_KEYS = '{"k2026-10":"<that base64>"}'`
+   - keep the PEM offline (losing it only stops new seals; leaking it means rotate to a new key id and keep the old public key listed).
+5. Paste the same key id and public key into `PUBLISHED_KEYS` in `tradeready-legal/verify.html`.
+
+Stage C:
+6. Deploy the Worker with `ESIGN_V2 = "true"` (vars).
+7. Commit and publish `tradeready-legal`: `esign.js`, `verify.html`, `estimate.html`, `change.html`, with the reviewed terms §8 and privacy §1 text.
+8. Ship the native build that sends `esign` snapshots (11.1 A).
+9. Turn on `ESIGN_REQUIRE_CONSENT = "true"` and deploy.
+10. Device smoke (§8): sign with and without a drawing, decline, keyboard-only and VoiceOver signing, download the PDF and JSON, receive the email, check the record on `verify`, fetch the owner copy in the app.
+
+Rollback: set `ESIGN_V2` off and deploy; sealed records stay downloadable and verifiable.
+
+#### 11.9 Left out or undone (Worker and pages)
+
+- Q8 (email-code verification), Q9 (in-person signing) and the owner countersignature: stage D, not built.
+- `portal.html` needed no change and was not touched.
+- No PAdES/Adobe-trusted PDF signature (§9); the sealed JSON and published key are the integrity mechanism.
+- The change-order page's "job total before/after" context is live, informational and not part of the sealed document; the signed amount is the change order's own total.

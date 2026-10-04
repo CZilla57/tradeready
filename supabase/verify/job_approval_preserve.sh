@@ -18,6 +18,9 @@
 # It starts its own cluster in a temp dir on port 54330 (one above
 # local/run.sh, so both can run at once; override with PGPORT_SCRATCH) and
 # removes it at exit. Never point it at a real database.
+#
+# Section 11 then applies 20261003_esign_records.sql (Phase 19) on top and
+# checks the four e-signature keys it adds to the preserved key lists.
 
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -341,6 +344,33 @@ wait $WPID
 [ "$EL" -ge 700 ] && ok "10. device push waited for the in-flight decision (${EL} ms)" || bad "10. device push did not wait (${EL} ms)"
 expect "10. the push that waited is merged onto the committed decision" j10 \
   "$(echo "$RESTORED1" | sed 's/"id": "j1"/"id": "j10"/')"
+
+echo "== 11. Phase 19: 20261003_esign_records.sql adds the e-signature keys"
+ESIGN_MIG="$MIG/20261003_esign_records.sql"
+SIGKEYS='"signatureRecordId": "3f0c1a2b-1111-4222-8333-444455556666", "recordDigest": "'"$(printf 'a%.0s' $(seq 1 64))"'",
+  "signatureMethod": "typed_drawn", "signatureEvidence": {"v": 1, "consentVersion": 1, "email": null,
+  "drawn": {"w": 600, "h": 200, "strokes": [[[1, 2, 0], [3, 4, 10]]]}, "events": []}'
+SIGNED11='{"token": "tok-11", "sentAt": "2026-10-01T10:00:00Z", "snapshot": {"total": 90, "esign": {"version": 1}},
+  "decision": "approved", "consentAt": "2026-10-02T09:00:00Z", "signerName": "Pat Doe", "ip": null, "userAgent": "UA", '"$SIGKEYS"'}'
+seed j11 '{"id": "j11", "approval": '"$SIGNED11"'}'
+device_push j11 '{"id": "j11", "note": "x", "approval": {"token": "tok-11", "sentAt": "2026-10-01T10:00:00Z", "snapshot": {"total": 90, "esign": {"version": 1}}}}'
+expect "11. before 20261003 the e-signature keys are NOT preserved (control)" j11 \
+  '{"id": "j11", "note": "x", "approval": {"token": "tok-11", "sentAt": "2026-10-01T10:00:00Z", "snapshot": {"total": 90, "esign": {"version": 1}},
+   "decision": "approved", "consentAt": "2026-10-02T09:00:00Z", "signerName": "Pat Doe", "ip": null, "userAgent": "UA"}}'
+if pq -q -f "$ESIGN_MIG" >/dev/null 2>"$TMP/err"; then ok "20261003_esign_records applies"; else bad "20261003 applies: $(head -3 "$TMP/err")"; fi
+if pq -q -f "$ESIGN_MIG" >/dev/null 2>"$TMP/err"; then ok "20261003_esign_records re-applies (idempotent)"; else bad "20261003 re-applies: $(head -3 "$TMP/err")"; fi
+pq -q -c "delete from public.jobs where id = 'j11'" >/dev/null
+seed j11 '{"id": "j11", "approval": '"$SIGNED11"'}'
+device_push j11 '{"id": "j11", "note": "x", "approval": {"token": "tok-11", "sentAt": "2026-10-01T10:00:00Z", "snapshot": {"total": 90, "esign": {"version": 1}},
+  "signatureMethod": "typed", "recordDigest": "forged"}}'
+expect "11. stale push: all four e-signature keys restored exactly; forged values dropped" j11 \
+  '{"id": "j11", "note": "x", "approval": '"$SIGNED11"'}'
+seed j12 '{"id": "j12", "changeOrders": [{"id": "co1", "approval": '"$(echo "$SIGNED11" | sed 's/tok-11/tok-12/')"'}]}'
+device_push j12 '{"id": "j12", "changeOrders": [{"id": "co1", "title": "Extra outlet", "approval": {"token": "tok-12", "sentAt": "2026-10-01T10:00:00Z", "snapshot": {"total": 90, "esign": {"version": 1}}}}]}'
+expect "11. change order: e-signature keys restored by id + token" j12 \
+  '{"id": "j12", "changeOrders": [{"id": "co1", "title": "Extra outlet", "approval": '"$(echo "$SIGNED11" | sed 's/tok-11/tok-12/')"'}]}'
+device_push j1 "$STALE1"
+expect "11. pre-Phase-19 approvals (no e-signature keys) still restore exactly as before" j1 "$RESTORED1"
 
 echo
 echo "passed $PASS, failed $FAIL"
