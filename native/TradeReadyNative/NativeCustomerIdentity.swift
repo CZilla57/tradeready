@@ -111,6 +111,9 @@ struct NativeCustomerMergeUndo: Identifiable {
         let invoices: [Canonical.Invoice]
         let recurringJobs: [Canonical.RecurringJob]
         let recurringInvoices: [Canonical.RecurringInvoice]
+        /// Phase 34: other customers whose `referredByCustomerId` the merge
+        /// re-pointed from the loser to the winner.
+        let referredCustomers: [Canonical.Customer]
     }
 
     let id = UUID()
@@ -131,6 +134,9 @@ struct NativeCustomerMergeResult {
 /// utilities. Mutation is deliberately deferred to an AppStore transaction so
 /// canonical baselines, unknown fields, and sync-queue writes stay coordinated.
 enum NativeCustomerIdentity {
+    /// The Phase 27 preset key every referral carries (`NativeLeadSource`).
+    static let referralSourceKey = "referral"
+
     static func normalizedName(_ value: String?) -> String {
         (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
@@ -155,6 +161,17 @@ enum NativeCustomerIdentity {
         // Phase 27: "google ads" typed into Other… is stored as `google`;
         // blank is nil (Unknown).
         prepared.leadSource = NativeLeadSource.normalize(candidate.leadSource)
+        // Phase 34 (R1): a referrer survives only while the source is
+        // Referral and it is not the customer itself.
+        let referrer = candidate.referredByCustomerId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        prepared.referredByCustomerId = prepared.leadSource == Self.referralSourceKey
+            && !referrer.isEmpty && referrer != prepared.id ? referrer : nil
+        // Phase 33: tags in their stored form; a blank opt-out date is no
+        // opt-out (and carries no reason).
+        prepared.tags = NativeCustomerTags.normalizeList(candidate.tags)
+        let optOutOn = (candidate.marketingOptOutOn ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        prepared.marketingOptOutOn = optOutOn.isEmpty ? nil : optOutOn
+        prepared.marketingOptOutVia = optOutOn.isEmpty ? nil : candidate.marketingOptOutVia
 
         guard !prepared.name.isEmpty else {
             return .init(customer: prepared, issue: .nameRequired)
@@ -314,10 +331,16 @@ enum NativeCustomerIdentity {
     /// loss-preserving canonical records. Only blank winner contact fields are
     /// backfilled, loser references are re-pointed across all four dependent
     /// collections, and every record's preservation metadata stays attached.
+    ///
+    /// Phase 21: the loser's properties are unioned into the winner's
+    /// (`NativePropertiesEquipment.mergePlan`); re-pointed jobs and recurring
+    /// rules carry their `propertyId` through the plan. `makePropertyID`
+    /// mints ids for properties the merge creates.
     static func merge(
         snapshot source: Canonical.Snapshot,
         winnerID: String,
-        loserID: String
+        loserID: String,
+        makePropertyID: () -> String = { NativePropertiesEquipment.makePropertyID() }
     ) throws -> NativeCustomerMergeResult {
         guard winnerID != loserID else { throw NativeCustomerMergeError.sameCustomer }
         let customers = source.payload.customers ?? []
@@ -344,6 +367,16 @@ enum NativeCustomerIdentity {
         if isBlank(winnerAfter.leadSource ?? ""), !isBlank(loserBefore.leadSource ?? "") {
             winnerAfter.leadSource = loserBefore.leadSource
         }
+        mergeReferralFields(into: &winnerAfter, from: loserBefore, winnerID: winnerID, loserID: loserID)
+        // Phase 33 (campaigns spec §4.4): tags union (the winner's first) and
+        // a sticky opt-out (either record's, the earlier date and its reason).
+        winnerAfter.tags = NativeCustomerTags.merged(winner: winnerBefore.tags, loser: loserBefore.tags)
+        let optOut = NativeMarketingOptOut.merged(
+            winner: (winnerBefore.marketingOptOutOn, winnerBefore.marketingOptOutVia),
+            loser: (loserBefore.marketingOptOutOn, loserBefore.marketingOptOutVia)
+        )
+        winnerAfter.marketingOptOutOn = optOut.on
+        winnerAfter.marketingOptOutVia = optOut.via
         let winnerNotes = winnerBefore.notes.trimmingCharacters(in: .whitespacesAndNewlines)
         let loserNotes = loserBefore.notes.trimmingCharacters(in: .whitespacesAndNewlines)
         if !loserNotes.isEmpty, loserNotes != winnerNotes {
@@ -353,10 +386,23 @@ enum NativeCustomerIdentity {
            winnerAfter.createdAt == nil || loserCreatedAt < winnerAfter.createdAt! {
             winnerAfter.createdAt = loserCreatedAt
         }
+        // Phase 21: the winner keeps its properties and takes the loser's.
+        let propertyPlan = NativePropertiesEquipment.mergePlan(
+            winner: winnerAfter, loser: loserBefore, makeID: makePropertyID
+        )
+        winnerAfter.properties = propertyPlan.properties
 
         var result = source
         var mergedCustomers = customers
         mergedCustomers[winnerIndex] = winnerAfter
+        // Phase 34 step 4: everyone the loser referred now credits the winner.
+        var referredBefore: [Canonical.Customer] = []
+        for index in mergedCustomers.indices
+        where index != winnerIndex && index != loserIndex && mergedCustomers[index].referredByCustomerId == loserID {
+            referredBefore.append(mergedCustomers[index])
+            mergedCustomers[index].referredByCustomerId = winnerID
+        }
+        let referredAfter = records(withIDs: referredBefore.map(\.id), in: mergedCustomers, id: \.id)
         mergedCustomers.remove(at: loserIndex)
         result.payload.customers = mergedCustomers
 
@@ -373,6 +419,7 @@ enum NativeCustomerIdentity {
             var updated = record
             updated.customerId = winnerID
             updated.customerName = winnerBefore.name
+            updated.propertyId = propertyPlan.propertyID(afterMerge: record.propertyId, address: record.address)
             return updated
         }
 
@@ -405,6 +452,7 @@ enum NativeCustomerIdentity {
             var updated = record
             updated.customerId = winnerID
             updated.customerName = winnerBefore.name
+            updated.propertyId = propertyPlan.propertyID(afterMerge: record.propertyId, address: record.address)
             return updated
         }
 
@@ -453,7 +501,8 @@ enum NativeCustomerIdentity {
                 jobs: jobsBefore,
                 invoices: invoicesBefore,
                 recurringJobs: recurringJobsBefore,
-                recurringInvoices: recurringInvoicesBefore
+                recurringInvoices: recurringInvoicesBefore,
+                referredCustomers: referredBefore
             ),
             after: .init(
                 winner: winnerAfter,
@@ -462,7 +511,8 @@ enum NativeCustomerIdentity {
                 jobs: jobsAfter,
                 invoices: invoicesAfter,
                 recurringJobs: recurringJobsAfter,
-                recurringInvoices: recurringInvoicesAfter
+                recurringInvoices: recurringInvoicesAfter,
+                referredCustomers: referredAfter
             )
         )
 
@@ -470,6 +520,7 @@ enum NativeCustomerIdentity {
             try mutation(table: "customers", op: .upsert, record: winnerAfter, id: winnerID),
             Canonical.MutationDraft(table: "customers", op: .delete, recordId: loserID, payload: nil)
         ]
+        mutations += try referredAfter.map { try mutation(table: "customers", op: .upsert, record: $0, id: $0.id) }
         mutations += try jobsAfter.map { try mutation(table: "jobs", op: .upsert, record: $0, id: $0.id) }
         mutations += try invoicesAfter.map { try mutation(table: "invoices", op: .upsert, record: $0, id: $0.id) }
         mutations += try recurringJobsAfter.map {
@@ -497,6 +548,12 @@ enum NativeCustomerIdentity {
         customers[winnerIndex] = token.before.winner
         customers.insert(token.before.loser, at: min(token.before.loserIndex, customers.count))
         result.payload.customers = customers
+        try restore(
+            token.before.referredCustomers,
+            expected: token.after.referredCustomers,
+            in: &result.payload.customers,
+            id: \.id
+        )
 
         try restore(
             token.before.jobs,
@@ -533,6 +590,9 @@ enum NativeCustomerIdentity {
                 record: token.before.loser, id: token.before.loser.id
             )
         ]
+        mutations += try token.before.referredCustomers.map {
+            try mutation(table: "customers", op: .upsert, record: $0, id: $0.id)
+        }
         mutations += try token.before.jobs.map {
             try mutation(table: "jobs", op: .upsert, record: $0, id: $0.id)
         }
@@ -588,6 +648,51 @@ enum NativeCustomerIdentity {
 
     private static func isBlank(_ value: String) -> Bool {
         value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Phase 34 merge steps 1-3 (spec 2026-10-03-referral-program-design.md
+    /// §5.4), inline so the identity runners need no referral source.
+    /// 1. Codes: the winner keeps its code and takes the loser's when it has
+    ///    none; every other loser code joins the winner's aliases (deduped,
+    ///    sorted), so links the loser shared still resolve to the winner.
+    /// 2. Referrer: filled from the loser only when blank and the post-merge
+    ///    source is Referral, then dropped when it is the winner or the loser
+    ///    (a duplicate that "referred" itself) or the source is not Referral.
+    /// 3. Reward: the winner keeps its own and takes the loser's when it has
+    ///    none and still has a referrer.
+    private static func mergeReferralFields(
+        into winner: inout Canonical.Customer,
+        from loser: Canonical.Customer,
+        winnerID: String,
+        loserID: String
+    ) {
+        var leftovers = (loser.referralCodeAliases ?? []).filter { !isBlank($0) }
+        if let loserCode = loser.referralCode, !isBlank(loserCode) {
+            if isBlank(winner.referralCode ?? "") {
+                winner.referralCode = loserCode
+            } else {
+                leftovers.append(loserCode)
+            }
+        }
+        if !leftovers.isEmpty {
+            let aliases = Set((winner.referralCodeAliases ?? []) + leftovers)
+                .subtracting([winner.referralCode ?? ""])
+                .filter { !isBlank($0) }
+            winner.referralCodeAliases = aliases.isEmpty ? nil : aliases.sorted()
+        }
+
+        let isReferral = NativeLeadSource.normalize(winner.leadSource) == referralSourceKey
+        if isBlank(winner.referredByCustomerId ?? ""), isReferral,
+           let loserReferrer = loser.referredByCustomerId, !isBlank(loserReferrer) {
+            winner.referredByCustomerId = loserReferrer
+        }
+        if let referrer = winner.referredByCustomerId,
+           !isReferral || isBlank(referrer) || referrer == winnerID || referrer == loserID {
+            winner.referredByCustomerId = nil
+        }
+        if winner.referralReward == nil, winner.referredByCustomerId != nil, let reward = loser.referralReward {
+            winner.referralReward = reward
+        }
     }
 
     private static func belongsToLoser(

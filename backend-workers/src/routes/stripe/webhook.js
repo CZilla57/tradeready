@@ -1,6 +1,36 @@
 // POST /api/stripe/webhook — Workers port of backend/api/stripe/webhook.js.
 // Stripe Connect webhook — appends a ledger entry to the invoice in Supabase
-// when a customer completes payment through a Stripe payment link.
+// when a customer completes payment through a Stripe payment link or the
+// TradeReady pay page.
+//
+// Phase 24 (spec §4.5) — still ONE endpoint and ONE event type
+// (checkout.session.completed); no new Dashboard subscription:
+//   - Paid payment sessions book through the shared recordStripePayment
+//     (lib/stripe/recordPayment.js) with the unchanged id stripe_<session id>
+//     (TH-9). On 'appended', a pay-page session (metadata.tr_kind 'invoice')
+//     gets a payment receipt to the Checkout email.
+//   - metadata.tr_enrollment → activate the autopay enrollment
+//     (lib/autopay/activate.js). Setup-mode sessions (tr_kind
+//     'autopay_setup') only activate.
+//   - Legacy Payment Link sessions (session.payment_link) → the link is
+//     deactivated after its payment, best-effort, so a link already in an
+//     inbox can't be paid twice.
+//   Activation, receipt and deactivation failures are logged and answered
+//   200: the ledger write already succeeded, and Stripe retries are reserved
+//   for ledger errors (which still answer 500).
+//   A pay-page PaymentIntent must NEVER be booked from a PaymentIntent event:
+//   its ledger id is the session's (forward note for Phase 18).
+//
+// Phase 28 (tips spec §4.3): a pay-page session may carry a second "Tip"
+// line. The SAME ledger entry records `amount` = the invoice portion and
+// `tipAmount` = the tip, split from the server-set metadata tr_invoice_cents
+// + tr_tip_cents only when they add up exactly to amount_total
+// (lib/pay/tips.js splitSessionAmount). Otherwise — legacy Payment Link
+// sessions, or a mismatch that should never happen — the whole amount_total
+// is booked as the invoice payment exactly as before (a mismatch is logged as
+// tip_split_mismatch), so money is never dropped. paid/paidAt still come from
+// `amount` only (paymentMath.js unchanged), so a tip never pays or overpays
+// an invoice.
 //
 // The invoice's `payments` array is the source of truth for what's been paid;
 // `paid`/`paidAt` are written alongside it as a best-effort CACHE (not the
@@ -38,199 +68,178 @@
 //   edge-runtime verification path Stripe's SDK ships specifically for this.
 // - createFetchHttpClient: the SDK's fetch-based transport, required off Node.
 
-import Stripe from 'stripe';
-import { amountPaid, isFullyPaid, materializeLegacyLedger } from '../../../lib/paymentMath.js';
-import { verifyConnectedAccountOwnership } from '../../../lib/stripe/webhookOwnership.js';
+import { makeStripe, webhookCryptoProvider } from '../../../lib/stripe/client.js';
+import { recordStripePayment } from '../../../lib/stripe/recordPayment.js';
+import { activateEnrollment } from '../../../lib/autopay/activate.js';
+import { buildReceiptEmail } from '../../../lib/autopay/emails.js';
+import { cardLabel } from '../../../lib/autopay/format.js';
+import { fetchSettings } from '../../../lib/autopay/store.js';
+import { sendCustomerEmail } from '../../../lib/ownerAlert.js';
+import { balanceDue } from '../../../lib/paymentMath.js';
+import { splitSessionAmount } from '../../../lib/pay/tips.js';
 
-export async function stripeWebhookHandler(c) {
-  if (c.req.method !== 'POST') return c.json({ error: 'Method not allowed' }, 405);
-
-  const rawBody = await c.req.text();
-  const sig = c.req.header('stripe-signature');
-
-  let event;
+// The PaymentIntent behind a paid session, with its card and saved payment
+// method expanded. Null on any error (callers degrade, never fail).
+async function retrieveSessionIntent(stripe, session, accountId) {
+  const id = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent && session.payment_intent.id;
+  if (!id) return null;
   try {
-    const stripe = new Stripe(c.env.STRIPE_SECRET_KEY, {
-      apiVersion: '2023-10-16',
-      httpClient: Stripe.createFetchHttpClient(),
-    });
-    event = await stripe.webhooks.constructEventAsync(
-      rawBody,
-      sig,
-      c.env.STRIPE_CONNECT_WEBHOOK_SECRET,
-      undefined,
-      Stripe.createSubtleCryptoProvider()
-    );
+    return await stripe.paymentIntents.retrieve(id, { expand: ['payment_method', 'latest_charge'] }, { stripeAccount: accountId });
   } catch (err) {
-    console.error('[stripe/webhook] signature verification failed:', err.message);
-    return c.json({ error: 'Webhook signature verification failed.' }, 400);
+    console.error(`[stripe/webhook] retrieve ${id} failed:`, err.message);
+    return null;
   }
+}
 
-  // Only care about completed checkout sessions
-  if (event.type !== 'checkout.session.completed') {
-    return c.json({ received: true, skipped: true }, 200);
-  }
-
-  const session = event.data.object;
-
-  // Guard: only mark paid when money actually moved
-  if (session.payment_status !== 'paid') {
-    return c.json({ received: true, skipped: true }, 200);
-  }
-
-  const invoiceId = session.metadata?.invoiceId;
-  if (!invoiceId) {
-    // Payment link was created before webhook support — nothing to do
-    return c.json({ received: true, skipped: true }, 200);
-  }
-
+async function retrieveSetupIntent(stripe, session, accountId) {
+  const id = typeof session.setup_intent === 'string' ? session.setup_intent : session.setup_intent && session.setup_intent.id;
+  if (!id) return null;
   try {
-    const outcome = await recordStripePayment(c.env, invoiceId, session, event.account);
-    if (outcome && outcome.skipped) {
+    return await stripe.setupIntents.retrieve(id, { expand: ['payment_method'] }, { stripeAccount: accountId });
+  } catch (err) {
+    console.error(`[stripe/webhook] retrieve ${id} failed:`, err.message);
+    return null;
+  }
+}
+
+async function activate(env, stripe, { enrollmentId, event, session, intent, invoiceEmail }) {
+  try {
+    const { outcome } = await activateEnrollment(env, { stripe, enrollmentId, eventAccount: event.account, session, intent, invoiceEmail });
+    console.log(`[stripe/webhook] autopay enrollment ${enrollmentId}: ${outcome}`);
+  } catch (err) {
+    console.error(`[stripe/webhook] autopay activation ${enrollmentId} failed:`, err.message);
+  }
+}
+
+async function sendPaymentReceipt(env, { result, session, intent, split }) {
+  try {
+    const invoice = result.invoice || {};
+    const charge = intent && intent.latest_charge && typeof intent.latest_charge === 'object' ? intent.latest_charge : null;
+    const card = charge && charge.payment_method_details ? charge.payment_method_details.card : null;
+    const settings = await fetchSettings(env, result.userId);
+    const email = buildReceiptEmail({
+      settings,
+      to: session.customer_details && session.customer_details.email,
+      customerName: invoice.customer,
+      invoiceNumber: invoice.number,
+      amountCents: split.invoiceCents,
+      tipCents: split.tipCents,
+      card: card ? cardLabel(card.brand, card.last4) : null,
+      remainingCents: Math.round(balanceDue(invoice) * 100),
+      date: new Date().toISOString().split('T')[0],
+    });
+    await sendCustomerEmail(env, email, 'payment receipt');
+  } catch (err) {
+    console.error('[stripe/webhook] receipt failed:', err.message);
+  }
+}
+
+async function deactivatePaymentLink(stripe, session, accountId) {
+  const id = typeof session.payment_link === 'string' ? session.payment_link : session.payment_link && session.payment_link.id;
+  if (!id) return;
+  try {
+    await stripe.paymentLinks.update(id, { active: false, inactive_message: 'This invoice has been paid. Thank you!' }, { stripeAccount: accountId });
+  } catch (err) {
+    console.error(`[stripe/webhook] deactivate payment link ${id} failed:`, err.message);
+  }
+}
+
+export function createStripeWebhookHandler({ stripeFactory = makeStripe } = {}) {
+  return async function stripeWebhookHandler(c) {
+    if (c.req.method !== 'POST') return c.json({ error: 'Method not allowed' }, 405);
+
+    const rawBody = await c.req.text();
+    const sig = c.req.header('stripe-signature');
+
+    let event;
+    let stripe;
+    try {
+      stripe = stripeFactory(c.env);
+      event = await stripe.webhooks.constructEventAsync(
+        rawBody,
+        sig,
+        c.env.STRIPE_CONNECT_WEBHOOK_SECRET,
+        undefined,
+        webhookCryptoProvider()
+      );
+    } catch (err) {
+      console.error('[stripe/webhook] signature verification failed:', err.message);
+      return c.json({ error: 'Webhook signature verification failed.' }, 400);
+    }
+
+    // Only care about completed checkout sessions
+    if (event.type !== 'checkout.session.completed') {
       return c.json({ received: true, skipped: true }, 200);
     }
+
+    const session = event.data.object;
+    const metadata = session.metadata || {};
+
+    // Autopay setup (portal "Set up", manage-page card change): no payment,
+    // so it never reaches the ledger path below.
+    if (session.mode === 'setup') {
+      if (session.status !== 'complete' || metadata.tr_kind !== 'autopay_setup' || !metadata.tr_enrollment) {
+        return c.json({ received: true, skipped: true }, 200);
+      }
+      const intent = await retrieveSetupIntent(stripe, session, event.account);
+      await activate(c.env, stripe, { enrollmentId: metadata.tr_enrollment, event, session, intent });
+      return c.json({ received: true }, 200);
+    }
+
+    // Guard: only mark paid when money actually moved
+    if (session.payment_status !== 'paid') {
+      return c.json({ received: true, skipped: true }, 200);
+    }
+
+    const invoiceId = metadata.invoiceId;
+    if (!invoiceId) {
+      // Payment link was created before webhook support — nothing to do
+      return c.json({ received: true, skipped: true }, 200);
+    }
+
+    const split = splitSessionAmount(session);
+    if (split.mismatch) {
+      console.warn(
+        `[stripe/webhook] tip_split_mismatch ${session.id}: tr_invoice_cents=${String(metadata.tr_invoice_cents)} ` +
+        `tr_tip_cents=${String(metadata.tr_tip_cents)} amount_total=${String(session.amount_total)} — booking the whole amount`
+      );
+    }
+
+    let result;
+    try {
+      result = await recordStripePayment(c.env, {
+        invoiceId,
+        connectedAccountId: event.account,
+        ledgerId: `stripe_${session.id}`,
+        amount: split.invoiceCents / 100,
+        extra: { stripeSessionId: session.id, ...(split.tipCents > 0 ? { tipAmount: split.tipCents / 100 } : {}) },
+      });
+    } catch (err) {
+      console.error('[stripe/webhook] failed to mark invoice paid:', err.message);
+      // Return 500 so Stripe retries; transient DB errors should self-heal
+      return c.json({ error: 'Database error' }, 500);
+    }
+    if (result.outcome === 'ownership_skip') {
+      return c.json({ received: true, skipped: true }, 200);
+    }
+
+    // Post-ledger steps: best-effort, each isolated, never a non-200.
+    const wantsReceipt = result.outcome === 'appended' && metadata.tr_kind === 'invoice';
+    const intent = metadata.tr_enrollment || wantsReceipt ? await retrieveSessionIntent(stripe, session, event.account) : null;
+    if (metadata.tr_enrollment) {
+      await activate(c.env, stripe, {
+        enrollmentId: metadata.tr_enrollment,
+        event,
+        session,
+        intent,
+        invoiceEmail: result.invoice ? result.invoice.email : null,
+      });
+    }
+    if (wantsReceipt) await sendPaymentReceipt(c.env, { result, session, intent, split });
+    if (session.payment_link) await deactivatePaymentLink(stripe, session, event.account);
+
     return c.json({ received: true }, 200);
-  } catch (err) {
-    console.error('[stripe/webhook] failed to mark invoice paid:', err.message);
-    // Return 500 so Stripe retries; transient DB errors should self-heal
-    return c.json({ error: 'Database error' }, 500);
-  }
+  };
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-async function recordStripePayment(env, invoiceId, session, connectedAccountId) {
-  const supabaseHeaders = {
-    Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-    apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-  };
-
-  const fetchRes = await fetch(
-    `${env.SUPABASE_URL}/rest/v1/invoices?id=eq.${encodeURIComponent(invoiceId)}&select=user_id,data`,
-    { headers: supabaseHeaders }
-  );
-
-  if (!fetchRes.ok) {
-    throw new Error(`Supabase fetch ${fetchRes.status}: ${await fetchRes.text()}`);
-  }
-
-  const rows = await fetchRes.json();
-  if (!rows.length) {
-    // Invoice hasn't synced to Supabase yet (device was offline when the link
-    // was generated). Log and return — retries won't help until it syncs.
-    console.warn(`[stripe/webhook] invoice ${invoiceId} not found in Supabase — skipping`);
-    return;
-  }
-
-  const { user_id, data } = rows[0];
-
-  // Ownership check: metadata.invoiceId is client-supplied at link-creation
-  // time (create-payment-link stamps whatever the app sends), so it may name
-  // an invoice the paying connected account does NOT own. Require the event's
-  // connected account (`event.account` — Connect events carry it there) to be
-  // the account on record for this invoice's owner, or a payment into an
-  // attacker's own account could settle a victim's invoice. A mismatch or
-  // missing stripe_accounts row is deliberate, not transient — skip with a
-  // 200 rather than throw, or Stripe would retry forever. A Supabase error
-  // in the lookup still throws → 500 → retry.
-  const ownership = await verifyConnectedAccountOwnership({
-    supabaseUrl: env.SUPABASE_URL,
-    headers: supabaseHeaders,
-    userId: user_id,
-    eventAccount: connectedAccountId,
-  });
-  if (!ownership.ok) {
-    console.warn(
-      `[stripe/webhook] invoice ${invoiceId}: event account ${connectedAccountId} does not match ` +
-      `owner's connected account ${ownership.expectedAccountId} (${ownership.reason}) — skipping`
-    );
-    return { skipped: true };
-  }
-
-  const paymentId = `stripe_${session.id}`;
-
-  // Materialize the legacy implied payment (if any) BEFORE appending the
-  // Stripe entry. Skipping this would silently erase the invoice's
-  // originally-recorded amount the moment `payments` goes from absent to
-  // non-empty — see the CRITICAL rule on materializeLegacyLedger in
-  // utils/invoicePayments.ts. The stored blob (`data`) is not guaranteed to
-  // carry a reliable `id` field of its own, so `invoiceId` — the id this row
-  // was just fetched by — is used instead, ensuring the synthesized
-  // `legacy_<id>` matches what the device would independently produce for
-  // the same invoice.
-  const existing = materializeLegacyLedger({ ...data, id: invoiceId });
-
-  // Idempotency: a repeated Stripe delivery must not append twice. The
-  // Postgres trigger's union would collapse the duplicate id anyway, but
-  // checking here keeps the write itself clean.
-  if (existing.some((p) => p && p.id === paymentId)) return;
-
-  // NOTE: dated from UTC. The device records local dates, so a payment near
-  // midnight at a large offset can land on the adjacent day — and since each
-  // payment is individually revenue-bucketed, that can shift a month boundary.
-  // The server does not know the user's timezone. Accepted limitation.
-  const paymentAmount = (session.amount_total || 0) / 100;
-
-  // Guard: a zero (or missing) amount_total adds no money but WOULD still
-  // flip `payments` from absent to non-empty, which is exactly what kills the
-  // legacy fallback for a paid invoice. Refuse to write rather than risk that.
-  if (!(paymentAmount > 0)) {
-    console.warn(
-      `[stripe/webhook] invoice ${invoiceId}: session ${session.id} has non-positive ` +
-      `amount_total (${session.amount_total}) — skipping write`
-    );
-    return;
-  }
-
-  // method 'stripe' is RESERVED for webhook-created entries (types/models.ts
-  // PaymentMethod; the RecordPaymentSheet chips deliberately omit it), so the
-  // history UI can distinguish an auto-reconciled Stripe-link payment from a
-  // card payment the tradesperson keyed in by hand.
-  const payment = {
-    id: paymentId,
-    amount: paymentAmount,
-    date: new Date().toISOString().split('T')[0],
-    method: 'stripe',
-    stripeSessionId: session.id,
-  };
-
-  const payments = [...existing, payment];
-  const nextData = { ...data, payments };
-
-  // paid/paidAt are a best-effort CACHE, not the source of truth: the trigger
-  // may union in entries this function never saw. The device re-derives both
-  // on sync, and the reminder cron derives from the ledger rather than reading
-  // these fields.
-  const settled = isFullyPaid(nextData);
-  nextData.paid = settled;
-  if (settled) {
-    nextData.paidAt = payment.date;
-  } else {
-    delete nextData.paidAt;
-  }
-
-  console.log(
-    `[stripe/webhook] invoice ${invoiceId}: +$${payment.amount} (${paymentId}), ` +
-    `paid ${amountPaid(nextData)} of ${nextData.amount}`
-  );
-
-  const upsertRes = await fetch(`${env.SUPABASE_URL}/rest/v1/invoices`, {
-    method: 'POST',
-    headers: {
-      ...supabaseHeaders,
-      'Content-Type': 'application/json',
-      Prefer: 'resolution=merge-duplicates',
-    },
-    body: JSON.stringify({
-      id: invoiceId,
-      user_id,
-      data: nextData,
-      updated_at: new Date().toISOString(),
-      deleted: false,
-    }),
-  });
-
-  if (!upsertRes.ok) {
-    throw new Error(`Supabase upsert ${upsertRes.status}: ${await upsertRes.text()}`);
-  }
-}
+export const stripeWebhookHandler = createStripeWebhookHandler();

@@ -194,6 +194,12 @@ enum NativeAccessibilityAudit {
         static let partlyPaidBadgeText = Palette.infoTextLight
         static let outstandingBadgeFill = RGB(red: 1.00, green: 0.95, blue: 0.88)
         static let outstandingBadgeText = Palette.warningTextLight
+        /// Phase 20 form report: the FAIL result badge.
+        static let failBadgeFill = RGB(red: 1.00, green: 0.93, blue: 0.92)
+        static let failBadgeText = Palette.dangerTextLight
+        /// Phase 20 form report: N/A, NOT CHECKED and NO RESULT badges.
+        static let neutralBadgeFill = RGB(red: 0.94, green: 0.94, blue: 0.95)
+        static let neutralBadgeText = secondary
     }
 
     /// Every text and UI pairing the PDF renderers draw. The host suite
@@ -214,6 +220,10 @@ enum NativeAccessibilityAudit {
             .init(name: "PAID badge text on white", foreground: d.paidBadgeText, background: d.page, role: .text),
             .init(name: "PARTLY PAID badge text on white", foreground: d.partlyPaidBadgeText, background: d.page, role: .text),
             .init(name: "OUTSTANDING badge text on white", foreground: d.outstandingBadgeText, background: d.page, role: .text),
+            // Phase 20: the form report's result badges and photo placeholder.
+            .init(name: "FAIL badge text on its fill", foreground: d.failBadgeText, background: d.failBadgeFill, role: .text),
+            .init(name: "FAIL badge text on white", foreground: d.failBadgeText, background: d.page, role: .text),
+            .init(name: "neutral badge text on its fill", foreground: d.neutralBadgeText, background: d.neutralBadgeFill, role: .text),
         ]
     }()
 

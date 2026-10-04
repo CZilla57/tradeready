@@ -485,7 +485,9 @@ extension Canonical {
                     trips: payload?.trips?.count ?? 0,
                     pricebook: payload?.pricebook?.count ?? 0,
                     bookingRequests: payload?.bookingRequests?.count ?? 0,
-                    jobPhotos: payload?.jobPhotos?.count ?? 0
+                    jobPhotos: payload?.jobPhotos?.count ?? 0,
+                    forms: payload?.forms?.count ?? 0,
+                    campaigns: payload?.campaigns?.count ?? 0
                 ),
                 migrations: MigrationKind.allCases.map {
                     .init(migration: $0, status: latestStatuses[$0])
@@ -588,6 +590,11 @@ extension Canonical {
             let pricebook: Int
             let bookingRequests: Int
             let jobPhotos: Int
+            /// Phase 20. Additive inside `recordCounts`: a report written
+            /// before it has no `forms` key and decodes as 0.
+            let forms: Int
+            /// Phase 33. Additive like `forms`: absent decodes as 0.
+            let campaigns: Int
         }
 
         struct Migration: Codable, Equatable {
@@ -819,5 +826,27 @@ extension Canonical {
             decoder.dateDecodingStrategy = .iso8601
             return decoder
         }()
+    }
+}
+
+extension Canonical.PersistenceDiagnostics.Counts {
+    /// Phase 20: `forms` is new inside `recordCounts`. A report written before
+    /// it carries no such key and reads as 0, so the report schema stays v2.
+    /// (Declared in an extension so the memberwise initializer remains.)
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        invoices = try values.decode(Int.self, forKey: .invoices)
+        jobs = try values.decode(Int.self, forKey: .jobs)
+        customers = try values.decode(Int.self, forKey: .customers)
+        expenses = try values.decode(Int.self, forKey: .expenses)
+        customerNotes = try values.decode(Int.self, forKey: .customerNotes)
+        recurringJobs = try values.decode(Int.self, forKey: .recurringJobs)
+        recurringInvoices = try values.decode(Int.self, forKey: .recurringInvoices)
+        trips = try values.decode(Int.self, forKey: .trips)
+        pricebook = try values.decode(Int.self, forKey: .pricebook)
+        bookingRequests = try values.decode(Int.self, forKey: .bookingRequests)
+        jobPhotos = try values.decode(Int.self, forKey: .jobPhotos)
+        forms = try values.decodeIfPresent(Int.self, forKey: .forms) ?? 0
+        campaigns = try values.decodeIfPresent(Int.self, forKey: .campaigns) ?? 0
     }
 }

@@ -5,6 +5,11 @@ enum NativeConfirmationIntent: Equatable, Sendable {
     case deleteInvoice(recordID: String)
     case deleteCustomer(recordID: String)
     case mergeCustomer(loserID: String, winnerID: String)
+    /// Phase 21: a non-primary property, or one equipment entry.
+    case deleteProperty(customerID: String, propertyID: String)
+    case deleteEquipment(customerID: String, propertyID: String, equipmentID: String)
+    /// Phase 20: a job form instance (the shared 8 s undo restores it).
+    case deleteForm(recordID: String)
 }
 
 enum NativeConfirmationEmphasis: Equatable, Sendable {
@@ -25,6 +30,10 @@ struct NativeConfirmationRequest: Equatable, Identifiable, Sendable {
         case .deleteInvoice(let recordID): "delete-invoice:\(recordID)"
         case .deleteCustomer(let recordID): "delete-customer:\(recordID)"
         case .mergeCustomer(let loserID, let winnerID): "merge-customer:\(loserID):\(winnerID)"
+        case .deleteProperty(let customerID, let propertyID): "delete-property:\(customerID):\(propertyID)"
+        case .deleteEquipment(let customerID, let propertyID, let equipmentID):
+            "delete-equipment:\(customerID):\(propertyID):\(equipmentID)"
+        case .deleteForm(let recordID): "delete-form:\(recordID)"
         }
     }
 
@@ -65,6 +74,19 @@ struct NativeConfirmationRequest: Equatable, Identifiable, Sendable {
         )
     }
 
+    /// Phase 20: photos captured from the form stay in the job's Photos
+    /// section, so the message says so.
+    static func deleteForm(id: String, title: String) -> NativeConfirmationRequest {
+        .init(
+            intent: .deleteForm(recordID: id),
+            title: "Delete form?",
+            message: "\"\(displayName(title, fallback: "This form"))\" and its answers will be removed. "
+                + "Its photos stay in the job's Photos section. You can undo for a few seconds.",
+            actionTitle: "Delete form",
+            emphasis: .destructive
+        )
+    }
+
     static func mergeCustomer(
         loserID: String,
         loserName: String,
@@ -82,6 +104,37 @@ struct NativeConfirmationRequest: Equatable, Identifiable, Sendable {
                 + "You can undo briefly after merging."
                 + portalWarning,
             actionTitle: "Merge",
+            emphasis: .destructive
+        )
+    }
+
+    /// Phase 21. Linked jobs keep their own address.
+    static func deleteProperty(customerID: String, propertyID: String, name: String) -> NativeConfirmationRequest {
+        .init(
+            intent: .deleteProperty(customerID: customerID, propertyID: propertyID),
+            title: "Delete property?",
+            message: "\(displayName(name, fallback: "This property")) and its equipment will be removed. "
+                + "Jobs there keep their address. To keep the history, archive it instead. "
+                + "You can undo for a few seconds.",
+            actionTitle: "Delete property",
+            emphasis: .destructive
+        )
+    }
+
+    /// Phase 21: for an entry made by mistake; "Mark as removed" keeps history.
+    static func deleteEquipment(
+        customerID: String,
+        propertyID: String,
+        equipmentID: String,
+        name: String
+    ) -> NativeConfirmationRequest {
+        .init(
+            intent: .deleteEquipment(customerID: customerID, propertyID: propertyID, equipmentID: equipmentID),
+            title: "Delete equipment?",
+            message: "\(displayName(name, fallback: "This equipment")) will be removed. "
+                + "If it was replaced, mark it as removed instead to keep its history. "
+                + "You can undo for a few seconds.",
+            actionTitle: "Delete equipment",
             emphasis: .destructive
         )
     }

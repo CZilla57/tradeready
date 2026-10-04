@@ -89,6 +89,9 @@ expectEqual(NativeTodayBriefing.destination(for: .selectDate(date: "2026-07-04")
 expectEqual(NativeTodayBriefing.destination(for: .customer(customerId: "c1")), .customer(customerId: "c1"), "target customer")
 expectEqual(NativeTodayBriefing.destination(for: .customers), .customers, "target customers")
 expectEqual(NativeTodayBriefing.destination(for: .money), .money, "target money")
+// Phase 33: the maintenance_due:all row opens the campaign builder with its preset.
+expectEqual(NativeTodayBriefing.destination(for: .newCampaign(preset: "due_for_maintenance")),
+            .newCampaign(preset: "due_for_maintenance"), "target newCampaign")
 
 // MARK: - Header: greeting cutoffs (§1.4), pinned to dateHelpers.test.js
 
@@ -422,6 +425,37 @@ expect(NativeTodayBriefing.isSampleId("2"), "isSampleId bare digit")
 expect(NativeTodayBriefing.isSampleId("j1-sabc123"), "isSampleId namespaced")
 expect(!NativeTodayBriefing.isSampleId("j4"), "isSampleId j4 is out of range")
 expect(!NativeTodayBriefing.isSampleId("c1734567890123_4"), "isSampleId real id is never a false positive")
+
+// MARK: - Phase 26: the calendar checks attention row (calendar sync spec §4.5)
+
+do {
+    var phoenix = Calendar(identifier: .gregorian)
+    phoenix.timeZone = TimeZone(identifier: "America/Phoenix")!
+    let lastRun = ISO8601DateFormatter().date(from: "2026-10-02T19:30:00Z")!
+    expectEqual(NativeTodayBriefing.calendarChecksStaleMessage(slotsOn: true, checksEnabled: true, fresh: false,
+                                                               lastRunAt: lastRun, calendar: phoenix),
+                .some("Online booking is request-only: calendar checks haven't run since Oct 2"),
+                "calendar row: slots on, checks enabled, not fresh → request-only row with the last run date")
+    expectEqual(NativeTodayBriefing.calendarChecksStaleMessage(slotsOn: false, checksEnabled: true, fresh: false,
+                                                               lastRunAt: lastRun, calendar: phoenix), nil,
+                "calendar row: slots off → no row (booking takes requests anyway)")
+    expectEqual(NativeTodayBriefing.calendarChecksStaleMessage(slotsOn: true, checksEnabled: true, fresh: true,
+                                                               lastRunAt: lastRun, calendar: phoenix), nil,
+                "calendar row: fresh checks → no row")
+    expectEqual(NativeTodayBriefing.calendarChecksStaleMessage(slotsOn: true, checksEnabled: false, fresh: false,
+                                                               lastRunAt: nil, calendar: phoenix), nil,
+                "calendar row: checks not enabled on the server → no row")
+    expectEqual(NativeTodayBriefing.calendarChecksStaleMessage(slotsOn: true, checksEnabled: true, fresh: false,
+                                                               lastRunAt: nil, calendar: phoenix),
+                .some("Online booking is request-only: calendar checks haven't run yet"),
+                "calendar row: enabled with nothing shared yet")
+    var auckland = Calendar(identifier: .gregorian)
+    auckland.timeZone = TimeZone(identifier: "Pacific/Auckland")!
+    expectEqual(NativeTodayBriefing.calendarChecksStaleMessage(slotsOn: true, checksEnabled: true, fresh: false,
+                                                               lastRunAt: lastRun, calendar: auckland),
+                .some("Online booking is request-only: calendar checks haven't run since Oct 3"),
+                "calendar row: the date reads in the device calendar")
+}
 
 if failures > 0 {
     print("\(failures) failure(s)")

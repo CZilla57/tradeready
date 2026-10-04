@@ -347,6 +347,36 @@ do {
     expect(flat.total, 300, "approved quote: a flat-priced job gains no tracked labor")
 }
 
+// MARK: - appendingReferralCredit (Phase 34, spec 2026-10-03-referral-program-design.md §5.6)
+
+do {
+    let jobLines = [
+        JobInvoiceLineDraft(description: "Labor — 4 hrs @ $100/hr", amount: d("400"), category: "labor"),
+        JobInvoiceLineDraft(description: "Materials", amount: d("100"), category: "materials"),
+    ]
+    let created = JobInvoiceDomain.appendingReferralCredit(jobLines, existingInvoiceLines: [], credit: d("25"))
+    expect(created.count, 3, "create: the job lines plus one credit line")
+    expect(created.last, JobInvoiceLineDraft(description: "Referral credit \u{2014} thank you!", amount: d("-25"),
+                                             category: "referral_credit"), "create: the credit is a negative referral_credit line")
+    expect(JobInvoiceDomain.referralCreditTotal(created), d("-25"), "create: the credit total")
+    expect(created.reduce(Decimal.zero) { $0 + $1.amount }, d("475"), "create: the lines sum to the lowered amount")
+
+    let existing = jobLines + [
+        JobInvoiceLineDraft(description: "Referral credit \u{2014} thank you!", amount: d("-25"), category: "referral_credit"),
+        JobInvoiceLineDraft(description: "Old permit", amount: d("50"), category: "permit"),
+    ]
+    let finalized = JobInvoiceDomain.appendingReferralCredit(jobLines, existingInvoiceLines: existing, credit: 0)
+    expect(finalized.map(\.category), ["labor", "materials", "referral_credit"],
+           "finalize: a recompute keeps the earlier credit line and drops other stale lines")
+    let both = JobInvoiceDomain.appendingReferralCredit(jobLines, existingInvoiceLines: existing, credit: d("10.005"))
+    expect(both.map(\.amount), [d("400"), d("100"), d("-25"), d("-10.01")],
+           "finalize: an earlier credit plus a new one, rounded to cents")
+    let none = JobInvoiceDomain.appendingReferralCredit(jobLines, existingInvoiceLines: [], credit: 0)
+    expect(none, jobLines, "zero credit adds no line")
+    expect(JobInvoiceDomain.appendingReferralCredit(jobLines, existingInvoiceLines: [], credit: d("-5")), jobLines,
+           "a negative credit adds no line")
+}
+
 // MARK: - defaultDueDate
 
 do {

@@ -233,7 +233,7 @@ struct RepositoryTests {
         let supportReport = try diagnostics.encodedSupportReport(appVersion: "2.4.1")
         let repeatedSupportReport = try diagnostics.encodedSupportReport(appVersion: "2.4.1")
         expect(supportReport == repeatedSupportReport, "support report bytes are deterministic")
-        let expectedSupportReport = "{\"appVersion\":\"2.4.1\",\"backupAvailable\":true,\"migrationStatuses\":[{\"migration\":\"canonical-snapshot-v0-to-v1\",\"status\":null},{\"migration\":\"legacy-native-snapshot-to-v1\",\"status\":null},{\"migration\":\"react-native-async-storage-to-v1\",\"status\":\"completed\"}],\"recordCounts\":{\"bookingRequests\":0,\"customerNotes\":0,\"customers\":0,\"expenses\":0,\"invoices\":0,\"jobPhotos\":0,\"jobs\":0,\"pricebook\":0,\"recurringInvoices\":0,\"recurringJobs\":0,\"trips\":0},\"rejectedChangeCount\":0,\"reportSchemaVersion\":2,\"snapshotSchemaVersion\":1,\"snapshotStatus\":\"recovered\"}"
+        let expectedSupportReport = "{\"appVersion\":\"2.4.1\",\"backupAvailable\":true,\"migrationStatuses\":[{\"migration\":\"canonical-snapshot-v0-to-v1\",\"status\":null},{\"migration\":\"legacy-native-snapshot-to-v1\",\"status\":null},{\"migration\":\"react-native-async-storage-to-v1\",\"status\":\"completed\"}],\"recordCounts\":{\"bookingRequests\":0,\"campaigns\":0,\"customerNotes\":0,\"customers\":0,\"expenses\":0,\"forms\":0,\"invoices\":0,\"jobPhotos\":0,\"jobs\":0,\"pricebook\":0,\"recurringInvoices\":0,\"recurringJobs\":0,\"trips\":0},\"rejectedChangeCount\":0,\"reportSchemaVersion\":2,\"snapshotSchemaVersion\":1,\"snapshotStatus\":\"recovered\"}"
         expect(supportReport == Data(expectedSupportReport.utf8),
                "support report matches canonical sorted JSON bytes")
 
@@ -258,8 +258,20 @@ struct RepositoryTests {
         let reportCounts = supportObject?["recordCounts"] as? [String: Any]
         expect(Set(reportCounts?.keys.map { $0 } ?? []) == [
             "invoices", "jobs", "customers", "expenses", "customerNotes", "recurringJobs",
-            "recurringInvoices", "trips", "pricebook", "bookingRequests", "jobPhotos"
+            "recurringInvoices", "trips", "pricebook", "bookingRequests", "jobPhotos", "forms", "campaigns"
         ], "support report exposes record counts only")
+        // Phase 33: `campaigns` is additive like `forms`.
+        let preCampaignsReport = refusalReport.replacingOccurrences(of: "\"campaigns\":0,", with: "")
+        expect(preCampaignsReport != refusalReport, "the pre-Phase 33 report drops the campaigns count")
+        let decodedPreCampaigns = try JSONDecoder().decode(Canonical.PersistenceSupportReport.self, from: Data(preCampaignsReport.utf8))
+        expect(decodedPreCampaigns.recordCounts.campaigns == 0, "a report without a campaigns count decodes as 0 campaigns")
+        // Phase 20: `forms` is additive inside recordCounts (still report v2):
+        // a v2 report written before it decodes with 0 forms.
+        let preFormsReport = refusalReport.replacingOccurrences(of: "\"forms\":0,", with: "")
+        expect(preFormsReport != refusalReport, "the pre-Phase 20 report drops the forms count")
+        let decodedPreForms = try JSONDecoder().decode(Canonical.PersistenceSupportReport.self, from: Data(preFormsReport.utf8))
+        expect(decodedPreForms.recordCounts.forms == 0 && decodedPreForms.recordCounts.jobPhotos == 0,
+               "a report without a forms count decodes as 0 forms")
         let reportMigrations = supportObject?["migrationStatuses"] as? [[String: Any]] ?? []
         expect(reportMigrations.count == Canonical.MigrationKind.allCases.count,
                "support report includes every migration status")

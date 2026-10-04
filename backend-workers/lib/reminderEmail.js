@@ -1,6 +1,11 @@
 // backend/lib/reminderEmail.js
 // Pure. Builds the Resend payload for one overdue invoice. Template-only —
 // deterministic, no AI (unattended mail the user never previews). No I/O.
+//
+// Phase 24 (card-on-file spec §4.3): this Worker copy now DIVERGES from the
+// dormant Vercel twin in exactly one place — isAllowedPaymentLink also
+// accepts TradeReady's own pay page. The twin is deliberately not updated
+// (spec: "The dormant Vercel twin is not changed").
 
 const { daysPastDue, formatMoney } = require("./overdue");
 const { balanceDue, amountPaid, PAID_EPSILON } = require("./paymentMath");
@@ -22,8 +27,16 @@ const ALLOWED_LINK_HOSTS = new Set([
   "checkout.square.site",
 ]);
 
+// TradeReady's own pay page (Phase 24): our domain, but ONLY this fixed
+// path — Pages serves /pay.html as /pay too. Any other path on our domain
+// stays disallowed, keeping the anti-phishing intent: a synced URL can't
+// point customers at arbitrary pages, even ours.
+const PAY_PAGE_HOST = "gettradereadyapp.com";
+const PAY_PAGE_PATHS = new Set(["/pay.html", "/pay"]);
+
 // True only for an https URL whose host (case-insensitive, with or without a
-// leading www.) is on the allowlist. Anything unparseable fails closed.
+// leading www.) is on the allowlist, or that is exactly the pay page on our
+// domain. Anything unparseable fails closed.
 function isAllowedPaymentLink(url) {
   let parsed;
   try {
@@ -33,6 +46,9 @@ function isAllowedPaymentLink(url) {
   }
   if (parsed.protocol !== "https:") return false;
   const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+  if (host === PAY_PAGE_HOST) {
+    return PAY_PAGE_PATHS.has(parsed.pathname) && !parsed.hash && !parsed.username && !parsed.password && !parsed.port;
+  }
   return ALLOWED_LINK_HOSTS.has(host);
 }
 

@@ -81,6 +81,194 @@ run("rich record families") {
     try roundTrip(Canonical.CustomerNotes.self, field: "customerNotes", fixture: rich)
     // Phase 25: quote options, snapshot.options and approval.selection.
     try roundTrip(Canonical.Job.self, field: "quoteOptionsJob", fixture: rich)
+    // Phase 20: forms (an instance and a custom template) and a photo
+    // captured from a form item.
+    try roundTrip(Canonical.Form.self, field: "form", fixture: rich)
+    try roundTrip(Canonical.Form.self, field: "formTemplate", fixture: rich)
+    try roundTrip(Canonical.JobPhoto.self, field: "formPhoto", fixture: rich)
+    // Phase 33: a campaign with unknown keys at every level.
+    try roundTrip(Canonical.Campaign.self, field: "campaign", fixture: rich)
+}
+
+// Phase 33 (campaigns spec §2): campaigns, customer tags and the opt-out, a
+// job's campaignId and a booking request's campaignCode are typed fields, and
+// unknown data survives inside segment, message and every recipient.
+run("campaigns decode as typed fields and keep unknown data at every level") {
+    let campaign: Canonical.Campaign = try field("campaign", from: rich)
+    expect(campaign.status == "sending" && campaign.channelPlan == "text_first" && campaign.code == "04hmasw9nf6yy41j"
+           && campaign.frozenOn == "2026-10-03" && campaign.endedAt == nil && campaign.manualExclusions == ["c_removed"],
+           "campaign header decodes")
+    expect(campaign.preservation.unknownFields["futureCampaignField"] != nil, "campaign unknown field retained")
+    expect(campaign.segment.minMonthsSinceService == 6 && campaign.segment.maxMonthsSinceService == nil
+           && campaign.segment.jobKeywords == ["furnace"] && campaign.segment.leadSources == ["google", "unknown"]
+           && !campaign.segment.excludeMaintenancePlans
+           && campaign.segment.preservation.unknownFields["futureSegmentField"] == .string("retain-me"),
+           "segment decodes with its unknown field")
+    expect(campaign.message.goal == "tune_up" && campaign.message.aiDrafted == true
+           && campaign.message.lockedAt == "2026-10-03T15:10:00.000Z"
+           && campaign.message.preservation.unknownFields["futureMessageField"] != nil,
+           "message decodes with its unknown field")
+    expect(campaign.recipients?.map(\.status) == ["sent", "skipped", "pending"]
+           && campaign.recipients?[0].repliedOn == "2026-10-04"
+           && campaign.recipients?[0].preservation.unknownFields["futureRecipientField"] != nil
+           && campaign.recipients?[1].skipReason == "opted_out",
+           "recipients decode with their unknown fields")
+
+    var edited = campaign
+    edited.recipients?[2].status = "sent"
+    edited.recipients?[2].sentAt = "2026-10-03T16:00:00.000Z"
+    edited.segment.jobKeywords.append("boiler")
+    let encoded = try object(edited)
+    guard case let .object(segment)? = encoded["segment"], case let .object(message)? = encoded["message"],
+          case let .array(recipients)? = encoded["recipients"], recipients.count == 3,
+          case let .object(first) = recipients[0], case let .object(second) = recipients[1]
+    else { throw NSError(domain: "CanonicalTests", code: 33) }
+    expect(encoded["endedAt"] == .null && encoded["futureCampaignField"] != nil, "an edit keeps the explicit null and unknown field")
+    expect(segment["futureSegmentField"] == .string("retain-me") && segment["maxMonthsSinceService"] == .null,
+           "an edit keeps the segment's unknown field and explicit null")
+    expect(message["futureMessageField"] != nil, "an edit keeps the message's unknown field")
+    expect(first["futureRecipientField"] != nil && second["manual"] == .null, "an edit keeps recipient unknown fields and nulls")
+
+    // A minimal row written by an older or newer client decodes with defaults.
+    let minimal = try decoder.decode(Canonical.Campaign.self, from: Data(#"{"id":"cmp_x","name":"X","code":"c","createdAt":"t","status":"draft"}"#.utf8))
+    let minimalEncoded = try object(minimal)
+    expect(minimal.segment == Canonical.Campaign.Segment() && minimal.channelPlan == "text_first"
+           && minimalEncoded["segment"] == nil && minimalEncoded["message"] == nil && minimalEncoded["channelPlan"] == nil,
+           "absent segment, message and plan decode as defaults and stay absent")
+}
+
+run("customer tags, opt-out, job campaignId and booking campaignCode are typed") {
+    guard case var .object(customerFields)? = rich["customer"], case var .object(jobFields)? = rich["job"],
+          case var .object(requestFields)? = rich["bookingRequest"]
+    else { throw NSError(domain: "CanonicalTests", code: 34) }
+    let plain: Canonical.Customer = try field("customer", from: rich)
+    let plainFields = try object(plain)
+    expect(plain.tags == nil && plain.marketingOptOutOn == nil && !plain.isMarketingOptedOut
+           && plainFields["tags"] == nil && plainFields["marketingOptOutOn"] == nil && plainFields["marketingOptOutVia"] == nil,
+           "a customer without tags or an opt-out stays without the keys")
+    customerFields["tags"] = .array([.string("AC"), .string("VIP")])
+    customerFields["marketingOptOutOn"] = .string("2026-03-04")
+    customerFields["marketingOptOutVia"] = .string("text_stop")
+    let tagged = try decoder.decode(Canonical.Customer.self, from: encoder.encode(Canonical.JSONValue.object(customerFields)))
+    expect(tagged.tags == ["AC", "VIP"] && tagged.marketingOptOutOn == "2026-03-04" && tagged.marketingOptOutVia == "text_stop"
+           && tagged.isMarketingOptedOut && tagged.preservation.unknownFields["tags"] == nil
+           && tagged.preservation.unknownFields["marketingOptOutOn"] == nil,
+           "tags and the opt-out decode as typed fields (merge copies them)")
+    let taggedJSON = try json(tagged)
+    expect(taggedJSON == .object(customerFields), "a tagged, opted-out customer round-trips exactly")
+    var cleared = tagged
+    cleared.tags = nil
+    cleared.marketingOptOutOn = nil
+    cleared.marketingOptOutVia = nil
+    let clearedFields = try object(cleared)
+    expect(clearedFields["tags"] == nil && clearedFields["marketingOptOutOn"] == nil, "clearing removes the keys")
+
+    jobFields["campaignId"] = .string("cmp_1")
+    let campaignJob = try decoder.decode(Canonical.Job.self, from: encoder.encode(Canonical.JSONValue.object(jobFields)))
+    expect(campaignJob.campaignId == "cmp_1" && campaignJob.preservation.unknownFields["campaignId"] == nil,
+           "a job's campaignId is typed")
+    let campaignJobJSON = try json(campaignJob)
+    expect(campaignJobJSON == .object(jobFields), "a campaign job round-trips exactly")
+    let plainJob: Canonical.Job = try field("job", from: rich)
+    let plainJobFields = try object(plainJob)
+    expect(plainJob.campaignId == nil && plainJobFields["campaignId"] == nil, "a job without a campaign stays without the key")
+
+    requestFields["campaignCode"] = .string("04hmasw9nf6yy41j")
+    let coded = try decoder.decode(Canonical.BookingRequest.self, from: encoder.encode(Canonical.JSONValue.object(requestFields)))
+    expect(coded.campaignCode == "04hmasw9nf6yy41j" && coded.preservation.unknownFields["campaignCode"] == nil,
+           "a booking request's campaignCode is typed")
+    let codedJSON = try json(coded)
+    expect(codedJSON == .object(requestFields), "a coded booking request round-trips exactly")
+}
+
+run("forms decode as typed fields and keep unknown data at both levels") {
+    let form: Canonical.Form = try field("form", from: rich)
+    expect(form.kind == "instance" && form.jobId == "j_20260812_precision"
+           && form.templateId == "builtin:electrical-safety" && form.completedAt == nil,
+           "form header decodes")
+    expect(form.preservation.unknownFields["futureFormField"] != nil, "form unknown field retained")
+    expect(form.items.map(\.kind) == ["section", "check", "passFail", "text", "signature"],
+           "item kinds decode as raw strings, including one this version does not know")
+    expect(form.items[1].checked == true && form.items[1].photoIds == ["p1759420900000_abc"]
+           && form.items[1].required == true && form.items[1].photoRequired == true,
+           "check responses and flags decode")
+    expect(form.items[2].result == "fail" && form.items[2].note == "Two unlabelled breakers"
+           && form.items[2].preservation.unknownFields["futureItemField"] == .string("retain-me"),
+           "pass/fail result, note and an item unknown field decode")
+    expect(form.items[4].preservation.unknownFields["futureSignature"] != nil, "an unknown item kind keeps its data")
+
+    var edited = form
+    edited.items[2].result = "pass"
+    edited.title = "Panel inspection"
+    let encoded = try object(edited)
+    guard case let .array(items)? = encoded["items"], items.count == 5,
+          case let .object(failItem) = items[2], case let .object(textItem) = items[3]
+    else { throw NSError(domain: "CanonicalTests", code: 13) }
+    expect(encoded["completedAt"] == .null && encoded["futureFormField"] != nil,
+           "editing a form keeps its explicit null and unknown field")
+    expect(failItem["futureItemField"] == .string("retain-me") && failItem["result"] == .string("pass"),
+           "editing an item keeps its unknown field")
+    expect(textItem["photoRequired"] == .null && textItem["required"] == .bool(false),
+           "explicit item null and false survive an edit elsewhere")
+
+    let template: Canonical.Form = try field("formTemplate", from: rich)
+    expect(template.kind == "template" && template.jobId == nil && template.archivedAt == "2026-10-02T17:00:00.000Z",
+           "template decodes without job fields")
+    let photo: Canonical.JobPhoto = try field("formPhoto", from: rich)
+    expect(photo.formId == "fm1759420800000_k3x9" && photo.formItemId == "fi_2", "a form photo carries its back-references")
+    let plainPhoto: Canonical.JobPhoto = try field("jobPhoto", from: rich)
+    let plainEncoded = try object(plainPhoto)
+    expect(plainPhoto.formId == nil && plainEncoded["formId"] == nil && plainEncoded["formItemId"] == nil,
+           "a photo without a form stays without the keys")
+}
+
+// Phase 21 (spec 2026-10-02-properties-equipment-design.md §2): properties
+// nest in the customer blob; jobs and recurring rules carry `propertyId`.
+run("properties and equipment decode as typed fields and keep unknown data at every level") {
+    let customer: Canonical.Customer = try field("customer", from: rich)
+    guard let properties = customer.properties, properties.count == 2,
+          let equipment = properties[0].equipment, equipment.count == 2
+    else { throw NSError(domain: "CanonicalTests", code: 21, userInfo: [NSLocalizedDescriptionKey: "rich customer lost its properties"]) }
+    expect(customer.preservation.unknownFields["properties"] == nil, "properties are typed, not an unknown field")
+    expect(properties[0].primary == true && properties[0].address == nil && properties[0].label == "Home",
+           "the primary decodes without a stored address")
+    expect(properties[0].preservation.unknownFields["futurePropertyField"] == .string("kept"), "a property unknown field is retained")
+    expect(equipment[0].type == "furnace" && equipment[0].serial == "CAR-2219-0042"
+           && equipment[0].warrantyExpires == "2029-04-02" && equipment[0].installDate == "2019-04-02",
+           "equipment fields decode")
+    expect(equipment[0].preservation.unknownFields["futureEquipmentField"] != nil, "an equipment unknown field is retained")
+    expect(equipment[1].type == "Pool heater" && equipment[1].archivedAt == "2026-05-01" && equipment[1].make == nil,
+           "a custom type and removed equipment decode")
+    expect(properties[1].primary == nil && properties[1].address == "44 Elm St, Tucson AZ 85701"
+           && properties[1].archivedAt == "2026-09-01", "a non-primary property decodes")
+
+    var edited = customer
+    edited.properties?[0].equipment?[0].notes = "20x25x1 filter"
+    edited.name = "Ada King"
+    let encoded = try object(edited)
+    guard case let .array(list)? = encoded["properties"], case let .object(home) = list[0],
+          case let .array(items)? = home["equipment"], case let .object(pool) = items[1], case let .object(furnace) = items[0]
+    else { throw NSError(domain: "CanonicalTests", code: 22) }
+    expect(home["futurePropertyField"] == .string("kept") && furnace["futureEquipmentField"] != nil,
+           "editing keeps unknown fields at both nested levels")
+    expect(pool["make"] == .null, "an explicit nested null survives an edit elsewhere")
+    expect(furnace["notes"] == .string("20x25x1 filter"), "a nested edit is written")
+
+    let job: Canonical.Job = try field("job", from: rich)
+    let rule: Canonical.RecurringJob = try field("recurringJob", from: rich)
+    expect(job.propertyId == "pr1759500000000_home" && job.preservation.unknownFields["propertyId"] == nil,
+           "a job's propertyId is typed")
+    expect(rule.propertyId == "pr1759500000000_home" && rule.preservation.unknownFields["propertyId"] == nil,
+           "a recurring rule's propertyId is typed")
+
+    let legacyCustomer: Canonical.Customer = try field("customer", from: legacy)
+    let legacyJob: Canonical.Job = try field("job", from: legacy)
+    let legacyCustomerFields = try object(legacyCustomer)
+    let legacyJobFields = try object(legacyJob)
+    expect(legacyCustomer.properties == nil && legacyCustomerFields["properties"] == nil,
+           "a customer without properties stays without the key (one implicit primary)")
+    expect(legacyJob.propertyId == nil && legacyJobFields["propertyId"] == nil,
+           "a job without a property stays without the key")
 }
 
 run("quote options decode as typed fields") {
@@ -288,6 +476,57 @@ run("lead source is typed on customers and booking requests") {
     expect(taggedJSON == .object(requestFields), "a tagged booking request round-trips exactly")
 }
 
+// Phase 34 (spec 2026-10-03-referral-program-design.md §2, §7): the four
+// referral fields are typed on the customer, `referralReward` keeps unknown
+// keys of its own, and a booking request's `referralCode` is typed.
+run("referral fields are typed on customers and booking requests") {
+    let customer: Canonical.Customer = try field("customer", from: rich)
+    expect(customer.referralCode == "0123456789abcdef", "rich customer referral code decodes")
+    expect(customer.referralCodeAliases == ["ghjkmnpqrstvwxyz"], "rich customer code aliases decode")
+    expect(customer.referredByCustomerId == "c-7", "rich customer referrer decodes")
+    expect(customer.referralReward?.kind == "invoice_credit" && customer.referralReward?.amount == 25
+        && customer.referralReward?.note == "Thanks for Sam" && customer.referralReward?.recordedOn == "2026-09-28",
+           "rich customer reward decodes")
+    expect(customer.referralReward?.preservation.unknownFields["futureRewardField"] == .bool(true),
+           "an unknown key inside referralReward is preserved")
+    for key in ["referralCode", "referralCodeAliases", "referredByCustomerId", "referralReward"] {
+        expect(customer.preservation.unknownFields[key] == nil, "\(key) is typed, not an unknown field")
+    }
+    guard case let .object(fixtureCustomer)? = rich["customer"] else {
+        throw NSError(domain: "CanonicalTests", code: 34, userInfo: [NSLocalizedDescriptionKey: "Missing customer"])
+    }
+    let customerJSON = try json(customer)
+    expect(customerJSON == .object(fixtureCustomer), "the rich customer with referral fields round-trips exactly")
+
+    var cleared = customer
+    cleared.referralCode = nil
+    cleared.referralCodeAliases = nil
+    cleared.referredByCustomerId = nil
+    cleared.referralReward = nil
+    let clearedFields = try object(cleared)
+    for key in ["referralCode", "referralCodeAliases", "referredByCustomerId", "referralReward"] {
+        expect(clearedFields[key] == nil, "clearing \(key) removes the key")
+    }
+    let legacyCustomer: Canonical.Customer = try field("customer", from: legacy)
+    let legacyFields = try object(legacyCustomer)
+    expect(legacyCustomer.referralCode == nil && legacyFields["referralCode"] == nil
+        && legacyFields["referralReward"] == nil && legacyFields["referredByCustomerId"] == nil,
+           "a customer without referral data stays without the keys")
+
+    let request: Canonical.BookingRequest = try field("bookingRequest", from: rich)
+    expect(request.referralCode == "vtpvxvr024h36h2n" && request.preservation.unknownFields["referralCode"] == nil,
+           "a booking request's referral code is typed")
+    guard case let .object(fixtureRequest)? = rich["bookingRequest"] else {
+        throw NSError(domain: "CanonicalTests", code: 35, userInfo: [NSLocalizedDescriptionKey: "Missing booking request"])
+    }
+    let requestJSON = try json(request)
+    expect(requestJSON == .object(fixtureRequest), "the rich booking request with a referral code round-trips exactly")
+    var plain = request
+    plain.referralCode = nil
+    let plainFields = try object(plain)
+    expect(plainFields["referralCode"] == nil, "a request without a code stays without the key")
+}
+
 // Phase 32 (spec 2026-10-03-quote-expiration-design.md §2, §6.1): the job's
 // valid-until date, the settings default and the snapshot's date + zone are
 // typed optional fields. Absent stays absent; present round-trips exactly and
@@ -368,6 +607,48 @@ run("quote expiry fields are typed and preserved") {
     let zeroFields = try object(zero)
     expect(zero.estimateValidityDays == 0 && zeroFields["estimateValidityDays"] == .number(0),
            "0 (no expiry) is kept, not dropped")
+}
+
+// Phase 24 §3.2/§6.2: the plan's "Offer autopay" is typed, absent means off,
+// and unknown plan keys still ride along.
+run("recurring invoice autopayEnabled is typed and preserved") {
+    guard case var .object(planFields)? = rich["recurringInvoice"] else {
+        throw NSError(domain: "CanonicalTests", code: 18, userInfo: [NSLocalizedDescriptionKey: "Missing recurring invoice"])
+    }
+    let plain: Canonical.RecurringInvoice = try field("recurringInvoice", from: rich)
+    let plainFields = try object(plain)
+    expect(plain.autopayEnabled == nil && plainFields["autopayEnabled"] == nil,
+           "a plan without the key decodes nil and encodes without it (absent means off)")
+
+    planFields["autopayEnabled"] = .bool(true)
+    planFields["futurePlanField"] = .string("kept")
+    let source = Canonical.JSONValue.object(planFields)
+    let plan = try decoder.decode(Canonical.RecurringInvoice.self, from: encoder.encode(source))
+    expect(plan.autopayEnabled == true && plan.preservation.unknownFields["autopayEnabled"] == nil,
+           "autopayEnabled decodes as a typed field")
+    expect(plan.preservation.unknownFields["futurePlanField"] == .string("kept"), "an unknown plan key is preserved")
+    let roundTripped = try json(plan)
+    expect(roundTripped == source, "a plan offering autopay round-trips exactly")
+
+    var edited = plan
+    edited.description = "Renamed plan"
+    let editedFields = try object(edited)
+    expect(editedFields["autopayEnabled"] == .bool(true) && editedFields["futurePlanField"] == .string("kept"),
+           "an unrelated edit keeps autopayEnabled and unknown keys")
+
+    var off = plan
+    off.autopayEnabled = false
+    let offFields = try object(off)
+    expect(offFields["autopayEnabled"] == .bool(false), "turning autopay off writes false, not a missing key")
+    var cleared = plan
+    cleared.autopayEnabled = nil
+    let clearedFields = try object(cleared)
+    expect(clearedFields["autopayEnabled"] == nil, "clearing autopayEnabled removes the key")
+
+    let legacyPlan: Canonical.RecurringInvoice = try field("recurringInvoice", from: legacy)
+    let legacyPlanFields = try object(legacyPlan)
+    expect(legacyPlan.autopayEnabled == nil && legacyPlanFields["autopayEnabled"] == nil,
+           "a legacy plan stays without autopayEnabled")
 }
 
 run("versioned envelope") {

@@ -403,6 +403,109 @@ struct TwoDeviceConvergenceTests {
         expect(jobTitles(swift)["jSwiftOnly"] == nil,
                "Swift applies a React Native owner-scoped soft delete")
 
+        // === Scenario 7 (Phase 20): forms converge per row, last writer wins ===
+        // Forms live in their own `forms` collection, so a checkbox tap is one
+        // form upsert and never rewrites the job blob. Two devices editing the
+        // SAME form converge to the last pusher's row; edits to DIFFERENT forms
+        // of one job both survive; and neither touches the job.
+        let fa = try Device(subject: subject, label: "forms-A")
+        let fb = try Device(subject: subject, label: "forms-B")
+        defer { fa.cleanup(); fb.cleanup() }
+        func formBlob(id: String, title: String, checked: Bool?) -> Canonical.JSONValue {
+            guard case var .object(fields) = rich["form"]!,
+                  case var .array(items)? = fields["items"],
+                  case var .object(check) = items[1]
+            else { fatalError("form fixture") }
+            fields["id"] = .string(id)
+            fields["title"] = .string(title)
+            check["checked"] = checked.map { .bool($0) } ?? .null
+            items[1] = .object(check)
+            fields["items"] = .array(items)
+            return .object(fields)
+        }
+        func upsertForm(_ device: Device, id: String, title: String, checked: Bool?) throws {
+            let blob = formBlob(id: id, title: title, checked: checked)
+            var forms = device.snapshot.payload.forms ?? []
+            let record = try decoded(Canonical.Form.self, blob)
+            if let idx = forms.firstIndex(where: { $0.id == id }) { forms[idx] = record } else { forms.append(record) }
+            device.snapshot.payload.forms = forms
+            try device.queue.enqueue(table: "forms", op: .upsert, recordId: id, payload: blob)
+        }
+        func form(_ device: Device, _ id: String) -> Canonical.Form? {
+            device.snapshot.payload.forms?.first { $0.id == id }
+        }
+        try upsertJob(fa, id: "jForms", title: "Panel job")
+        try upsertForm(fa, id: "fm1_shared", title: "Inspection", checked: nil)
+        try await sync(fa)
+        try await sync(fb)
+        expect(form(fb, "fm1_shared")?.title == "Inspection", "B pulls A's new form")
+        let jobRowBefore = server.storedRow(table: "jobs", id: "jForms", userID: subject)?.updatedAt
+
+        try upsertForm(fa, id: "fm1_shared", title: "Inspection (A)", checked: true)
+        try upsertForm(fb, id: "fm1_shared", title: "Inspection (B)", checked: false)
+        try upsertForm(fb, id: "fm2_only_b", title: "Cleanup", checked: true)
+        try await sync(fa)                       // A pushes first
+        try await sync(fb)                       // B pushes second: last writer
+        try await sync(fa)
+        expect(form(fa, "fm1_shared")?.title == "Inspection (B)" && form(fa, "fm1_shared")?.items[1].checked == false,
+               "Phase 20: the same form edited on both devices converges to the last writer on A")
+        expect(form(fb, "fm1_shared")?.title == "Inspection (B)", "Phase 20: B keeps the last writer's form")
+        expect(form(fa, "fm2_only_b")?.title == "Cleanup", "Phase 20: a different form edited on B reaches A")
+        expect((fa.snapshot.payload.forms ?? []).filter { $0.id == "fm1_shared" }.count == 1,
+               "Phase 20: a concurrently edited form never duplicates")
+        expect(form(fa, "fm1_shared")?.preservation.unknownFields["futureFormField"] != nil,
+               "Phase 20: unknown form keys survive the round trip")
+        expect(server.storedRow(table: "jobs", id: "jForms", userID: subject)?.updatedAt == jobRowBefore,
+               "Phase 20: form edits never write the job row")
+        expect(server.liveRowCount(table: "forms", userID: subject) == 2, "Phase 20: two live form rows server-side")
+
+        // A form delete propagates as a tombstone.
+        fa.snapshot.payload.forms?.removeAll { $0.id == "fm2_only_b" }
+        try fa.queue.enqueue(table: "forms", op: .delete, recordId: "fm2_only_b", payload: nil)
+        try await sync(fa)
+        try await sync(fb)
+        expect(form(fb, "fm2_only_b") == nil, "Phase 20: a form delete propagates to the other device")
+
+        // Phase 33: one campaign sent from both devices converges by
+        // whole-blob last-writer-wins (spec §14's accepted residual).
+        func campaignBlob(sent: [String]) -> Canonical.JSONValue {
+            guard case var .object(fields)? = rich["campaign"] else { return .null }
+            fields["id"] = .string("cmp_shared")
+            fields["recipients"] = .array(["c_1", "c_2", "c_3"].map { id in
+                .object(["customerId": .string(id), "name": .string(id), "channel": .string("text"),
+                         "status": .string(sent.contains(id) ? "sent" : "pending")])
+            })
+            return .object(fields)
+        }
+        func upsertCampaign(_ device: Device, sent: [String]) throws {
+            let blob = campaignBlob(sent: sent)
+            let record = try decoded(Canonical.Campaign.self, blob)
+            var campaigns = device.snapshot.payload.campaigns ?? []
+            if let idx = campaigns.firstIndex(where: { $0.id == record.id }) { campaigns[idx] = record } else { campaigns.append(record) }
+            device.snapshot.payload.campaigns = campaigns
+            try device.queue.enqueue(table: "campaigns", op: .upsert, recordId: record.id, payload: blob)
+        }
+        func campaign(_ device: Device) -> Canonical.Campaign? {
+            device.snapshot.payload.campaigns?.first { $0.id == "cmp_shared" }
+        }
+        try upsertCampaign(fa, sent: [])
+        try await sync(fa)
+        try await sync(fb)
+        expect(campaign(fb)?.recipients?.count == 3, "Phase 33: B pulls A's frozen campaign")
+        try upsertCampaign(fa, sent: ["c_1"])
+        try upsertCampaign(fb, sent: ["c_2"])
+        try await sync(fa)
+        try await sync(fb)
+        try await sync(fa)
+        let statusesA = campaign(fa)?.recipients?.map(\.status)
+        expect(statusesA == ["pending", "sent", "pending"] && campaign(fb)?.recipients?.map(\.status) == statusesA,
+               "Phase 33: the same campaign converges to the last writer on both devices (LWW)")
+        expect((fa.snapshot.payload.campaigns ?? []).filter { $0.id == "cmp_shared" }.count == 1,
+               "Phase 33: a concurrently edited campaign never duplicates")
+        expect(campaign(fa)?.segment.preservation.unknownFields["futureSegmentField"] != nil,
+               "Phase 33: unknown campaign keys survive the round trip")
+        expect(server.liveRowCount(table: "campaigns", userID: subject) == 1, "Phase 33: one live campaign row server-side")
+
         if failures == 0 { print("PASS: native and mixed-client convergence tests") }
         else { exit(1) }
     }

@@ -658,3 +658,173 @@ Nothing here is deployed, applied or pushed by the build session.
 - run the union-trigger verify script (§9 step 1)
 - check the webhook endpoint target (§9 step 2)
 - the deploy / publish / ship order in §9
+
+## 13. Build record (2026-10-03)
+
+Worker, migration and pages slice. The native slice (§6) appends its own part below §13.6.
+
+### 13.1 Owner-route contract (§4.8), settled first for the native client
+
+Both routes live on the Worker origin (`BuildEnvironment.endpoint("/api/autopay/…")`), use the same auth as `create-payment-link` (`Authorization: Bearer <Supabase access token>`, user resolved via `/auth/v1/user`) and `appCors`. Every error body is `{ "error": "<human message>", "code": "<machine code>" }`.
+
+| Status | `code` | When |
+|---|---|---|
+| 400 | `invalid_request` | `manage` only: unknown `action`, or `enrollmentId` missing or not a UUID |
+| 401 | `unauthorized` | missing bearer, or Supabase rejects the token. The client refreshes its session and retries once, like the delivery service |
+| 404 | `not_found` | `manage` only: no enrollment with that id belongs to this user |
+| 405 | `method_not_allowed` | wrong method (`OPTIONS` answers 200 with CORS headers) |
+| 429 | `rate_limited` | more than 60 (`status`) / 20 (`manage`) requests per minute per IP |
+| 500 | `server_error` | missing Worker config or a Supabase error |
+
+**`GET /api/autopay/status`** → `200`
+
+```json
+{
+  "enrollments": [
+    {
+      "id": "6f1c2a4e-1d2b-4c3d-8e9f-0a1b2c3d4e5f",
+      "recurringInvoiceId": "ri_abc",
+      "customerId": "c_123",
+      "status": "active",
+      "card": { "brand": "visa", "last4": "4242", "expMonth": 8, "expYear": 2027, "wallet": null },
+      "maxAmount": 120,
+      "consentedAt": "2026-10-03T18:00:00.000Z",
+      "activatedAt": "2026-10-03T18:01:07.000Z",
+      "revokedAt": null,
+      "revokedBy": null,
+      "revokeReason": null
+    }
+  ],
+  "charges": [
+    { "invoiceId": "inv_789", "status": "failed", "amount": 120, "failureReason": "card_declined", "at": "2026-11-01T14:00:12.000Z" }
+  ]
+}
+```
+
+- **`enrollments`**: every enrollment of the caller that was ever activated (`activated_at` set), newest consent first, at most 200. Pending and abandoned rows are never sent. At most one `active` row exists per `recurringInvoiceId` (database unique index). For each plan, show the `active` row if there is one, else the newest row.
+  - `status`: `"active" | "revoked" | "replaced"`. `replaced` means the customer saved a newer card for the same plan; the newer row is the `active` one.
+  - `card`: `{brand, last4, expMonth, expYear, wallet}` or `null`. `brand` is Stripe's lowercase brand (`visa`, `mastercard`, `amex`, `discover`, `diners`, `jcb`, `unionpay`, `unknown`). `wallet` is `null`, `"apple_pay"`, `"google_pay"` or another Stripe wallet type. Brand, last 4 and expiry are refreshed at every charge (card account updater).
+  - `maxAmount`: dollars (number), the authorized ceiling per charge.
+  - Timestamps are ISO-8601 UTC with milliseconds (`Date.toISOString()`), or `null`. `consentedAt` is sent; the consent IP and user agent are not.
+  - `revokedBy`: `"customer" | "owner" | "system" | null`.
+  - `revokeReason` (set when `status` is not `active`): `"customer_turned_off"`, `"owner_removed"`, `"replaced"`, `"hard_decline"`, `"payment_method_missing"`, `"plan_removed"` (plan deleted, missing, or reassigned to another customer), `"stripe_disconnected"`, `"account_deleted"`. Treat any other string as a generic "removed".
+- **`charges`**: the caller's automatic charge attempts from the last 120 days, newest first, at most 500. One attempt per invoice, ever.
+  - `status`: `"claimed"` (in flight) `| "succeeded" | "failed" | "skipped"`.
+  - `amount`: dollars (number).
+  - `failureReason`: `null` unless `failed`/`skipped`; then one of `"authentication_required"` (the bank asked the customer to confirm), `"expired_card"`, `"insufficient_funds"`, `"card_declined"` (every other decline), `"payment_method_missing"` (card removed on Stripe), `"processing_error"`, `"amount_above_authorized"` (`skipped`: the balance was above `maxAmount`), `"unknown"` (Stripe outcome never confirmed; the owner was told to check Stripe). Treat any other string as a generic failure.
+  - `at`: when the attempt was claimed (≈ the charge time).
+  - For every `failed`/`skipped` row the owner got an email + push. The customer was emailed a pay link whenever they have a plausible email, except for `unknown` (owner only).
+  - A claim the sweep released because the customer paid on the pay page first leaves no row (no attempt happened).
+
+**`POST /api/autopay/manage`**, body `{ "action": "remove", "enrollmentId": "<uuid>" }` → `200`
+
+```json
+{ "enrollment": { "id": "…", "status": "revoked", "revokedBy": "owner", "revokeReason": "owner_removed", "…": "same shape as a status entry" }, "changed": true }
+```
+
+- Revokes the enrollment (`owner`, `owner_removed`), detaches the card on the owner's Stripe account (best-effort: a Stripe failure is logged, never an error), and emails the customer "Automatic payments for {plan} were turned off by {Business}".
+- **Idempotent.** An enrollment that is already `revoked` or `replaced` returns `200` with `"changed": false` and sends nothing.
+- The app then refreshes `status`.
+
+### 13.2 What was built (Worker, migration, pages)
+
+`W/` = `backend-workers/`. Nothing was deployed, applied, pushed or committed.
+
+**Migration** (decision 24-Q1)
+- `supabase/migrations/20261003_autopay.sql`: `autopay_enrollments` and `autopay_charges` exactly as §3.1, the one-active-per-plan partial unique index, owner-read RLS only, plus an `(user_id, created_at desc)` index on charges for the status route. Re-runnable (`if not exists`, policies dropped first).
+- `supabase/migrations/verify/20261003_autopay_verify.sql`: psql + `ON_ERROR_STOP=1`, one rolled-back transaction, 9 checks ending "ALL CHECKS PASSED" (RLS on; SELECT-only policies; second active per plan refused; inactive rows coexist; replace-then-activate; status/revoked_by/amount/session-id constraints; claim is first-writer-wins; charge status constrained; charges cascade).
+
+**Shared Stripe plumbing (§4.1), behavior-neutral, characterization first**
+- `W/lib/stripe/client.js`: `makeStripe(env)` (pin `2023-10-16` unchanged), the SubtleCrypto provider, `isUnknownOutcome`. All four constructors switched to it.
+- `W/lib/stripe/recordPayment.js`: `recordStripePayment(env, {invoiceId, connectedAccountId, ledgerId, amount, date?, extra})` extracted unchanged from the webhook; returns `{outcome: appended|duplicate|not_found|ownership_skip|zero_amount, invoice, userId}`. `extra` is whitelisted (`stripeSessionId`, `stripePaymentIntentId`, `channel`, `note`, `tipAmount`).
+- `W/tests/stripeWebhookCharacterization.test.cjs` (15) and the characterization block of `W/tests/createPaymentLink.test.cjs` (8) were written and run green against the untouched routes before any change, then kept green. They use the real Stripe SDK over a fake `fetch` (signatures via `generateTestHeaderString`; exact form bodies and `Stripe-Account`/`Stripe-Version` headers).
+
+**Pay links (§4.2, §4.3)**
+- `W/lib/pay/payToken.js`: `p`/`s`/`m` HMAC tokens, `constantTimeEqual`, kind inside the MAC, strict payload shapes, `tokenCharge`, `payPublicBase` (`PAY_PUBLIC_BASE`, else derived from `ESTIMATE_PUBLIC_BASE` like `CHANGE_PUBLIC_BASE`).
+- `W/src/routes/createPaymentLink.js`: same route and `{url}`; ownership 404 for another user's synced invoice; with `PAY_LINK_SIGNING_SECRET` an HMAC pay-page URL and no Stripe call; without it the legacy Payment Link plus `restrictions.completed_sessions.limit = 1`.
+- `W/lib/reminderEmail.js`: `isAllowedPaymentLink` also accepts `https://(www.)gettradereadyapp.com` with path exactly `/pay.html` or `/pay` (no userinfo, port or fragment). The portal and both emails inherit it. This Worker copy now differs from the dormant Vercel twin in that one function only.
+
+**Pay routes (§4.4)**: `W/src/routes/pay/{view,checkout,autopayOff}.js` (thin; `applyCors`, per-IP limits 60/10/10 per minute, `Cache-Control: no-store`), logic in `W/lib/pay/payService.js`, whitelisted shapes in `W/lib/pay/payView.js`, offer rules in `W/lib/autopay/offer.js`, consent text in `W/lib/autopay/consentText.js` (`autopay-consent-v1`, §2.3 verbatim).
+
+**Webhook (§4.5)**: `W/src/routes/stripe/webhook.js` now books through `recordStripePayment`; activates on `metadata.tr_enrollment` (payment mode) and on completed setup sessions (`W/lib/autopay/activate.js`); sends a receipt on `appended` for pay-page sessions; deactivates legacy Payment Links best-effort. Still one event type.
+
+**Sweep (§4.6)**: `W/lib/autopay/selectInvoicesToCharge.js` (pure selector + housekeeping selection), `W/lib/autopay/runAutopayCharges.js` (claim → pay-page exclusion → card refresh → idempotent off-session PI → ledger/receipt or fallback/alert; unknown-outcome replay; 6 h list fallback; housekeeping), `W/lib/cronQuarterHourly.js` (the `*/15` tick: autopay first, then invoice emails with the hand-off), manual route `GET /api/cron/run-autopay` (CRON_SECRET) in `W/src/routes/cron.js`.
+
+**Emails and alerts (§4.7)**: `W/lib/autopay/emails.js` (pure: payment receipt, autopay receipt, "Automatic payments are on" with the stored authorization, charge failed/skipped, "Automatic payments are off", owner alert texts), `W/lib/autopay/reasons.js` (hard/soft classification, failure-reason enum), `W/lib/ownerAlert.js` (auth email via the admin API from `TradeReady <payments@gettradereadyapp.com>` + Expo push; fire-and-forget; `notifyOwner.js` untouched).
+
+**Owner routes (§4.8)**: `W/src/routes/autopay/{ownerAuth,status,manage}.js`, logic in `W/lib/autopay/ownerRoutes.js`. Contract: §13.1.
+
+**Portal (§4.9)**: `W/lib/estimate/portalStore.js` (plans, active enrollments, Stripe connection), `W/lib/estimate/portalAssemble.js` (new top-level `autopay`), `W/src/routes/estimate/portalView.js` (fetches only when the secret is set; a failure leaves the section empty).
+
+**Invoice email and reminders (§4.10)**: `W/lib/invoiceEmail.js` (optional `autopay` → "will be charged automatically … Nothing to do." + manage link; pay line becomes "Prefer to pay now with another card?"), `W/lib/sendInvoiceEmails.js` (`autopayHandled` → `superseded` log row; `autopayByInvoice` → the line), `W/lib/sendReminders.js` (skips invoices in an open autopay window with no claim; the byte-identical selector is untouched).
+
+**Disconnect and deletion (§4.11)**: `W/src/routes/stripe/disconnect.js` revokes every active/pending enrollment (`system`, `stripe_disconnected`) and detaches each card once, before deleting the row. `W/src/routes/deleteAccount.js` reads live enrollments before the core and detaches their cards only after the core returns 200. `W/lib/accountDeletion.js` is untouched and still byte-identical with its twin.
+
+**Shared**: `W/lib/autopay/store.js` (all PostgREST access, user-scoped), `W/lib/autopay/revoke.js` (conditional revoke + detach-if-unused), `W/lib/autopay/format.js`. `W/wrangler.toml` documents the new secret and the derived `PAY_PUBLIC_BASE` (comments only).
+
+**Routes added** to `W/src/index.js`: `/api/pay/view`, `/api/pay/checkout`, `/api/pay/autopay-off`, `/api/pay/:action` (404), `/api/autopay/status`, `/api/autopay/manage`, `/api/autopay/:action` (404), `/api/cron/run-autopay`.
+
+**Pay page API (for `pay.html`)**: every error is `{error, code, businessName?}` (`businessName` only after the token verified). Codes: `bad_request` 400, `invalid` 404, `not_ready` 409, `paid` 409, `in_flight` 409, `changed` 409, `maybe_paid` 409, `busy` 409, `gone` 410, `unavailable` 410, `expired` 410, `rate_limited` 429, `server_error` 500.
+- `view` `t`: `{kind:'invoice', businessName, invoiceNumber, description, amountDue, depositRequested, due, paid, paidAt, autopay, receipt}`; `autopay` is `null | {offer: null | {planDescription, amount, cadence, consentText, consentVersion, isUpdate}, active: null | {card}}`; `receipt` is `null | {status, amountPaid, total, cardBrand, last4, autopay}`.
+- `view` `s`: `{kind:'setup', businessName, planDescription, amount, cadence, consentText, consentVersion}`.
+- `view` `m`: `{kind:'manage', businessName, planDescription, status: 'on'|'pending'|'off', card, canTurnOff, setupUrl}`.
+- `checkout`: `{t, autopay?: {consentVersion, amount}}` or `{s, consentVersion, amount}` → `{url}`. `autopay-off`: `{m}` → `{status:'off', changed}`.
+
+**Pages** (`tradeready-legal`, §13.4): new `pay.html`; "Automatic Payments" section in `portal.html`.
+
+### 13.3 Decisions where the spec was silent (or conflicted)
+
+1. **Activation day.** The §4.6 table says `due >= activated_at`, but the approved authorization (§2.3) covers invoices that "come due after today". The sweep uses `due > activation date (UTC)`, the safe reading of the approved text. An invoice due on the consent day is paid through the normal link.
+2. **Pay page ↔ sweep mutual exclusion (closes a double charge the spec missed).** A customer could be on Checkout when the autopay window opens. After claiming, the sweep expires any open Checkout Session for the invoice before charging. If one already completed, it charges nothing and deletes its claim (no attempt happened, counted as `yielded`). Mirror image: after creating its session, checkout re-reads the invoice's claims; a new `claimed`/`succeeded` claim withdraws the session (409 `in_flight`/`maybe_paid`). Each side writes its marker, then checks for the other's, so at least one sees the other.
+3. **Deposit links can't be paid twice.** A partial ask carries the mint-time balance `b` in the `p` token (added only when `a < balance`). Once the live balance drops below `b` (the deposit or any payment landed), the link asks for the live balance, not a second deposit. Unsynced-at-mint tokens have no `b` and keep plain `min(a, balance)`.
+4. **Setup tokens bind the plan's customer** (`c` in the `s` payload), so a plan reassigned within the 7 days can't be set up by its previous customer.
+5. **Another owner's invoice id** in a `p` token → 404 `invalid` (an id-existence lookup), distinct from "not synced yet" (409 `not_ready`).
+6. **Invoice-level customer guard.** An invoice whose `customerId` differs from the plan's customer is neither offered autopay nor charged.
+7. **Setup-mode Checkout wording.** §2.4 says "the same `custom_text`", but its first words "By paying, you also authorize…" are untrue in setup mode, where nothing is paid. Setup sessions say "By saving this card, you authorize {Business} to charge it for future {plan} invoices on their due dates (up to {$amount} each) until you turn automatic payments off. [Manage automatic payments](…)". **Owner: please confirm this adaptation of the Q4 text.**
+8. **Idempotent double-clicks.** Checkout keys use a 10-minute bucket. `expires_at` is a function of the bucket (bucket start + 41 min, so 31–41 min ahead), so a replay sends identical parameters. The pending consent row is reused within the bucket. `metadata.tr_idem` stops a double-click from expiring its own session. A replayed session that another tab expired is re-minted once (`…:r`).
+9. **One Stripe Customer per (owner, customer, connected account).** A Customer from a previous Stripe account is never reused.
+10. **Response shapes.** Pay-view keys are always present (`null` when absent). `amountDue` is the live balance and `depositRequested` the partial ask. `cadence` is display text ("every month"). The receipt adds `autopay` (the customer opted in). The manage view adds `setupUrl` ("Use a different card" / "Turn automatic payments back on") and a `pending` status while Stripe confirms a setup. A manage link to a `replaced` enrollment resolves to the plan's current one.
+11. **Receipts** go only to pay-page sessions (`tr_kind: 'invoice'`) and only on `appended`. Legacy Payment Link sessions get none (Stripe's own flow). Legacy links are deactivated on any outcome except `ownership_skip`.
+12. **Recipients**: the Checkout email, else the invoice email, else the TradeReady customer record. An implausible address means no mail, and the owner alert then says the customer was not emailed.
+13. **Shared cards** are detached only when no other active enrollment of the owner uses them. On replacement, the old card is detached after the new row is active.
+14. **Unknown outcomes.** A claim is resumed only after 5 min (another run may still hold it). The create is replayed with the stored amount and the same key only while the authorization still stands; otherwise the sweep only lists. After 6 h it lists the customer's PIs; if none is found, the claim is `failed`/`unknown` and the owner (not the customer) is alerted. A ledger-write failure after a successful charge keeps the claim `claimed` with the PI id, and the next sweep re-reads by id and retries the append. If the ledger refuses outright (`not_found`/`ownership_skip`), the claim is `succeeded` and the owner is told to record the payment.
+15. **Non-card Stripe errors** (e.g. `amount_too_small`) are `failed`/`processing_error`, never a hard decline.
+16. **Paused plans** (`isActive: false`) still charge their existing invoices; the §4.6 table gates only on `autopayEnabled`. Offers and portal setup require an active plan.
+17. **Owner status** sends only enrollments that were ever activated, so pending and abandoned rows never appear. Timestamps are normalized to `toISOString()`.
+18. **Disconnect and deletion** send no customer email. Cleanup failures never block either route.
+19. **Portal**: the section is empty without the secret or a Stripe connection. Links are minted per response; a plan whose id the token format refuses is skipped rather than failing the portal.
+20. **Daily cap** counts both charge and skip claims (both are claims).
+21. **`stripeFactory` injection** is on every route with new Stripe behavior and on the sweep. `connectStatus`/`createConnectAccount` only switched to `makeStripe` (no behavior change).
+22. **`pay.html`** sets `<meta name="referrer" content="no-referrer">` (tokens are capabilities) and only ever navigates to `*.stripe.com`.
+23. **`*/15` sequencing** lives in `W/lib/cronQuarterHourly.js`, so the Worker's main module keeps only its default export.
+24. **Residual (as §10):** a legacy Payment Link visited during an autopay window gets its open session expired by the sweep, but the link itself stays payable once. Legacy links only exist from before the secret is set.
+
+### 13.4 Uncommitted `tradeready-legal` edits and legal text
+
+The repo has `feat/quote-options` checked out, and everything below is uncommitted. The page work belongs on a `feat/autopay` branch stacked on the in-flight ones.
+- **New `pay.html`**: portal fonts, tokens and header; `noindex`; `no-referrer`; no external scripts, forms or frames; no `_headers` change. Four modes (`t`, `t`+`session_id`, `s`, `m`), complete error copy keyed by the codes in §13.2, the opt-in checkbox unchecked by default with the authorization text verbatim, the button label tracking the choice ("Pay $120.00" / "Pay $120.00 and turn on automatic payments" / "… and update automatic payments"), a required checkbox for setup, confirm-then-turn-off on the manage page, and the "Powered by TradeReady. Card entry is handled by Stripe." footer.
+- **`portal.html`**: a new "Automatic Payments" section from `autopay[]` (status chip, amount + cadence, card, "Set Up Automatic Payments" or "Manage Automatic Payments"). It sits on top of the Phase 32 uncommitted edits, which are kept. The Invoices Pay button is unchanged.
+- **Not touched**: `terms.html`, `privacy.html`, `estimate.html`, `change.html`, `book.html`, `_headers`. The other uncommitted files there (`book.html`, `change.html`, `estimate.html`, `developers.html`, `esign.js`, `verify.html`) belong to other engineers.
+- **Legal text for the engineer doing `terms.html`/`privacy.html`**: §7 as drafted (24-Q2, 24-Q3 approved). The privacy bullet already covers what is stored (brand/last 4/expiry, Stripe ids, the authorization text, consent time/IP/user agent, charge attempts). Two facts it may also want to state: receipts and autopay notices are emailed to the customer from `invoices@gettradereadyapp.com`, and the billing email entered at Stripe Checkout is stored for those receipts.
+
+### 13.5 Test results
+
+- `cd backend-workers && npm test`: **346/346 pass** (57 suites; baseline before this slice was 160). New files: `stripeWebhookCharacterization` (15), `createPaymentLink` (15), `payToken` (11), `payView` (31), `payCheckout` (23), `autopaySelect` (19), `autopaySweep` (29), `stripeWebhookAutopay` (17), `autopayEmails` (9), `autopayOwnerRoutes` (17). The Stripe client and `fetch` are fakes; no network.
+- Root Jest, `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath <37 files>` (every `__tests__` file that references `backend-workers`, plus `paymentMathParity`, `reminderLogic`, `selectInvoicesToRemind`, `jobDunningParity`, `stripeWebhookOwnership`, `paymentLink`, `portalView`, `portalStore`, `estimateDispatcherPortal`, `phase8PortalAdmin86`, `phase8PortalConcurrencyCharacterization`): **37 suites, 652/652 pass**. Updated: `portalAssembleWorkers.test.js` (eight top-level keys; new `autopay` block with exact entry keys), `reminderEmailHardening.test.js` (pay-page host + path only; the Vercel twin still refuses it), `invoiceEmailHardening.test.js` (autopay line).
+- jsdom page harness (`scratchpad/t24w/pages.test.cjs`, `node --test`): **34/34 pass** (all four `pay.html` modes, every error code, unchecked opt-in, label tracking, no double submit, only `*.stripe.com` navigation, setup gating, manage confirm/turn-off/pending polling, the portal section, escaping). Also a visual check at 375 px against a local mock API (no production calls).
+- Migration: applied to a throwaway local PostgreSQL 16 with an `auth` stub (scratch dir; never a real project), twice (idempotent), then the verify script: **ALL CHECKS PASSED**, 0 rows left. Negative checks: dropping the unique index fails CHECK 3; adding an insert policy fails CHECK 2.
+- Bundle: `esbuild src/index.js --bundle` (workerd/worker conditions) resolves; a single CJS worker build of `stripe` is bundled.
+- `sh native/run-doc-reference-check.sh`: 0 missing.
+
+### 13.6 Owner ship steps (in order)
+
+1. **Union trigger.** `psql -v ON_ERROR_STOP=1 "$DATABASE_URL" -f supabase/migrations/verify/20260718_invoice_payment_merge_verify.sql`. It must end "ALL CHECKS PASSED". If it fails, apply `20260718_invoice_payment_merge.sql` first; server-side appends (pay page, autopay) must not run on unprotected rows.
+2. **Webhook endpoint (check only).** Stripe Dashboard → Developers → Webhooks → the Connect endpoint targets `https://tradeready-backend.tradeready.workers.dev/api/stripe/webhook` and lists `checkout.session.completed`. No new event types.
+3. **Autopay tables.** Apply `supabase/migrations/20261003_autopay.sql`, then `psql -v ON_ERROR_STOP=1 "$DATABASE_URL" -f supabase/migrations/verify/20261003_autopay_verify.sql` → "ALL CHECKS PASSED".
+4. **Deploy the Worker** (`cd backend-workers && npm run deploy`). Without the secret it behaves as today, plus `limit: 1` on new Payment Links, legacy-link deactivation after payment, and an autopay sweep that finds nothing to do.
+5. **Publish** `pay.html` and the `portal.html` update, plus the approved `terms.html`/`privacy.html` text (other engineer, §7). The legal text must be live before step 6.
+6. **Turn on pay-page links**: `wrangler secret put PAY_LINK_SIGNING_SECRET`, with a fresh random value (e.g. `openssl rand -base64 48`), not the portal photo secret.
+7. **Ship the native build** (§6). The plan toggle is the only way to offer autopay, so nothing is charged before this.
+8. **Stripe test-mode smoke** (§8 list), plus: (a) open a pay link in two tabs and pay one → the other's session is expired; (b) pay a 50% deposit link, then reopen it → it asks for the remaining balance, not a second deposit; (c) a manage link from the first "autopay on" email still works after "Use a different card".
+9. Optional: `GET /api/cron/run-autopay` with `Authorization: Bearer $CRON_SECRET` runs one sweep on demand and returns its counts.
+

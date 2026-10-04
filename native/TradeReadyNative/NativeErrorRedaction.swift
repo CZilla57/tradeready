@@ -26,12 +26,14 @@ enum NativeSensitiveData {
         "gsk_", "appl_", "goog_", "amzn_", "strp_", "rcb_", "phc_", "phx_",
         "sb_secret_", "sb_publishable_", "AIza", "eyJ", "ghp_", "gho_", "github_pat_",
         "EAAA", "sq0atp-", "sq0atb-", "sq0csp-", "sq0csb-",
+        // Phase 23: TradeReady API keys (`trk_` + 43 characters).
+        "trk_",
     ]
 
     /// Prefixes that count only with at least this many token characters
     /// (`[A-Za-z0-9_-]`) after them (11.13 fix round 3): a Square access token
     /// is `EAAA` plus ~60 characters, while a word like `EAAAB` is not one.
-    static let secretPrefixMinimumTail: [String: Int] = ["EAAA": 20]
+    static let secretPrefixMinimumTail: [String: Int] = ["EAAA": 20, "trk_": 20]
     static let secretTailCharacters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
 
     /// Key fragments (lowercased, non-alphanumerics removed) naming secure

@@ -4,7 +4,8 @@
   TradeReadyNative app privacy manifest (task 11.09, requirement M1).
   Contract: docs/native-phase-11-platform-hardening-contract-decisions.md §8.
   Required-reason APIs used by our own code (SDKs ship their own manifests):
-  - UserDefaults CA92.1: standard defaults (NativeInitialSync, NativeSupabasePush).
+  - UserDefaults CA92.1: standard defaults (NativeInitialSync, NativeSupabasePush,
+    NativeCalendarSyncCoordinator's device-local calendar sync state).
   - UserDefaults 1C8F.1: the App Group suite shared with the widget extension
     (NativeAppGroupInbox, NativeWidgetActionReplay, LegacyDataImporter).
   - File timestamp C617.1: NativeWidgetActionReplay reads
@@ -18,6 +19,12 @@
   App Functionality: email, name, phone, physical address, photos, and other
   user content (job notes and free-text records). See
   docs/native-phase-12-release-readiness.md section 5.
+  2026-10-03 (Roadmap Phase 26, owner-approved Q3): calendar busy times are
+  recorded under the existing OtherUserContent entry (linked, not tracking,
+  App Functionality): if calendar checks are on, the app sends start and end
+  times of busy periods from calendars the user selects (never titles,
+  locations, notes or attendees) so the booking page does not offer them.
+  EventKit is not a required-reason API; no new collected-data type.
 -->
 <plist version="1.0">
 <dict>
@@ -94,6 +101,19 @@
 			<key>NSPrivacyCollectedDataTypePurposes</key>
 			<array>
 				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypePaymentInfo</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
 			</array>
 		</dict>
 		<dict>

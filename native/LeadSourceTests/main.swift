@@ -44,7 +44,7 @@ func testNormalize() {
     }
     let keys = NativeLeadSource.presets.map(\.key)
     expectEqual(keys, ["referral", "google", "facebook", "nextdoor", "yelp", "thumbtack_angi",
-                       "signage", "website", "booking_link", "mailer"], "presets: stable wire keys in picker order")
+                       "signage", "website", "booking_link", "mailer", "campaign"], "presets: stable wire keys in picker order")
     expectEqual(Set(keys).count, keys.count, "presets: unique keys")
     var owner: [String: String] = [:]
     for preset in NativeLeadSource.presets {
@@ -63,6 +63,13 @@ func testNormalize() {
     expectEqual(NativeLeadSource.normalize("HomeAdvisor"), "thumbtack_angi", "normalize: HomeAdvisor")
     expectEqual(NativeLeadSource.normalize("Vehicle   wrap"), "signage", "normalize: internal whitespace collapses before matching")
     expectEqual(NativeLeadSource.normalize("Door hanger"), "mailer", "normalize: door hanger")
+    // Phase 33 (campaigns spec §9.2): the additive `campaign` preset.
+    expectEqual(NativeLeadSource.campaignKey, "campaign", "campaign key")
+    expectEqual(NativeLeadSource.displayName("campaign"), "Text or email campaign", "campaign display name")
+    for alias in ["Email campaign", "TEXT CAMPAIGN", "sms campaign", "Email blast", "Newsletter", "Text or email campaign"] {
+        expectEqual(NativeLeadSource.normalize(alias), "campaign", "normalize: \(alias) → campaign")
+    }
+    expectEqual(NativeLeadSource.bucketKey("campaign"), "campaign", "campaign is a preset bucket")
 
     // Custom labels.
     expectEqual(NativeLeadSource.normalize("  Home   show 2026 "), "Home show 2026", "normalize: custom label trimmed and collapsed")

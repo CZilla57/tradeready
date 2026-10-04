@@ -10,6 +10,7 @@ swiftc \
   -module-cache-path "$MODULE_CACHE" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/FinancialDomain.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/CanonicalModels.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativePropertiesEquipment.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/CanonicalSnapshot.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeMutationQueue.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeRecordDeletion.swift" \

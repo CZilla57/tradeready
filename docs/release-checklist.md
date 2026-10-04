@@ -44,6 +44,27 @@ Written 2026-07-18.
       when the Worker and both pages (`estimate.html`, `portal.html`) are live;
       then delete this entry. Order: spec
       `docs/superpowers/specs/2026-10-02-quote-options-design.md` §12.
+- [ ] **Job forms (Phase 20, `feat/job-forms`) — apply `supabase/migrations/20261002_forms.sql` before shipping the native build.**
+      The native app pulls and pushes a new `forms` table. Without it the
+      initial full pull fails on the missing table, so signing in on a new
+      device (or after a reinstall) breaks, and every form edit stays queued
+      for retry. The migration also attaches `set_updated_at_trg` (needs
+      `20260831_updated_at_server_authority.sql` applied first). Unblocked
+      when the migration is applied in the Supabase SQL editor and
+      `public.forms` exists with RLS enabled, the `users manage own forms`
+      policy and `set_updated_at_trg`; then delete this entry.
+- [ ] **Campaigns (Phase 33, `feat/campaigns`) — apply `supabase/migrations/20261003_campaigns.sql` before shipping the native build.**
+      The native app pulls and pushes a new `campaigns` table. Without it the
+      initial full pull fails on the missing table, so signing in on a new
+      device (or after a reinstall) breaks, and every campaign edit stays
+      queued for retry. The migration also attaches `set_updated_at_trg`
+      (needs `20260831_updated_at_server_authority.sql` applied first).
+      Unblocked when the migration is applied in the Supabase SQL editor and
+      `public.campaigns` exists with RLS enabled, the `users manage own
+      campaigns` policy and `set_updated_at_trg`; then delete this entry.
+      The campaign-code Worker validator and `book.html` `?c=` (spec §9.1,
+      §9.3) are not in this branch; without them campaign links still open
+      and only the 30-day window attributes bookings.
 
 ---
 
