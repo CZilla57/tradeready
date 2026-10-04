@@ -397,8 +397,38 @@ async function releaseClaim(ctx, claim) {
 // `in_flight`); a stamped one waits for a later sweep.
 async function checkFailed(ctx, item, what, err) {
   console.warn(`[autopay] ${what} for ${item.claim.invoice_id} failed: ${err && err.message}`);
+  if (item.claim.charge_sent_at) return reconcileUnreachable(ctx, item, err);
   ctx.result.unknown++;
-  if (!item.claim.charge_sent_at) await releaseClaim(ctx, item.claim);
+  await releaseClaim(ctx, item.claim);
+}
+
+// A stamped claim may be settled failed/unknown only once its create is
+// older than the resume guard: a younger stamp may belong to a run whose
+// create is still in flight (its PaymentIntent would not be listed yet).
+function stampSettled(ctx, claim) {
+  return ctx.clock().getTime() - Date.parse(claim.charge_sent_at) >= RESUME_AFTER_MS;
+}
+
+// Settle a stamped claim failed/unknown and tell the owner to check Stripe.
+// The row is kept, so no new claim can charge this invoice.
+async function settleUnknown(ctx, item, message) {
+  const { env, result } = ctx;
+  const flipped = await settleClaim(env, item.claim, { status: 'failed', failure_code: 'unknown', failure_message: message });
+  if (!flipped) return;
+  result.failed++;
+  await notifyProblem(ctx, { claim: item.claim, enrollment: item.enrollment, invoice: item.invoice, reason: 'unknown', emailCustomer: false });
+}
+
+// Stripe could not be reached to reconcile a stamped claim. Wait inside the
+// 6 h replay window; after it (e.g. a switched or deauthorized account that
+// will never answer) settle unknown so the pay page unblocks. Never release.
+async function reconcileUnreachable(ctx, item, err) {
+  console.warn(`[autopay] reconcile for claim ${item.claim.id} failed: ${err && err.message}`);
+  const ageMs = ctx.clock().getTime() - Date.parse(item.claim.created_at);
+  if (item.claim.charge_sent_at && ageMs >= UNKNOWN_LIST_AFTER_MS && stampSettled(ctx, item.claim)) {
+    return settleUnknown(ctx, item, `Stripe unreachable for reconciliation after 6 h: ${String((err && err.message) || '').slice(0, 300)}`);
+  }
+  ctx.result.unknown++;
 }
 
 // Don't charge. `item.chargedWith` is the enrollment a previous create (if
@@ -417,19 +447,14 @@ async function standDown(ctx, item, reason) {
   try {
     found = await findAutopayIntent(stripe, claim, item.chargedWith);
   } catch (err) {
-    console.warn(`[autopay] reconcile list for claim ${claim.id} failed: ${err.message}`);
-    result.unknown++;
-    return;
+    return reconcileUnreachable(ctx, item, err);
   }
   if (found) return handleIntent(ctx, { ...item, stripe, quiet: QUIET_REASONS.has(reason) }, found, cardOf(item.chargedWith));
-  const flipped = await settleClaim(env, claim, {
-    status: 'failed',
-    failure_code: 'unknown',
-    failure_message: `not replayed (${reason}); no PaymentIntent found for the claim`,
-  });
-  if (!flipped) return;
-  result.failed++;
-  await notifyProblem(ctx, { claim, enrollment: item.enrollment, invoice: item.invoice, reason: 'unknown', emailCustomer: false });
+  if (!stampSettled(ctx, claim)) {
+    result.unknown++; // another run's create may still be in flight
+    return;
+  }
+  await settleUnknown(ctx, item, `not replayed (${reason}); no PaymentIntent found for the claim`);
 }
 
 // The card on file is gone (missing, detached or moved to another Customer).
@@ -499,7 +524,7 @@ async function processClaim(ctx, item) {
       try {
         found = await findAutopayIntent(stripe, claim, chargedWith);
       } catch (err) {
-        return checkFailed(ctx, current, 'reconcile list', err);
+        return reconcileUnreachable(ctx, current, err);
       }
       if (found) return handleIntent(ctx, { ...current, stripe }, found, cardOf(chargedWith));
     }
@@ -523,7 +548,7 @@ async function processClaim(ctx, item) {
   // c. Stamp, then charge. No stamp on a still-claimed row → no create.
   let marked;
   try {
-    marked = await store.markChargeSent(env, claim, { now });
+    marked = await store.markChargeSent(env, claim, { now: ctx.clock() });
   } catch (err) {
     console.warn(`[autopay] charge stamp for ${claim.invoice_id} failed: ${err.message}`);
     result.unknown++;
@@ -556,6 +581,18 @@ async function processClaim(ctx, item) {
       result.unknown++;
       return;
     }
+    if (claim.charge_sent_at) {
+      // A replay failed: the FIRST create may still have charged the card.
+      // Only a reconciliation that finds no charge may take the failed path
+      // (which emails the customer a pay link).
+      let found = null;
+      try {
+        found = await findAutopayIntent(stripe, marked, chargedWith);
+      } catch (listErr) {
+        return reconcileUnreachable(ctx, charging, listErr);
+      }
+      if (found) return handleIntent(ctx, { ...charging, stripe }, found, card);
+    }
     return onFailed(ctx, { ...charging, failure: failureFromError(err), stripe });
   }
   return handleIntent(ctx, { ...charging, stripe }, pi, card);
@@ -570,15 +607,14 @@ async function resolveByList(ctx, item) {
   try {
     found = await findAutopayIntent(stripe, claim, enrollment);
   } catch (err) {
-    console.warn(`[autopay] list for claim ${claim.id} failed: ${err.message}`);
+    return reconcileUnreachable(ctx, item, err);
+  }
+  if (found) return handleIntent(ctx, { ...item, stripe }, found, cardOf(enrollment));
+  if (!stampSettled(ctx, claim)) {
     result.unknown++;
     return;
   }
-  if (found) return handleIntent(ctx, { ...item, stripe }, found, cardOf(enrollment));
-  const flipped = await settleClaim(env, claim, { status: 'failed', failure_code: 'unknown', failure_message: 'outcome never confirmed by Stripe' });
-  if (!flipped) return;
-  result.failed++;
-  await notifyProblem(ctx, { claim, enrollment, invoice, reason: 'unknown', emailCustomer: false });
+  await settleUnknown(ctx, { claim, enrollment, invoice }, 'outcome never confirmed by Stripe');
 }
 
 // Claims a previous run left `claimed`.
@@ -592,9 +628,7 @@ async function resumeClaim(ctx, item, { nowMs }) {
       const pi = await stripe.paymentIntents.retrieve(claim.payment_intent_id, {}, { stripeAccount: enrollment.stripe_account_id });
       return handleIntent(ctx, { ...item, stripe }, pi, cardOf(enrollment));
     } catch (err) {
-      console.warn(`[autopay] retrieve ${claim.payment_intent_id} failed: ${err.message}`);
-      result.unknown++;
-      return;
+      return reconcileUnreachable(ctx, item, err);
     }
   }
   if (claim.charge_sent_at && ageMs >= UNKNOWN_LIST_AFTER_MS) return resolveByList(ctx, item);
@@ -692,7 +726,12 @@ async function runAutopayCharges(env, { stripeFactory = makeStripe, now = new Da
   const plansByKey = new Map(planRows.map((p) => [planKey(p.user_id, p.id), p]));
   const invoiceByKey = new Map(invoiceRows.map((r) => [`${r.user_id}|${r.id}`, { ...(r.data || {}), id: r.id }]));
   const stripe = stripeFactory(env);
-  const ctx = { env, stripe, settingsByUser, result, now };
+  // ctx.clock(): the run's `now` advanced by the real time elapsed since the
+  // run started, so claim and stamp times are when the write happened, not
+  // when the run began (an overlapping run measures its guards from them).
+  const startedMs = Date.now();
+  const clock = () => new Date(now.getTime() + (Date.now() - startedMs));
+  const ctx = { env, stripe, settingsByUser, result, now, clock };
 
   // 1. Housekeeping (silent): plan gone/reassigned → revoke; stale pending → expire.
   const revokedNow = await housekeep(ctx, { liveEnrollments, plansByKey, now });
@@ -717,7 +756,7 @@ async function runAutopayCharges(env, { stripeFactory = makeStripe, now = new Da
     const invoice = invoiceByKey.get(`${claim.user_id}|${claim.invoice_id}`) || { id: claim.invoice_id };
     if (!enrollment) continue;
     try {
-      await resumeClaim(ctx, { claim, enrollment, invoice }, { nowMs: now.getTime() });
+      await resumeClaim(ctx, { claim, enrollment, invoice }, { nowMs: ctx.clock().getTime() });
     } catch (err) {
       console.error(`[autopay] resume claim ${claim.id} failed:`, err.message);
     }
@@ -733,7 +772,7 @@ async function runAutopayCharges(env, { stripeFactory = makeStripe, now = new Da
         enrollment_id: item.enrollment.id,
         amount_cents: item.cents,
         status: 'claimed',
-      }, { now });
+      }, { now: ctx.clock() });
       if (!claim) continue; // another run has it
       await processClaim(ctx, { claim, enrollment: item.enrollment, invoice: item.invoice });
     } catch (err) {
@@ -752,7 +791,7 @@ async function runAutopayCharges(env, { stripeFactory = makeStripe, now = new Da
         amount_cents: item.cents,
         status: 'skipped',
         failure_code: 'amount_above_authorized',
-      }, { now });
+      }, { now: ctx.clock() });
       if (!claim) continue;
       result.skipped++;
       await notifyProblem(ctx, { claim, enrollment: item.enrollment, invoice: item.invoice, reason: 'amount_above_authorized' });

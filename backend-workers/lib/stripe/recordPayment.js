@@ -18,9 +18,9 @@
 // A DELETED invoice (review fix 2026-10-04, spec §13.7): money that arrives
 // for it (a pay-page session completed after the owner deleted it, a legacy
 // link, an autopay create that had already reached Stripe) is still booked,
-// so the ledger matches Stripe, but the row stays deleted (the upsert used
-// to write deleted:false and silently resurrect it, reopening it to the
-// reminder and autopay sweeps). The owner is alerted instead (email + push,
+// so the ledger matches Stripe, but the row stays deleted: the upsert never
+// writes `deleted` (it used to write false, silently resurrecting the row and
+// reopening it to the reminder and autopay sweeps). The owner is alerted instead (email + push,
 // fire-and-forget), and the result carries invoiceDeleted: true.
 //
 // Returns { outcome, invoice, userId, invoiceDeleted } where outcome is one of
@@ -156,7 +156,10 @@ async function recordStripePayment(env, { invoiceId, connectedAccountId, ledgerI
       user_id,
       data: nextData,
       updated_at: new Date().toISOString(),
-      deleted: invoiceDeleted,
+      // No `deleted` key: merge-duplicates updates only the columns sent, so
+      // a booking can never flip the flag either way (it used to write
+      // false, resurrecting deleted invoices, and a delete landing between
+      // the read above and this write was undone).
     }),
   });
 

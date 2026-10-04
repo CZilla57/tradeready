@@ -718,3 +718,82 @@ describe('autopay sweep — reads are paginated and housekeeping fails closed (r
     assert.equal(stripe.callsTo('paymentMethods.detach').length, 0);
   });
 });
+
+// --- Re-check follow-ups (2026-10-04, spec §13.7 "Follow-ups").
+
+describe('autopay sweep — re-check follow-ups', () => {
+  const { stripeError } = require('./helpers/fakes.cjs');
+  const ago = (min) => new Date(OPEN.getTime() - min * 60e3).toISOString();
+
+  test('claims carry their real insert time, not the run start', async () => {
+    const e = W.enrollmentRow();
+    w = W.world({ enrollments: [e], invoices: [W.invoiceRow(), W.invoiceRow({ number: 'INV-0043' }, { id: 'inv2' })] });
+    const stripe = stripeWith({
+      'paymentIntents.create': async (params) => {
+        if (params.metadata.invoiceId === 'inv1') await new Promise((r) => setTimeout(r, 60));
+        return { id: `pi_${params.metadata.invoiceId}`, status: 'succeeded', amount: params.amount, amount_received: params.amount };
+      },
+    });
+    await sweep(stripe);
+    const second = w.db.rows('autopay_charges').find((c) => c.invoice_id === 'inv2');
+    assert.ok(Date.parse(second.created_at) >= OPEN.getTime() + 50, `created_at ${second.created_at} is the run start`);
+    assert.ok(Date.parse(second.charge_sent_at) >= Date.parse(second.created_at));
+  });
+
+  test('a stamped claim whose create may still be in flight is not settled failed/unknown', async () => {
+    const e = W.enrollmentRow();
+    // Claimed long ago, but the create was only stamped a minute ago (another run is mid-create).
+    w = W.world({ enrollments: [e], charges: [claimRow(e, { created_at: ago(30), charge_sent_at: ago(1) })] });
+    changeInvoice('paid');
+    const stripe = stripeWith({ 'paymentIntents.list': async () => ({ data: [] }) });
+    const r = await sweep(stripe);
+    assert.deepEqual(creates(stripe), []);
+    assert.equal(charge().status, 'claimed', 'left for the run that holds it');
+    assert.equal(r.unknown, 1);
+    assert.equal(w.emails.length + w.pushes.length, 0, 'no wrong alert');
+  });
+
+  test('a non-card error on a stamped replay reconciles first: the earlier charge is booked, no pay link', async () => {
+    const e = W.enrollmentRow();
+    w = W.world({ enrollments: [e], charges: [claimRow(e, { created_at: ago(30), charge_sent_at: ago(30) })] });
+    const stripe = stripeWith({
+      'paymentIntents.create': async () => { throw stripeError('StripePermissionError', { statusCode: 403, message: 'forbidden' }); },
+      'paymentIntents.list': async () => ({ data: [{ id: 'pi_first', status: 'succeeded', amount: 12000, amount_received: 12000, metadata: { invoiceId: 'inv1', source: 'autopay' } }] }),
+    });
+    await sweep(stripe);
+    assert.deepEqual([charge().status, charge().payment_intent_id], ['succeeded', 'pi_first']);
+    assert.deepEqual(invoiceData().payments.map((p) => p.id), ['stripe_pi_first']);
+    assert.deepEqual(customerMail().map((m) => m.subject), ['Automatic payment receipt – Invoice INV-0042'], 'a receipt, never a pay link');
+  });
+
+  test('a non-card error on a stamped replay with no charge on Stripe takes the failed path', async () => {
+    const e = W.enrollmentRow();
+    w = W.world({ enrollments: [e], charges: [claimRow(e, { created_at: ago(30), charge_sent_at: ago(30) })] });
+    const stripe = stripeWith({
+      'paymentIntents.create': async () => { throw stripeError('StripePermissionError', { statusCode: 403, message: 'forbidden' }); },
+      'paymentIntents.list': async () => ({ data: [] }),
+    });
+    await sweep(stripe);
+    assert.deepEqual([charge().status, charge().failure_code], ['failed', 'processing_error']);
+    assert.match(customerMail()[0].subject, /^Action needed/);
+  });
+
+  test('an unreachable account: a stamped claim settles unknown after the 6 h window, never before, and is never released', async () => {
+    const unreachable = () => { throw stripeError('StripePermissionError', { statusCode: 403, message: 'account deauthorized' }); };
+    const stripe = stripeWith({ 'paymentIntents.list': unreachable, 'checkout.sessions.list': unreachable });
+    const e = W.enrollmentRow();
+
+    w = W.world({ enrollments: [e], charges: [claimRow(e, { created_at: ago(60), charge_sent_at: ago(60) })] });
+    await sweep(stripe);
+    assert.equal(charge().status, 'claimed', 'inside the window: wait');
+    assert.equal(w.emails.length, 0);
+    w.restore();
+
+    w = W.world({ enrollments: [e], charges: [claimRow(e, { created_at: ago(7 * 60), charge_sent_at: ago(7 * 60) })] });
+    await sweep(stripe);
+    assert.deepEqual([charge().status, charge().failure_code], ['failed', 'unknown'], 'settled, row kept (no new claim possible)');
+    assert.equal(customerMail().length, 0);
+    assert.match(ownerMail()[0].subject, /^Check Stripe/);
+    assert.deepEqual(creates(stripe), []);
+  });
+});
