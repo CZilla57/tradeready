@@ -569,6 +569,8 @@ struct PaymentsSettings: View {
             } message: {
                 Text("Your Stripe account will be unlinked. Payment links will stop working until you reconnect.")
             }
+            // Phase 18: hidden until Tap to Pay is supported and installed.
+            NativeTapToPaySettingsSection()
         } else if let provider = providers.first(where: { $0.id == store.settings.paymentProvider }) {
             Section(provider.label.uppercased()) {
                 if let hint = providerHint {

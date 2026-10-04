@@ -860,7 +860,7 @@ let viewFileInventory: Set<String> = [
     "N/NativePricebookEntryView.swift", "N/NativePricebookView.swift", "N/NativePricingCalculator.swift",
     "N/NativeRecurringInvoicesView.swift", "N/NativeRecurringJobsView.swift", "N/NativeReviewRequestView.swift",
     "N/NativeRouteView.swift", "N/NativeScheduleEditorView.swift", "N/NativeScheduleSettingsView.swift",
-    "N/NativeSetupChecklistCard.swift", "N/NativeTemplatePickerView.swift", "N/NativeTimeTrackingView.swift",
+    "N/NativeSetupChecklistCard.swift", "N/NativeTapToPayViews.swift", "N/NativeTemplatePickerView.swift", "N/NativeTimeTrackingView.swift",
     "N/NativeTodayComponents.swift", "N/NativeTripEditor.swift", "N/RootView.swift", "N/SettingsView.swift",
     "N/TodayView.swift", "N/TradeReadyNativeApp.swift",
     "N/Widgets/Shared/JobTimerWidgetView.swift", "N/Widgets/Shared/NextJobWidgetView.swift",
@@ -981,6 +981,7 @@ let keyboardDoneBarCoverage: [String: String] = [
     "NativeRecurringJobEditor": "NativeRecurringJobEditor",
     "NativeReviewRequestView": "NativeReviewRequestView",
     "NativeScheduleSettingsView": "NativeScheduleSettingsView",
+    "NativeTapToPaySheet": "NativeTapToPaySheet",
     "NativeTaxSettingsView": "NativeTaxSettingsView",
     "NativeTripEditor": "NativeTripEditor",
     // Settings pages share one `Form` in `SettingsPage`.

@@ -1106,9 +1106,14 @@ enum CanonicalUIAdapters {
     }
 
     static func payment(from value: Canonical.Payment, calendar: Calendar = .current) throws -> Payment {
-        Payment(id: value.id, amount: double(value.amount), date: try parsed(value.date, field: "payment.date", calendar: calendar),
+        // Phase 18: `channel` is an additive key the canonical model keeps in
+        // its preserved fields; surface it for display only.
+        var channel: String?
+        if case let .string(raw)? = try object(value)["channel"] { channel = raw }
+        return Payment(id: value.id, amount: double(value.amount), date: try parsed(value.date, field: "payment.date", calendar: calendar),
                 method: displayPaymentMethod(value.method), note: value.note ?? "",
-                voidedAt: try value.voidedAt.map { try parsed($0, field: "payment.voidedAt", calendar: calendar) })
+                voidedAt: try value.voidedAt.map { try parsed($0, field: "payment.voidedAt", calendar: calendar) },
+                channel: channel)
     }
 
     static func invoice(from value: Canonical.Invoice, calendar: Calendar = .current) throws -> Invoice {
@@ -1293,12 +1298,15 @@ private extension CanonicalUIAdapters {
     static func displayPaymentMethod(_ value: String) -> String {
         switch value.lowercased() {
         case "cash": return "Cash"; case "check", "cheque": return "Check"; case "card": return "Card"
+        // Phase 18 (D6): Stripe-reconciled money used to print as "Other".
+        case "stripe": return "Card (online)"
         case "ach", "bank_transfer", "bank transfer": return "ACH"; default: return "Other"
         }
     }
     static func canonicalPaymentMethod(_ value: String) -> String {
         switch value.lowercased() {
         case "cash": return "cash"; case "check", "cheque": return "check"; case "card": return "card"
+        case "stripe", "card (online)", "tap to pay": return "stripe"
         case "ach", "bank_transfer", "bank transfer": return "bank_transfer"; default: return "other"
         }
     }

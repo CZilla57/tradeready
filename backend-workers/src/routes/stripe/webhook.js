@@ -65,6 +65,7 @@ import { cardLabel } from '../../../lib/autopay/format.js';
 import { fetchSettings } from '../../../lib/autopay/store.js';
 import { sendCustomerEmail } from '../../../lib/ownerAlert.js';
 import { balanceDue } from '../../../lib/paymentMath.js';
+import { handleTapToPayIntent } from '../../../lib/stripe/tapToPayWebhook.js';
 
 // The PaymentIntent behind a paid session, with its card and saved payment
 // method expanded. Null on any error (callers degrade, never fail).
@@ -153,6 +154,10 @@ export function createStripeWebhookHandler({ stripeFactory = makeStripe } = {}) 
       console.error('[stripe/webhook] signature verification failed:', err.message);
       return c.json({ error: 'Webhook signature verification failed.' }, 400);
     }
+
+    // Phase 18: Tap to Pay PaymentIntents only (lib/stripe/tapToPayWebhook.js);
+    // every other payment_intent.* event is skipped there.
+    if (event.type === 'payment_intent.succeeded') return handleTapToPayIntent(c, event);
 
     // Only care about completed checkout sessions
     if (event.type !== 'checkout.session.completed') {

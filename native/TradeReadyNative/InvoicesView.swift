@@ -397,13 +397,15 @@ struct InvoiceDetailView: View {
                         }
                     }
                     Section("Payments") {
+                        // Phase 18: hidden until Tap to Pay is available.
+                        NativeTapToPayInvoiceRow(invoice: invoice, onSendReceipt: sharePDF)
                         if invoice.effectivePayments.isEmpty { Text("No payments recorded yet.").foregroundStyle(.secondary) }
                         ForEach(invoice.effectivePayments) { payment in
                             VStack(alignment: .leading, spacing: 3) {
                                 HStack {
                                     Text(payment.amount.currency).fontWeight(.semibold)
                                     Spacer()
-                                    Text("\(payment.date.shortDate) · \(payment.method)")
+                                    Text("\(payment.date.shortDate) · \(payment.displayMethod)")
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
                                 if payment.id.hasPrefix("legacy_") {
@@ -503,7 +505,8 @@ struct InvoiceDetailView: View {
                     Button("Cancel", role: .cancel) { paymentToVoid = nil }
                 } message: { payment in
                     let restored = invoice.voidingPayment(id: payment.id, on: .now).balance
-                    Text("This can't be undone. \(invoice.number) will go back to \(restored.currency) due. To correct a mistake, record a new payment.")
+                    let notice = NativeCardPresentPayment.isStripePayment(id: payment.id) ? " \(NativeCardPresentPayment.voidNotice)" : ""
+                    Text("This can't be undone. \(invoice.number) will go back to \(restored.currency) due. To correct a mistake, record a new payment.\(notice)")
                 }
             } else {
                 VStack(spacing: 8) {

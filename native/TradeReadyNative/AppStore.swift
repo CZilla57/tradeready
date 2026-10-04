@@ -4492,6 +4492,36 @@ final class AppStore: ObservableObject {
         return result
     }
 
+    /// Phase 18 (Tap to Pay): records the device's copy of a card-present
+    /// payment the reader just approved. `entry` is
+    /// `NativeCardPresentPayment.ledgerEntry`: id `stripe_<paymentIntentId>`,
+    /// the SAME bytes the Worker webhook writes, so the server's union trigger
+    /// collapses the two copies. Money rules:
+    /// - Idempotent by that id: if the webhook's copy already arrived (or a
+    ///   retry runs again) nothing is recorded or tracked twice.
+    /// - It records what was actually collected and does not clamp to the
+    ///   balance; the card was charged, so the ledger must say so. (The
+    ///   pre-charge balance cap is the sheet's and the Worker's job.)
+    @discardableResult
+    func recordCardPresentPayment(invoiceID: String, entry: Canonical.Payment) -> Result<Invoice, NativeInvoiceEditRefusal> {
+        guard let current = invoices.first(where: { $0.id == invoiceID }) else {
+            return .failure(.missingRecord)
+        }
+        guard let payment = try? CanonicalUIAdapters.payment(from: entry) else {
+            return .failure(.persistenceUnavailable)
+        }
+        if current.effectivePayments.contains(where: { $0.id == payment.id }) { return .success(current) }
+        let result = commitInvoicePayment(current.applying(payment), exactEntry: entry)
+        if case .success(let next) = result {
+            emitAnalytics(.paymentRecorded(amount: payment.amount, method: "stripe", balanceRemaining: next.balance))
+            if next.isPaid && !current.isPaid {
+                emitAnalytics(.invoicePaid(amount: next.amount))
+                onAppRatingWin?(.invoicePaid)
+            }
+        }
+        return result
+    }
+
     @discardableResult
     func settleInvoice(invoiceID: String, on date: Date = .now, paymentID: String) -> Result<Invoice, NativeInvoiceEditRefusal> {
         guard let current = invoices.first(where: { $0.id == invoiceID }) else {
@@ -9888,8 +9918,14 @@ final class AppStore: ObservableObject {
     /// edit-boundary as `commitInvoiceEdit`, preserving delivery metadata,
     /// linkage and unknown fields. Job advancement only moves invoiced→paid
     /// on full settlement and never regresses (void-safe).
+    ///
+    /// Phase 18: `exactEntry`, when given, replaces the ledger entry with that
+    /// id in the canonical invoice, byte for byte. `newCanonicalPayment` writes
+    /// only the manual-payment keys, so a Tap to Pay entry (extra
+    /// `stripePaymentIntentId` and `channel` keys, no null `note`/`voidedAt`)
+    /// needs this to stay identical to the Worker webhook's copy.
     @discardableResult
-    func commitInvoicePayment(_ invoice: Invoice) -> Result<Invoice, NativeInvoiceEditRefusal> {
+    func commitInvoicePayment(_ invoice: Invoice, exactEntry: Canonical.Payment? = nil) -> Result<Invoice, NativeInvoiceEditRefusal> {
         guard ensurePersistenceWritable() else { return .failure(.persistenceUnavailable) }
         var invoiceRecords = snapshot.payload.invoices ?? []
         guard let baseline = invoiceRecords.first(where: { $0.id == invoice.id }) else {
@@ -9899,6 +9935,10 @@ final class AppStore: ObservableObject {
             var edit = try CanonicalUIAdapters.edit(baseline)
             edit.value = invoice
             var result = try CanonicalUIAdapters.canonical(from: edit)
+            if let exactEntry, let index = result.payments?.firstIndex(where: { $0.id == exactEntry.id }),
+               !(baseline.payments ?? []).contains(where: { $0.id == exactEntry.id }) {
+                result.payments?[index] = exactEntry
+            }
             Self.reconcileInvoicePaidFields(&result)
             replaceOrAppend(result, in: &invoiceRecords, id: \Canonical.Invoice.id)
             guard let published = try? CanonicalUIAdapters.invoice(from: result) else {

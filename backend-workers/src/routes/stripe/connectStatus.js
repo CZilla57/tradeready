@@ -1,7 +1,8 @@
 // GET /api/stripe/connect-status — Workers port of
 // backend/lib/stripe/connectStatus.js.
 // Returns the Stripe Connect status for the authenticated user:
-// { connected: false } or { connected: true, details_submitted, display_name }
+// { connected: false } or { connected: true, details_submitted, display_name,
+// charges_enabled, card_payments_capability }
 //
 // Auth: Supabase JWT via "Authorization: Bearer <token>"
 
@@ -55,6 +56,9 @@ export async function connectStatusHandler(c) {
         account.settings?.dashboard?.display_name ||
         account.business_profile?.name ||
         null,
+      // Phase 18 (additive): Tap to Pay needs card payments live on the account.
+      charges_enabled: account.charges_enabled === true,
+      card_payments_capability: account.capabilities?.card_payments ?? null,
     }, 200);
   } catch (err) {
     // Account was deleted or deauthorized on Stripe's side — treat as not connected.

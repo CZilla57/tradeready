@@ -60,6 +60,7 @@ import { payCheckoutHandler } from './routes/pay/checkout.js';
 import { payAutopayOffHandler } from './routes/pay/autopayOff.js';
 import { autopayStatusHandler } from './routes/autopay/status.js';
 import { autopayManageHandler } from './routes/autopay/manage.js';
+import { connectionTokenHandler, locationHandler, paymentIntentHandler } from './routes/terminal.js';
 
 const app = new Hono();
 
@@ -113,6 +114,12 @@ app.all('/api/pay/:action', (c) => c.json({ error: 'Not found' }, 404));
 app.all('/api/autopay/status', autopayStatusHandler);
 app.all('/api/autopay/manage', autopayManageHandler);
 app.all('/api/autopay/:action', (c) => c.json({ error: 'Not found' }, 404));
+
+// Phase 18 Tap to Pay owner routes (JWT, appCors, per-user limits).
+app.all('/api/terminal/connection-token', connectionTokenHandler);
+app.all('/api/terminal/location', locationHandler);
+app.all('/api/terminal/payment-intent', paymentIntentHandler);
+app.all('/api/terminal/:action', (c) => c.json({ error: 'Not found' }, 404));
 
 // Manual-run fallback; the production trigger is scheduled() below.
 app.all('/api/cron/send-reminders', cronSendRemindersHandler);

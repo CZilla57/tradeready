@@ -101,6 +101,16 @@ struct Payment: Identifiable, Codable, Hashable {
     var method = "Card"
     var note = ""
     var voidedAt: Date?
+    /// Phase 18: how a Stripe payment was taken (`card_present` for Tap to
+    /// Pay). Display-only: the canonical entry carries it; an edit never
+    /// writes it back (the adapter's baseline merge keeps the stored key).
+    var channel: String?
+
+    /// What the invoice payment row prints. A Tap to Pay entry reads "Tap to
+    /// Pay"; every other method prints as stored.
+    var displayMethod: String {
+        channel == "card_present" && method == "Card (online)" ? "Tap to Pay" : method
+    }
 }
 
 struct Invoice: Identifiable, Codable, Hashable {
@@ -128,7 +138,14 @@ struct Invoice: Identifiable, Codable, Hashable {
     var overpaidAmount: Double { ledgerAmount(PaymentLedger.overpaidAmount(workflowLedger)) }
     var isOverdue: Bool { !isPaid && due < Calendar.current.startOfDay(for: .now) }
     var effectivePayments: [Payment] {
-        PaymentLedger.materializeLegacyLedger(workflowLedger).map(Payment.init(ledger:))
+        // The ledger projection has no `channel`; carry it over from the UI
+        // payments by id so a Tap to Pay row keeps its label.
+        let channels = Dictionary(payments.compactMap { p in p.channel.map { (p.id, $0) } }, uniquingKeysWith: { first, _ in first })
+        return PaymentLedger.materializeLegacyLedger(workflowLedger).map { entry in
+            var payment = Payment(ledger: entry)
+            payment.channel = channels[entry.id]
+            return payment
+        }
     }
 
     mutating func recordPayment(_ payment: Payment) {
@@ -250,6 +267,9 @@ private extension Payment {
         case "cash": .cash
         case "check", "cheque": .check
         case "card": .card
+        // Phase 18: the labels the adapter shows for a Stripe payment, so a
+        // UI round trip keeps `stripe` instead of degrading to `other`.
+        case "stripe", "card (online)", "tap to pay": .stripe
         case "ach", "bank transfer", "bank_transfer": .bankTransfer
         default: .other
         }
@@ -292,7 +312,7 @@ extension LedgerPaymentMethod {
         case .cash: "Cash"
         case .check: "Cheque"
         case .card: "Card"
-        case .stripe: "Stripe"
+        case .stripe: "Card (online)"
         case .bankTransfer: "Bank transfer"
         case .other: "Other"
         }
