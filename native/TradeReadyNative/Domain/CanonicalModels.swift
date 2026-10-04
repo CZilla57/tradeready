@@ -577,6 +577,65 @@ public extension Canonical {
             }
         }
 
+        /// Phase 19 (e-signatures, spec 2026-10-03 §3.4, §11.1 A):
+        /// `snapshot.businessContact`, the disclosure's paper-copy contact.
+        /// Empty members are omitted, never sent as `""`.
+        public struct BusinessContact: Codable, Equatable {
+            public var phone, email: String?
+            public var preservation: Preservation
+            public init(phone: String? = nil, email: String? = nil, preservation: Preservation = .init()) {
+                self.phone = phone
+                self.email = email
+                self.preservation = preservation
+            }
+            public init(from decoder: Decoder) throws {
+                var o = try ObjectReader(decoder)
+                phone = try o.optional("phone"); email = try o.optional("email"); preservation = o.finish()
+            }
+            public func encode(to encoder: Encoder) throws {
+                var o = ObjectWriter(preservation)
+                try o.putOptional(phone, for: "phone"); try o.putOptional(email, for: "email"); try o.encode(to: encoder)
+            }
+        }
+
+        /// Phase 19: `snapshot.signature`. An absent `drawPad` means on.
+        public struct SignatureOptions: Codable, Equatable {
+            public var drawPad: Bool?
+            public var preservation: Preservation
+            public init(drawPad: Bool? = nil, preservation: Preservation = .init()) {
+                self.drawPad = drawPad
+                self.preservation = preservation
+            }
+            public init(from decoder: Decoder) throws {
+                var o = try ObjectReader(decoder); drawPad = try o.optional("drawPad"); preservation = o.finish()
+            }
+            public func encode(to encoder: Encoder) throws {
+                var o = ObjectWriter(preservation); try o.putOptional(drawPad, for: "drawPad"); try o.encode(to: encoder)
+            }
+        }
+
+        /// Phase 19: `snapshot.esign`. Its presence tells the Worker this
+        /// estimate is signed with consent; `timeZone` (IANA) is the owner's
+        /// zone for the signature certificate.
+        public struct ESign: Codable, Equatable {
+            public var version: Int
+            public var timeZone: String?
+            public var preservation: Preservation
+            public init(version: Int, timeZone: String? = nil, preservation: Preservation = .init()) {
+                self.version = version
+                self.timeZone = timeZone
+                self.preservation = preservation
+            }
+            public init(from decoder: Decoder) throws {
+                var o = try ObjectReader(decoder)
+                version = try o.required("version"); timeZone = try o.optional("timeZone"); preservation = o.finish()
+            }
+            public func encode(to encoder: Encoder) throws {
+                var o = ObjectWriter(preservation)
+                try o.put(version, for: "version"); try o.putOptional(timeZone, for: "timeZone"); try o.encode(to: encoder)
+            }
+        }
+
         public var businessName, customerName, jobTitle: String
         public var lineItems: [LineItem]
         public var total: Decimal
@@ -586,6 +645,14 @@ public extension Canonical {
         /// the IANA zone it is evaluated in. Both present or both absent.
         public var validUntil: DateString?
         public var validUntilTimeZone: String?
+        /// Phase 19: what the customer reads and signs beyond the prices
+        /// (`scope` is the job's or change order's description, `terms` the
+        /// owner's agreement terms), plus the signing-page settings. All
+        /// additive and digest-covered; built by `NativeESignature`.
+        public var scope, terms: String?
+        public var businessContact: BusinessContact?
+        public var signature: SignatureOptions?
+        public var esign: ESign?
         public var preservation: Preservation
         public init(from decoder: Decoder) throws {
             var o = try ObjectReader(decoder)
@@ -593,7 +660,10 @@ public extension Canonical {
             jobTitle = try o.required("jobTitle"); lineItems = try o.required("lineItems")
             total = try o.required("total"); currency = try o.required("currency")
             options = try o.optional("options"); validUntil = try o.optional("validUntil")
-            validUntilTimeZone = try o.optional("validUntilTimeZone"); preservation = o.finish()
+            validUntilTimeZone = try o.optional("validUntilTimeZone")
+            scope = try o.optional("scope"); terms = try o.optional("terms")
+            businessContact = try o.optional("businessContact"); signature = try o.optional("signature")
+            esign = try o.optional("esign"); preservation = o.finish()
         }
         public func encode(to encoder: Encoder) throws {
             var o = ObjectWriter(preservation)
@@ -601,7 +671,10 @@ public extension Canonical {
             try o.put(jobTitle, for: "jobTitle"); try o.put(lineItems, for: "lineItems")
             try o.put(total, for: "total"); try o.put(currency, for: "currency")
             try o.putOptional(options, for: "options"); try o.putOptional(validUntil, for: "validUntil")
-            try o.putOptional(validUntilTimeZone, for: "validUntilTimeZone"); try o.encode(to: encoder)
+            try o.putOptional(validUntilTimeZone, for: "validUntilTimeZone")
+            try o.putOptional(scope, for: "scope"); try o.putOptional(terms, for: "terms")
+            try o.putOptional(businessContact, for: "businessContact"); try o.putOptional(signature, for: "signature")
+            try o.putOptional(esign, for: "esign"); try o.encode(to: encoder)
         }
     }
 
@@ -676,6 +749,12 @@ public extension Canonical {
         public var decision, signerName, declineReason, ip, userAgent: String?
         public var consentAt: DateString?
         public var selection: EstimateSelection?
+        /// Phase 19 (spec §3.5, §11.1 B): server-owned keys of an e-signed
+        /// approval — the sealed record's id and SHA-256 fingerprint, and
+        /// `typed` | `typed_drawn`. The device round-trips them and never
+        /// authors them. The opaque `signatureEvidence` stays in
+        /// `preservation`, verbatim.
+        public var signatureRecordId, recordDigest, signatureMethod: String?
         public var preservation: Preservation
         public init(from decoder: Decoder) throws {
             var o = try ObjectReader(decoder)
@@ -683,7 +762,9 @@ public extension Canonical {
             decision = try o.optional("decision"); consentAt = try o.optional("consentAt")
             signerName = try o.optional("signerName"); declineReason = try o.optional("declineReason")
             ip = try o.optional("ip"); userAgent = try o.optional("userAgent")
-            selection = try o.optional("selection"); preservation = o.finish()
+            selection = try o.optional("selection")
+            signatureRecordId = try o.optional("signatureRecordId"); recordDigest = try o.optional("recordDigest")
+            signatureMethod = try o.optional("signatureMethod"); preservation = o.finish()
         }
         public func encode(to encoder: Encoder) throws {
             var o = ObjectWriter(preservation)
@@ -691,7 +772,9 @@ public extension Canonical {
             try o.putOptional(decision, for: "decision"); try o.putOptional(consentAt, for: "consentAt")
             try o.putOptional(signerName, for: "signerName"); try o.putOptional(declineReason, for: "declineReason")
             try o.putOptional(ip, for: "ip"); try o.putOptional(userAgent, for: "userAgent")
-            try o.putOptional(selection, for: "selection"); try o.encode(to: encoder)
+            try o.putOptional(selection, for: "selection")
+            try o.putOptional(signatureRecordId, for: "signatureRecordId"); try o.putOptional(recordDigest, for: "recordDigest")
+            try o.putOptional(signatureMethod, for: "signatureMethod"); try o.encode(to: encoder)
         }
     }
 
@@ -1652,6 +1735,11 @@ public extension Canonical {
         public var reviewRequestDelayHours: Int
         /// Phase 32: integer 0…365. Absent = 30; 0 = estimates don't expire.
         public var estimateValidityDays: Int?
+        /// Phase 19 (spec §3.4, §3.7): the owner's own agreement terms
+        /// (≤ 4,000 characters; absent = none) and whether the signing page
+        /// offers the optional drawn signature (absent = on).
+        public var estimateTerms: String?
+        public var signatureDrawPad: Bool?
         public var preservation: Preservation
 
         public init(from decoder: Decoder) throws {
@@ -1684,6 +1772,7 @@ public extension Canonical {
             googleReviewLink = try o.defaulted("googleReviewLink", to: "")
             reviewRequestDelayHours = try o.defaulted("reviewRequestDelayHours", to: 3)
             estimateValidityDays = try o.optional("estimateValidityDays")
+            estimateTerms = try o.optional("estimateTerms"); signatureDrawPad = try o.optional("signatureDrawPad")
             preservation = o.finish()
         }
 
@@ -1713,6 +1802,7 @@ public extension Canonical {
             try o.putDefaulted(reviewRequestEnabled, for: "reviewRequestEnabled"); try o.putDefaulted(reviewRequestTemplate, for: "reviewRequestTemplate")
             try o.putDefaulted(googleReviewLink, for: "googleReviewLink"); try o.putDefaulted(reviewRequestDelayHours, for: "reviewRequestDelayHours")
             try o.putOptional(estimateValidityDays, for: "estimateValidityDays")
+            try o.putOptional(estimateTerms, for: "estimateTerms"); try o.putOptional(signatureDrawPad, for: "signatureDrawPad")
             try o.encode(to: encoder)
         }
     }

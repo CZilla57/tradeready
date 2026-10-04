@@ -21,7 +21,9 @@
 // is recorded, and the decision is written FIRST together with the
 // server-owned keys signatureRecordId / recordDigest / signatureMethod /
 // signatureEvidence. The sealed record is inserted after; a failure there
-// still answers 200 with `recordPending: true` (lazy re-seal on view/copy).
+// keeps the Worker-built record in signature_pending and still answers 200
+// with `recordPending: true` (lazy seal of that row on view/copy; never from
+// the job blob, spec §11.10).
 // Flags off → byte-for-byte the previous behavior.
 
 import { fetchJob, updateJobIfUnchanged, constantTimeEqual } from '../../../lib/estimateStore.js';
@@ -176,7 +178,13 @@ export async function estimateRespondHandler(c) {
 
     let signed = null;
     if (signing) {
-      if (trail === null) trail = await eventsAtSigning(c.env, tokenSha256(existing.token));
+      // This link's trail only (owner + job + token hash), so a token reused
+      // from another job never imports that job's views.
+      if (trail === null) {
+        trail = await eventsAtSigning(c.env, {
+          userId: row.user_id, jobId: String(jobId), changeOrderId: null, tokenHash: tokenSha256(existing.token),
+        });
+      }
       signed = signApproval(merged, {
         recordId,
         consent: sig.consent,
@@ -207,7 +215,8 @@ export async function estimateRespondHandler(c) {
       }
       if (decision === 'declined' && esignActive(c.env, existing.snapshot)) {
         await logEvent(c.env, {
-          userId: row.user_id, tokenHash: tokenSha256(existing.token), event: 'declined', ip: edgeIp, userAgent: meta.userAgent,
+          userId: row.user_id, jobId: String(jobId), changeOrderId: null, tokenHash: tokenSha256(existing.token),
+          event: 'declined', ip: edgeIp, userAgent: meta.userAgent,
         });
       }
       return ok(c, merged);

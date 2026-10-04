@@ -1376,13 +1376,13 @@ final class AppStore: ObservableObject {
             validUntil = date
         }
         do {
-            let reviewedSnapshot = try CanonicalUIAdapters.estimateApprovalSnapshot(
+            let reviewedSnapshot = try esignEstimateSnapshot(CanonicalUIAdapters.estimateApprovalSnapshot(
                 job: job,
                 customerName: customer?.name,
                 businessName: settings.businessName,
                 validUntil: validUntil,
                 validUntilTimeZone: validUntil == nil ? nil : TimeZone.current.identifier
-            )
+            ), job: job, timeZone: TimeZone.current.identifier)
             // A fresh date alone is not a revision (spec §6.1).
             if status == .lead,
                job.approval == nil,
@@ -1410,7 +1410,8 @@ final class AppStore: ObservableObject {
                 jobDescription: job.description
             )
         } catch {
-            migrationMessage = "The estimate could not be prepared. Nothing was changed."
+            migrationMessage = (error as? NativeESignature.SnapshotError)?.errorDescription
+                ?? "The estimate could not be prepared. Nothing was changed."
             return nil
         }
     }
@@ -2668,13 +2669,13 @@ final class AppStore: ObservableObject {
         )
         let currentReviewSnapshot: Canonical.EstimateApprovalSnapshot
         do {
-            currentReviewSnapshot = try CanonicalUIAdapters.estimateApprovalSnapshot(
+            currentReviewSnapshot = try esignEstimateSnapshot(CanonicalUIAdapters.estimateApprovalSnapshot(
                 job: currentJob,
                 customerName: currentCustomer?.name,
                 businessName: settings.businessName,
                 validUntil: review.snapshot.validUntil,
                 validUntilTimeZone: review.snapshot.validUntilTimeZone
-            )
+            ), job: currentJob, timeZone: review.snapshot.esign?.timeZone)
         } catch {
             return .preservedNewerState
         }
@@ -2789,13 +2790,13 @@ final class AppStore: ObservableObject {
         )
         let currentApprovalSnapshot: Canonical.EstimateApprovalSnapshot
         do {
-            currentApprovalSnapshot = try CanonicalUIAdapters.estimateApprovalSnapshot(
+            currentApprovalSnapshot = try esignEstimateSnapshot(CanonicalUIAdapters.estimateApprovalSnapshot(
                 job: currentJob,
                 customerName: currentCustomer?.name,
                 businessName: settings.businessName,
                 validUntil: review.snapshot.validUntil,
                 validUntilTimeZone: review.snapshot.validUntilTimeZone
-            )
+            ), job: currentJob, timeZone: review.snapshot.esign?.timeZone)
         } catch {
             return .failure(.estimateChanged)
         }
@@ -3007,13 +3008,13 @@ final class AppStore: ObservableObject {
         )
         let rebuilt: Canonical.EstimateApprovalSnapshot
         do {
-            rebuilt = try CanonicalUIAdapters.estimateApprovalSnapshot(
+            rebuilt = try esignEstimateSnapshot(CanonicalUIAdapters.estimateApprovalSnapshot(
                 job: current,
                 customerName: customer?.name,
                 businessName: settings.businessName,
                 validUntil: validUntil,
                 validUntilTimeZone: validUntil == nil ? nil : TimeZone.current.identifier
-            )
+            ), job: current, timeZone: TimeZone.current.identifier)
         } catch {
             return .failure(.pricingChanged)
         }
@@ -3094,12 +3095,12 @@ final class AppStore: ObservableObject {
             customerID: job.customerId,
             customerName: job.customerName
         )
-        guard let frozen = try? NativeChangeOrderApprovalSnapshot.build(
+        guard let frozen = try? esignChangeOrderSnapshot(NativeChangeOrderApprovalSnapshot.build(
             order: order,
             job: job,
             customerName: customer?.name,
             businessName: settings.businessName
-        ) else { return nil }
+        ), order: order, timeZone: TimeZone.current.identifier) else { return nil }
         return NativeChangeOrderApprovalDraft(jobID: jobID, changeOrderID: changeOrderID, snapshot: frozen)
     }
 
@@ -3153,12 +3154,13 @@ final class AppStore: ObservableObject {
             customerID: currentJob.customerId,
             customerName: currentJob.customerName
         )
-        guard let currentSnapshot = try? NativeChangeOrderApprovalSnapshot.build(
+        guard let currentSnapshot = try? esignChangeOrderSnapshot(NativeChangeOrderApprovalSnapshot.build(
             order: currentOrder,
             job: currentJob,
             customerName: currentCustomer?.name,
             businessName: settings.businessName
-        ), CanonicalUIAdapters.estimateApprovalSnapshotsMatch(currentSnapshot, draft.snapshot)
+        ), order: currentOrder, timeZone: draft.snapshot.esign?.timeZone),
+              CanonicalUIAdapters.estimateApprovalSnapshotsMatch(currentSnapshot, draft.snapshot)
         else { return .failure(.changeOrderStale) }
 
         func request(_ credentials: NativeSyncCredentials) async throws -> NativeChangeOrderApprovalLink {
@@ -9721,6 +9723,12 @@ final class AppStore: ObservableObject {
         ) else { return nil }
         return NativeChangeOrderApprovalLinkService(endpoint: endpoint)
     }
+
+    // Phase 19 seam for `NativeESignatureStore.swift`: a test transport and the owner session.
+    var esignRecordServiceOverride: (any NativeESignatureRecordFetching)?
+    var esignOwnerSubject: String? { authenticatedUserSubject }
+    func esignOwnerCredentials() -> NativeSyncCredentials? { currentSyncCredentials() }
+    func esignRefreshOwnerSession() async -> Bool { await refreshSyncSession() }
 
     /// Records that the initial sync finished for `subject` and, exactly once per
     /// account, enqueues every local record that entered the snapshot via legacy

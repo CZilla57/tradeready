@@ -1,11 +1,12 @@
 // The canonical signature record (spec §3.5, record version 1). Pure.
 //
-// ONE builder, recordFromApproval, serves both the first seal in respond and
-// the lazy re-seal in view / copy / the owner route: everything the record
-// holds is read from the stored approval (decision keys, frozen snapshot and
-// the server-owned `signatureEvidence`), so a re-seal reproduces the same
-// record and the same digest byte for byte. recordDigest = SHA-256 of
-// quoteOptions.canonicalJson(record), the encoding the snapshot digest uses.
+// ONE builder, recordFromApproval, used by respond / change-respond (via
+// signApproval) on the approval the Worker itself just merged from validated
+// inputs. It is never run on an approval read back from the job blob: the
+// owner can write that blob, so a lazy seal uses only the record the Worker
+// stored in `signature_pending` at signing time (service.js, spec §11.10).
+// recordDigest = SHA-256 of quoteOptions.canonicalJson(record), the encoding
+// the snapshot digest uses.
 //
 // Additions to the §3.5 shape, decided at build time (spec §11.3):
 //   - consent.text: the exact disclosure rendering that consent.textSha256
@@ -67,7 +68,8 @@ function eventsForRecord(rows) {
     : { type: r.event, at, ip: typeof r.ip === 'string' && r.ip ? r.ip : null }));
 }
 
-// The server-owned approval key that lets the record be rebuilt later.
+// The server-owned approval key: an informational, unsealed copy of the
+// signing inputs for the owner app. Never an input to a seal.
 function buildEvidence({ consentVersion = null, drawn = null, email = null, events = [] }) {
   return {
     v: EVIDENCE_VERSION,

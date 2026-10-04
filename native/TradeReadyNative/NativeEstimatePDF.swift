@@ -57,6 +57,10 @@ struct NativeEstimatePDFDocument: Equatable, Sendable {
     let issueDate: String
     /// Phase 32: inclusive `YYYY-MM-DD`, or `nil` when the estimate doesn't expire.
     let validUntil: String?
+    /// Phase 19 (spec 2026-10-03 §3.4, §3.7): the owner's agreement terms
+    /// frozen in the reviewed snapshot (`snapshot.terms`), so the PDF shows
+    /// the same terms the customer signs online. Empty when there are none.
+    let terms: String
 
     /// "Nov 2, 2026" for the header's "Valid until" line; `nil` when undated.
     var validUntilDisplay: String? {
@@ -107,6 +111,7 @@ struct NativeEstimatePDFDocument: Equatable, Sendable {
         } ?? []
         currency = review.snapshot.currency
         validUntil = review.snapshot.validUntil
+        terms = review.snapshot.terms?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US")
@@ -421,13 +426,15 @@ enum NativeEstimatePDFRenderer {
                 y += 28
             }
 
-            if !document.jobDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                var remaining = document.jobDescription
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                var firstScopePage = true
+            /// A titled text block that continues across pages (scope of
+            /// work; Phase 19's agreement terms).
+            func drawTextBlock(_ title: String, _ text: String) {
+                var remaining = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !remaining.isEmpty else { return }
+                var firstPage = true
                 while !remaining.isEmpty {
                     require(52)
-                    _ = draw(firstScopePage ? "SCOPE OF WORK" : "SCOPE OF WORK — CONTINUED",
+                    _ = draw(firstPage ? title : "\(title) — CONTINUED",
                              x: margin, y: y, width: 280,
                              font: .systemFont(ofSize: 10, weight: .bold), color: secondary,
                              characterSpacing: 1)
@@ -443,11 +450,14 @@ enum NativeEstimatePDFRenderer {
                               width: page.width - margin * 2,
                               font: .systemFont(ofSize: 11), color: ink)
                     remaining = split.remainder
-                    firstScopePage = false
+                    firstPage = false
                     if !remaining.isEmpty { beginPage(continued: true) }
                 }
                 y += 22
             }
+
+            drawTextBlock("SCOPE OF WORK", document.jobDescription)
+            drawTextBlock("TERMS", document.terms)
 
             require(50)
             _ = draw(document.closingNote,

@@ -382,6 +382,11 @@ struct BusinessSettings: Codable, Hashable {
     /// Phase 32: days a new estimate stays valid after it is sent (0…365;
     /// 0 = estimates don't expire). Canonical absent reads as 30.
     var estimateValidityDays = 30
+    /// Phase 19: the owner's own agreement terms on estimates ("" = none)
+    /// and whether customers may add a drawn signature. Canonical absent
+    /// reads as "" and on.
+    var estimateTerms = ""
+    var signatureDrawPad = true
     var appearance: Appearance = .system
 
     init(
@@ -437,6 +442,8 @@ struct BusinessSettings: Codable, Hashable {
         reviewRequestDelayHours = try c.decodeIfPresent(Int.self, forKey: .reviewRequestDelayHours) ?? reviewRequestDelayHours
         reviewRequestTemplate = try c.decodeIfPresent(String.self, forKey: .reviewRequestTemplate) ?? reviewRequestTemplate
         estimateValidityDays = try c.decodeIfPresent(Int.self, forKey: .estimateValidityDays) ?? estimateValidityDays
+        estimateTerms = try c.decodeIfPresent(String.self, forKey: .estimateTerms) ?? estimateTerms
+        signatureDrawPad = try c.decodeIfPresent(Bool.self, forKey: .signatureDrawPad) ?? signatureDrawPad
         appearance = try c.decodeIfPresent(Appearance.self, forKey: .appearance) ?? appearance
         paymentProvider = try c.decodeIfPresent(String.self, forKey: .paymentProvider) ?? paymentProvider
         paymentProviderKey = try c.decodeIfPresent(String.self, forKey: .paymentProviderKey) ?? paymentProviderKey

@@ -16,6 +16,11 @@
 #
 # Phase 12 (12.00b.2-L): `NativeBookingOwnerResponses.swift` extends AppStore
 # (the owner-response outcomes and their notices), so it follows AppStore.swift.
+#
+# Phase 19 (e-signatures): AppStore builds every approval snapshot through
+# `NativeESignatureStore.swift` (an AppStore extension, after AppStore.swift),
+# which needs the pure `Domain/NativeESignature.swift` and the signed-record
+# transport `NativeESignatureTransport.swift`.
 APPSTORE_TEST_SOURCES="
 $ROOT_DIR/native/HostTestSupport/HostInMemoryKeychain.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/FinancialDomain.swift
@@ -36,6 +41,7 @@ $ROOT_DIR/native/TradeReadyNative/Domain/NativeAppRatingPrompt.swift
 $ROOT_DIR/native/TradeReadyNative/NativeStripeConnect.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/UIModelAdapters.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeQuoteOptions.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeESignature.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeRecurringJobs.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeRecurringInvoices.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeSchedule.swift
@@ -75,6 +81,7 @@ $ROOT_DIR/native/TradeReadyNative/NativeJobPhotoTransfer.swift
 $ROOT_DIR/native/TradeReadyNative/NativeJobPhotoImport.swift
 $ROOT_DIR/native/TradeReadyNative/NativeEstimateApprovalLink.swift
 $ROOT_DIR/native/TradeReadyNative/NativeChangeOrderApprovalLink.swift
+$ROOT_DIR/native/TradeReadyNative/NativeESignatureTransport.swift
 $ROOT_DIR/native/TradeReadyNative/NativeJobProfitability.swift
 $ROOT_DIR/native/TradeReadyNative/NativeTimeTracking.swift
 $ROOT_DIR/native/TradeReadyNative/NativeReviewRequests.swift
@@ -149,4 +156,5 @@ $ROOT_DIR/native/TradeReadyNative/NativeSupportDiagnostics.swift
 $ROOT_DIR/native/TradeReadyNative/NativeRunMarker.swift
 $ROOT_DIR/native/TradeReadyNative/AppStore.swift
 $ROOT_DIR/native/TradeReadyNative/NativeBookingOwnerResponses.swift
+$ROOT_DIR/native/TradeReadyNative/NativeESignatureStore.swift
 "

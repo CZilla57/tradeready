@@ -15,7 +15,7 @@ import { esignActive } from '../../../lib/esign/flags.js';
 import { edgeClientIp } from '../../../lib/esign/ip.js';
 import { signingTexts } from '../../../lib/esign/texts.js';
 import { tokenSha256 } from '../../../lib/esign/record.js';
-import { afterResponse, ensureRecord, logViewCapped, signedViewOf } from '../../../lib/esign/service.js';
+import { afterResponse, logViewCapped, signedViewForLink } from '../../../lib/esign/service.js';
 
 const allow = createRateLimiter({ limit: 30 });
 
@@ -69,17 +69,15 @@ export async function estimateViewHandler(c) {
   const active = esignActive(c.env, a.snapshot);
   if (active && a.decision !== 'approved') body.esign = signingTexts(a.snapshot, 'estimate');
   // The signed view (any e-signed approval, flag on or off, so a rollback
-  // keeps copies reachable). Lazily seals a record whose insert failed.
-  const signed = a.decision === 'approved'
-    ? signedViewOf(a, await ensureRecord(c.env, {
-      userId: row.user_id, jobId: String(jobId), documentType: 'estimate', approval: a,
-    }))
-    : null;
+  // keeps copies reachable), from the Worker-held record or pending
+  // signature of this link — never from the blob, which the owner can write
+  // (spec §11.10). Lazily seals a pending signature.
+  const link = { userId: row.user_id, jobId: String(jobId), changeOrderId: null, tokenHash: tokenSha256(a.token) };
+  const signed = await signedViewForLink(c.env, a, link);
   if (signed) body.signed = signed;
   if (active) {
     afterResponse(c, logViewCapped(c.env, {
-      userId: row.user_id,
-      tokenHash: tokenSha256(a.token),
+      ...link,
       ip: edgeClientIp(c),
       userAgent: String(c.req.header('user-agent') || '').slice(0, 300),
     }));

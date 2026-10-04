@@ -26,6 +26,7 @@ struct NativeChangeOrdersSection: View {
             Section("Change orders") {
                 ForEach(state.rows) { row in
                     rowView(row)
+                    NativeChangeOrderEvidenceRows(jobID: jobID, changeOrderID: row.id) // Phase 19
                 }
                 if state.canAdd {
                     Button {
@@ -178,7 +179,8 @@ struct NativeChangeOrdersSection: View {
 
     private func openApprovalReview(for row: NativeChangeOrderRow) {
         guard let draft = store.changeOrderApprovalDraft(jobID: jobID, changeOrderID: row.id) else {
-            errorMessage = "This change is no longer pending. Refresh the job and review its current status."
+            errorMessage = store.changeOrderESignProblem(jobID: jobID, changeOrderID: row.id)
+                ?? "This change is no longer pending. Refresh the job and review its current status."
             return
         }
         approvalReview = NativeChangeOrderReviewDraft(draft: draft, store: store)

@@ -4,14 +4,16 @@
 # Proves supabase/migrations/20261003_esign_records.sql (Phase 19) on a
 # THROWAWAY local PostgreSQL: it applies (twice), the project verify script
 # (migrations/verify/20261003_esign_records_verify.sql) passes, and a REAL
-# auth.users delete cascades through signature_records and signature_events —
+# auth.users delete cascades through signature_records, signature_pending and
+# signature_events —
 # the account-deletion path (decision 19-Q6). A negative control first shows
 # the verify script failing on a database without the migration.
 #
 # bootstrap.sql only imitates the hosted project. This does NOT replace
 # applying the migration to the project and running the verify script there.
 #
-# Usage:  sh supabase/verify/esign_records.sh   (needs PostgreSQL 14+ on PATH)
+# Usage:  sh supabase/verify/esign_records.sh   (needs PostgreSQL 15+ on PATH:
+#         the per-link unique constraints use NULLS NOT DISTINCT)
 # Own cluster on port 54331 (override with PGPORT_SCRATCH), removed at exit.
 # Never point it at a real database.
 
@@ -63,7 +65,7 @@ if pq -f "$VERIFY" >"$TMP/out" 2>&1; then
 else
   bad "verify script failed: $(grep -m2 ERROR "$TMP/out")"
 fi
-eq "verify script rolled back (no rows left)" "$(pq -c "select count(*) from public.signature_records")" "0"
+eq "verify script rolled back (no rows left)" "$(pq -c "select (select count(*) from public.signature_records) + (select count(*) from public.signature_pending) + (select count(*) from public.signature_events)")" "0"
 
 echo "== account deletion: a real auth.users delete cascades"
 OTHER=22222222-2222-2222-2222-222222222222
@@ -72,8 +74,11 @@ pq -q >/dev/null <<SQL
 insert into public.signature_records (id, user_id, approval_token_sha256, job_id, document_type, record, record_digest, seal_key_id, seal, signed_at)
 values (gen_random_uuid(), '$OWNER', repeat('1', 64), 'j1', 'estimate', '{}', repeat('2', 64), 'k', 's', now()),
        (gen_random_uuid(), '$OTHER', repeat('3', 64), 'j2', 'estimate', '{}', repeat('4', 64), 'k', 's', now());
-insert into public.signature_events (user_id, approval_token_sha256, event)
-values ('$OWNER', repeat('1', 64), 'viewed'), ('$OWNER', repeat('1', 64), 'signed'), ('$OTHER', repeat('3', 64), 'viewed');
+insert into public.signature_pending (id, user_id, approval_token_sha256, job_id, document_type, record, record_digest, signed_at)
+values (gen_random_uuid(), '$OWNER', repeat('5', 64), 'j3', 'estimate', '{}', repeat('6', 64), now()),
+       (gen_random_uuid(), '$OTHER', repeat('7', 64), 'j4', 'estimate', '{}', repeat('8', 64), now());
+insert into public.signature_events (user_id, job_id, approval_token_sha256, event)
+values ('$OWNER', 'j1', repeat('1', 64), 'viewed'), ('$OWNER', 'j1', repeat('1', 64), 'signed'), ('$OTHER', 'j2', repeat('3', 64), 'viewed');
 SQL
 if pq -q -c "delete from public.signature_records where user_id = '$OWNER'" >/dev/null 2>&1; then
   ok "a direct delete is possible for the table owner (no delete trigger, so the cascade can run)"
@@ -86,8 +91,9 @@ else
 fi
 if pq -q -c "delete from auth.users where id = '$OWNER'" >/dev/null 2>"$TMP/err"; then ok "deleting the auth user succeeds"; else bad "auth user delete failed: $(head -2 "$TMP/err")"; fi
 eq "the owner's records are gone" "$(pq -c "select count(*) from public.signature_records where user_id = '$OWNER'")" "0"
+eq "the owner's pending signatures are gone" "$(pq -c "select count(*) from public.signature_pending where user_id = '$OWNER'")" "0"
 eq "the owner's events are gone" "$(pq -c "select count(*) from public.signature_events where user_id = '$OWNER'")" "0"
-eq "another owner's evidence is untouched" "$(pq -c "select (select count(*) from public.signature_records) || '/' || (select count(*) from public.signature_events)")" "1/1"
+eq "another owner's evidence is untouched" "$(pq -c "select (select count(*) from public.signature_records) || '/' || (select count(*) from public.signature_pending) || '/' || (select count(*) from public.signature_events)")" "1/1/1"
 
 echo
 echo "passed $PASS, failed $FAIL"

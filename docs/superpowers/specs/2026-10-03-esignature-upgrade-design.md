@@ -169,7 +169,7 @@ New `backend-workers/lib/esign/`, made of pure modules plus thin stores:
 1. Validate the payload: `consent.accepted === true`, `consent.version` is a known version, plus name, drawing and email. Return 400 with a message on failure.
 2. Run today's checks unchanged: token, digest (409), expiry (410), selection.
 3. Write the decision as today with the conditional job write, adding the server-owned keys `signatureRecordId` (pre-minted UUID), `recordDigest` and `signatureMethod`. `ip` becomes `edgeClientIp`. **The decision is authoritative and is written first.**
-4. Build, seal and insert the record (unique on `approvalTokenSha256`). If this fails, the response is still 200 with `recordPending: true`, and the next `view` or `copy` call **lazily seals** from the stored approval. Sealing is idempotent by token hash, the portal-token backfill pattern.
+4. Build, seal and insert the record (unique per link: `approval_token_sha256` + `job_id` + `change_order_id`). The record is built in this request from the Worker-validated inputs. If the seal or the insert fails, the same request stores the built record and its digest in the service-role-only `signature_pending` table (§4), answers 200 with `recordPending: true`, and the next `view`, `copy` or owner fetch **lazily seals from that pending row**. A lazy seal never reads the job blob: the owner's JWT can write `jobs.data.approval`, so a self-consistent forged approval there must never become a sealed "customer signature" (§11.10). If the pending row cannot be stored either, the decision stands but nothing is ever sealed for it and the signed view, copy and owner route answer "not signed". Sealing is idempotent per link, the portal-token backfill pattern.
 5. If an email was given, use `executionCtx.waitUntil` to send the copy (Resend, PDF attached, `from: "{business} via TradeReady"`). Log `copy_emailed` or `copy_email_failed`.
 6. Return `{ok, decision, consentAt, selection?, recordId, recordDigest}`.
 
@@ -178,12 +178,12 @@ New `backend-workers/lib/esign/`, made of pure modules plus thin stores:
 **`changeRespond`** takes the same path, with `documentType: "change_order"`.
 
 **New routes**
-- `GET /api/esign/copy?j=&t=[&c=]&format=pdf|json` is token-gated, with the same CORS as estimate routes. It resolves through `signature_records` by token hash, so it **works after the job is deleted**. It serves the deterministic PDF, or the canonical record JSON for independent verification, and logs `copy_downloaded`.
+- `GET /api/esign/copy?j=&t=[&c=]&format=pdf|json` is token-gated, with the same CORS as estimate routes. It resolves through `signature_records` (then `signature_pending`) by token hash, job id and change-order id, never through the job, so it **works after the job is deleted**. It serves the deterministic PDF, or the canonical record JSON for independent verification, and logs `copy_downloaded`.
 - `GET /api/esign/preview?j=&t=` returns the unsigned PDF of the current snapshot (shown before signing).
 - `GET /api/esign/verify?r=<recordId>&d=<digest>` is public and rate-limited. It returns `{valid, signedAt, documentType, keyId}` and no names or amounts. `GET /api/esign/public-keys` returns the published Ed25519 public keys by id.
 - `POST /api/esign/record` (owner JWT, `appCors`) takes `{jobId, changeOrderId?}` and returns the record JSON and PDF (base64) for the owner app, scoped by `user_id`.
 
-**Events.** `create-link` logs `link_created` with the owner's id as actor. `view` logs `viewed` (the first 20 per token, trusted IP, UA). Both are best-effort inserts and never fail the route, following the `logPortalEvent` precedent.
+**Events.** `create-link` logs `link_created` with the owner's id as actor. `view` logs `viewed` (the first 20 per link, trusted IP, UA). Both are best-effort inserts and never fail the route, following the `logPortalEvent` precedent. Every event row names its owner, job and change order, and every read (the trail sealed at signing, the view cap, the owner's live log) filters on all of them plus the token hash, so a token reused on another job or by another owner never imports that link's trail.
 
 ### 3.6 Signed copy (PDF, no dependency)
 
@@ -219,7 +219,7 @@ New `backend-workers/lib/esign/`, made of pure modules plus thin stores:
 
 ### 3.8 Retention
 
-- `signature_records` and `signature_events` live for the life of the owner's account. They cascade on `auth.users` delete, which matches the current privacy policy (`tradeready-legal/privacy.html:153`).
+- `signature_records`, `signature_pending` and `signature_events` live for the life of the owner's account. They cascade on `auth.users` delete, which matches the current privacy policy (`tradeready-legal/privacy.html:153`).
 - They are independent of job edits, re-sends and soft deletes. The approval-preserve gap (§0) no longer threatens the evidence, because the evidence is no longer in the blob.
 - Keeping records after account deletion would need a privacy-policy change (Q6).
 
@@ -229,9 +229,9 @@ New `backend-workers/lib/esign/`, made of pure modules plus thin stores:
 create table public.signature_records (
   id                     uuid primary key,
   user_id                uuid not null references auth.users(id) on delete cascade,
-  approval_token_sha256  text not null unique,
+  approval_token_sha256  text not null,
   job_id                 text not null,
-  change_order_id        text,
+  change_order_id        text,                    -- null for the estimate; set iff document_type = 'change_order'
   document_type          text not null check (document_type in ('estimate','change_order')),
   record                 jsonb not null,          -- canonical record (§3.5)
   record_digest          text not null,           -- sha256 hex of canonicalJson(record)
@@ -239,26 +239,46 @@ create table public.signature_records (
   seal_key_id            text not null,
   seal                   text not null,           -- base64 signature over record_digest bytes
   signed_at              timestamptz not null,
-  created_at             timestamptz not null default now()
+  created_at             timestamptz not null default now(),
+  unique nulls not distinct (approval_token_sha256, job_id, change_order_id)   -- one record per link
 );
 create index signature_records_owner_job on public.signature_records (user_id, job_id);
+
+-- Worker-captured evidence of a signature whose first seal or insert failed:
+-- the record built at signing time, waiting to be sealed. Service role only.
+create table public.signature_pending (
+  id                     uuid primary key,        -- the record id the signature was given
+  user_id                uuid not null references auth.users(id) on delete cascade,
+  approval_token_sha256  text not null,
+  job_id                 text not null,
+  change_order_id        text,
+  document_type          text not null check (document_type in ('estimate','change_order')),
+  record                 jsonb not null,
+  record_digest          text not null,
+  signed_at              timestamptz not null,
+  created_at             timestamptz not null default now(),
+  unique nulls not distinct (approval_token_sha256, job_id, change_order_id)
+);
 
 create table public.signature_events (
   id                    bigint generated always as identity primary key,
   user_id               uuid not null references auth.users(id) on delete cascade,
+  job_id                text not null,
+  change_order_id       text,
   approval_token_sha256 text not null,
   event                 text not null,  -- link_created|viewed|declined|signed|copy_emailed|copy_email_failed|copy_downloaded
   ip                    text,
   user_agent            text,
   created_at            timestamptz not null default now()
 );
-create index signature_events_token on public.signature_events (approval_token_sha256, created_at);
+create index signature_events_link on public.signature_events (approval_token_sha256, job_id, created_at);
 ```
 
-- **Immutability.** A `before update` trigger on `signature_records` raises an exception. There is no `before delete` trigger, because one would block the account-deletion cascade. Deletes are possible only for the service role and the cascade: there is no client grant or policy for writes.
-- **RLS:** owner `select` on both tables, with no client insert, update or delete.
+- **Binding.** A link is (owner, job, change order, token hash). Records and pending rows are unique per (token hash, job, change order) (`nulls not distinct`, PostgreSQL 15+), so another owner who learns a token cannot take its record slot by signing on their own job first; `jobs.id` is a global key, so the job id also fixes the owner. Every lookup filters on job and change order (and on `user_id` wherever the Worker knows it).
+- **Immutability.** A `before update` trigger on all three tables raises an exception. There is no `before delete` trigger, because one would block the account-deletion cascade. Deletes are possible only for the service role and the cascade: there is no client grant or policy for writes. A pending row stays after its record is sealed (lookups read the record first).
+- **RLS:** owner `select` on `signature_records` and `signature_events`, with no client insert, update or delete. `signature_pending` has RLS on, no policy and no client grant at all: only the Worker reads or writes it, so the owner role can never author the evidence a seal is made from.
 - **Approval-preserve trigger:** `create or replace function public.preserve_job_approvals()` with `signatureRecordId`, `recordDigest` and `signatureMethod` added to both `server_keys` and `frozen_keys` (`20261002_job_approval_preserve.sql:108-116`). Nothing else changes, and the existing verify script gains cases for them.
-- **Verify script:** `supabase/migrations/verify/20261003_esign_records_verify.sql` checks RLS, that an update raises, and that the cascade delete works.
+- **Verify script:** `supabase/migrations/verify/20261003_esign_records_verify.sql` checks RLS, that an update raises, the per-link uniqueness, that `signature_pending` has no client access, and that the cascade delete works.
 
 ## 5. Interactions
 
@@ -282,7 +302,7 @@ create index signature_events_token on public.signature_events (approval_token_s
 - **Routes** (root Jest under `TZ=America/Phoenix`, stubbed fetch):
   - Approve with consent writes the decision, then the record. Without consent: 400 when the flag is on.
   - Record-insert failure gives 200 with `recordPending`, then a lazy seal on the next `view`.
-  - Double approve stays on the terminal lock with no second record (unique token hash). Decline logs an event and no record.
+  - Double approve stays on the terminal lock with no second record (unique per link). An owner-authored approval is never sealed, a lazy seal reads only `signature_pending`, and lookups are bound to owner, job and change order (§11.10). Decline logs an event and no record.
   - `copy` works after a job soft-delete. `verify` returns no PII.
   - The email copy is sent only with an email, and a send failure never fails respond.
   - Change orders reach parity.
@@ -339,6 +359,7 @@ Rollback: turn `ESIGN_V2` off. Records already sealed stay valid and downloadabl
 - **WinAnsi limits** in PDF text (the exact text stays in the sealed JSON).
 - **No legal notices are generated** (Cooling-Off cancellation forms, state-specific contract terms). Those are the owner's responsibility, and the claims list says so.
 - **The XFF-first `clientIp`** stays on the non-signature routes (see the Phase 23 spec §12).
+- **A signature whose evidence could not be stored at all** stays unsigned (the decision stands, nothing is sealed from the owner-writable blob; §11.10).
 
 ## 10. Decisions
 
@@ -402,7 +423,7 @@ New `create-link` 400 messages (body `{error}`, same convention as options/valid
 | `signatureRecordId` | string (UUID v4, lowercase) | Id of the sealed record in `signature_records`. |
 | `recordDigest` | string (64 lowercase hex) | SHA-256 of the canonical record JSON (the "fingerprint"). |
 | `signatureMethod` | `"typed"` \| `"typed_drawn"` | |
-| `signatureEvidence` | object, **opaque** | The inputs the Worker needs to rebuild and seal the record if the first insert failed: `{v: 1, consentVersion: 1 \| null, drawn: {w, h, strokes} \| null, email: String \| null, events: [{type, at, ip?, actor?}]}`. Up to ~27 KB. Preserve it verbatim (the canonical `Preservation` round-trip does this). The drawn mark may be rendered from `signatureEvidence.drawn` offline; the authoritative copy is `POST /api/esign/record`. |
+| `signatureEvidence` | object, **opaque** | An unsealed, informational copy of the signing inputs: `{v: 1, consentVersion: 1 \| null, drawn: {w, h, strokes} \| null, email: String \| null, events: [{type, at, ip?, actor?}]}`. Up to ~27 KB. Preserve it verbatim (the canonical `Preservation` round-trip does this). The drawn mark may be rendered from `signatureEvidence.drawn` offline; the authoritative copy is `POST /api/esign/record`. The Worker never seals from it (§11.10). |
 
 `approval.ip` is now the edge address (`cf-connecting-ip`) on e-signed approvals and may be JSON `null` (local runs without the edge). The approval-preserve trigger freezes all four keys once approved (migration `20261003_esign_records.sql`). An approval **without** `signatureRecordId` is a legacy typed-name approval ("Typed-name approval (before audit trail)").
 
@@ -437,11 +458,11 @@ Errors (all JSON `{error, code}`):
 |---|---|---|
 | 400 | `invalid_request` | missing/oversized `jobId`, non-string `changeOrderId`/`recordId` |
 | 401 | `unauthorized` | no/invalid bearer token |
-| 404 | `record_not_found` | no signed record for that job/change order (legacy approval, declined, not signed, other owner's job) |
+| 404 | `record_not_found` | no Worker-held signature for that job/change order (legacy approval, declined, not signed, other owner's job, or an approval in the job blob that the Worker never captured) |
 | 405 | — | not POST (`{error: 'Method not allowed'}`) |
 | 429 | `rate_limited` | 30 requests/min per user |
 | 500 | `server_error` | Supabase misconfigured or unreachable |
-| 503 | `record_pending` | the approval says it was signed but the record could not be sealed yet (seal key not configured, or the database is unreachable); retry later |
+| 503 | `record_pending` | the Worker holds the signature (`signature_pending`) but could not seal it yet (seal key not configured, or the database is unreachable); retry later |
 
 **D. Public routes (pages only; listed so the app knows they exist).** `GET /api/esign/copy?j=&t=[&c=]&format=pdf|json` (signer copy, token-gated, works after job deletion), `GET /api/esign/preview?j=&t=[&c=]` (unsigned PDF), `GET /api/esign/verify?r=&d=` (public, no PII), `GET /api/esign/public-keys`. The app does not call these; a customer-facing "verify" link is `https://gettradereadyapp.com/verify?r=<recordId>&d=<recordDigest>`.
 
@@ -460,9 +481,9 @@ Worker (`backend-workers/`, all CommonJS libs + ESM routes, no new dependency):
 | `lib/esign/record.js` | `recordFromApproval` (the one record builder), `signApproval`, `recordDigest`, `eventsForRecord`, `signatureEvidence` |
 | `lib/esign/seal.js` | Ed25519 seal/verify over the digest bytes (WebCrypto), `publicKeys()`, refuses to seal unless the private key matches the published public key |
 | `lib/esign/pdf.js`, `lib/esign/pdfFontMetrics.js` | Deterministic PDF 1.4 writer, renderer `pdf-v1`: document pages + signature certificate, drawn strokes as paths, WinAnsi with `?` fallback |
-| `lib/esign/store.js` | Insert-only `signature_records` (ignore-duplicates on the token hash) and best-effort `signature_events`; logged errors carry status + PostgREST code only |
+| `lib/esign/store.js` | Insert-only `signature_records` and `signature_pending` (ignore-duplicates per link: token hash + job + change order) and best-effort `signature_events` bound to owner + job + change order; logged errors carry status + PostgREST code only |
 | `lib/esign/copyEmail.js` | The signer copy email (Resend payload, PDF attached, hardened headers) |
-| `lib/esign/service.js` | Orchestration: `sealAndStore`, lazy `ensureRecord`, `finishSigning`, `sendCopyEmail`, capped view logging, `approvalForLink`, the page's `signed` block |
+| `lib/esign/service.js` | Orchestration: `sealAndStore`, `finishSigning` (stores the pending row when sealing fails), lazy `ensureRecord` (record, else seal the pending row; never the job), `sendCopyEmail`, capped view logging, `approvalForLink`, the page's `signed` block (from the record or pending row) |
 | `src/routes/estimate/respond.js`, `changeRespond.js` | The e-signature approve path (decision first, then seal + insert, `signed` event, email via `waitUntil`); declines log `declined`; change orders use the conditional write on this path |
 | `src/routes/estimate/view.js`, `changeView.js` | `esign` signing texts, `signed` view with lazy re-seal, capped `viewed` events; change-view also returns `snapshotDigest` under `ESIGN_V2` |
 | `src/routes/estimate/createLink.js` | Validates the §3.4 additions; logs `link_created` |
@@ -479,7 +500,7 @@ Pages (`tradeready-legal`, uncommitted): `esign.js` (new), `verify.html` (new), 
 
 1. **One source for the legal text.** The Worker renders the disclosure, checkbox label and intent statement and sends them in `view` / `change-view`; the pages display exactly that and the record hashes exactly that (§3.2's "constant shared by the page and the Worker", made literal). A page can't drift from the hashed text.
 2. **Wording variants** (all in the lawyer review, Q2/Q3): change orders swap "estimate" for "change order", and the scope line reads "this agreement covers this change order and any other change orders to this job."; with the owner's pad turned off the intent statement drops the drawing clause ("Your typed name is your signature."); with no business phone/email the paper-copy line ends after "at no charge.".
-3. **A fourth server-owned approval key, `signatureEvidence`** (`{v, consentVersion, drawn, email, events}`). The lazy re-seal (§3.5 step 4) has to rebuild the identical record from the stored approval, and the drawing, email, consent version and event trail are not otherwise in it. It is frozen by the preserve trigger with the spec's three keys.
+3. **A fourth server-owned approval key, `signatureEvidence`** (`{v, consentVersion, drawn, email, events}`), frozen by the preserve trigger with the spec's three keys. It is an informational copy for the owner app (offline drawn mark, trail) and is **never** an input to a seal. *Superseded 2026-10-03 (§11.10):* it was first introduced so the lazy re-seal could rebuild the record from the stored approval; lazy sealing now reads only the Worker-held `signature_pending` row.
 4. **Record additions**: `consent.text` (the exact disclosure rendering, so the record is self-contained); `consent` and `intent` are `null` when an old page signed (nothing was shown); `events` holds the trail *before* signing (`link_created` with `actor: "owner"` and no owner IP, `viewed`, `declined`; capped at 50), and the signing itself is `signedAt` + `ip`. The certificate prints it as the last trail row.
 5. **Seal**: the message is the 32 raw bytes of the record digest. A new public var **`ESIGN_SEAL_PUBLIC_KEYS`** (JSON `{keyId: base64 raw key}`) holds every key ever used, for `verify`, `public-keys` and rotation; a seal is only produced when the private key verifies against its published key.
 6. **Digest on signing**: a consenting signature must echo the snapshot digest (409 otherwise) for estimates and change orders, so the sealed document is the one on screen. Change orders on the e-signature path write with the conditional write (re-read on conflict) so two racing approvals can't seal two records; the legacy path keeps its upsert.
@@ -571,3 +592,17 @@ Rollback: set `ESIGN_V2` off and deploy; sealed records stay downloadable and ve
 - `portal.html` needed no change and was not touched.
 - No PAdES/Adobe-trusted PDF signature (§9); the sealed JSON and published key are the integrity mechanism.
 - The change-order page's "job total before/after" context is live, informational and not part of the sealed document; the signed amount is the change order's own total.
+
+#### 11.10 Security review: seal only Worker-captured evidence (2026-10-03)
+
+**Finding.** The lazy re-seal rebuilt the record from `jobs.data.approval` and sealed it whenever the rebuilt digest matched `approval.recordDigest`. The owner's JWT can insert and update `jobs` (RLS), and the preserve trigger only freezes an approval the Worker already decided under the same token (it never runs on INSERT and allows pending → approved). Every record field is deterministic, so an owner could write a backdated, self-consistent "customer signature" (made-up IP, user agent and trail) and have `view`, `copy` or the owner route seal it under TradeReady's key. Separately, events and record uniqueness were keyed by token hash alone, so a token reused on another job, or learned by another owner, could import that link's trail or take its record slot.
+
+**Decision** (orchestrator, 2026-10-03, under the owner's standing instruction to prefer correctness; no current users and the migration is unapplied, so the schema changed in place):
+- A seal is made only from evidence the Worker captured when the customer signed: the record built in `respond` / `change-respond`, sealed there, or, if that fails, stored in the new service-role-only `signature_pending` table and sealed lazily from it. The job blob is never read to build or authorize a seal; `view` / `change-view` read it only to decide whether to look, and the `signed` block comes from the record or pending row.
+- An approval with no Worker evidence (forged, or one whose pending row also failed to store) is never sealed: no `signed` block, `copy` 404 `not_signed`, owner route 404 `record_not_found`.
+- Records and pending rows are unique per (token hash, job, change order); events carry `job_id` and `change_order_id`, and every read filters on owner, job, change order and token hash.
+- Unchanged: the record shape, `recordDigest`, the Ed25519 seal input and the four approval keys for genuinely signed approvals; legacy typed-name approvals stay legacy (no lookup, no record).
+
+**Superseded:** §3.5 step 4's "lazily seals from the stored approval" and "unique on `approvalTokenSha256`"; §4's token-hash-only unique constraint and token-only event index; 11.3 item 3's rationale for `signatureEvidence`; 11.1 B's description of it as re-seal input.
+
+**Residual.** If the seal, the record insert and the pending insert all fail (or the Worker dies between the decision write and them), the decision stands with no signature evidence: it is shown and served as unsigned, and the respond answer still says `recordPending: true`. The public `view` still echoes the blob's `decision` / `signerName` as the legacy banner always did; that is display, never a seal.

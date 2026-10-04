@@ -109,7 +109,11 @@ export async function changeRespondHandler(c) {
 
     let signed = null;
     if (signing) {
-      if (trail === null) trail = await eventsAtSigning(c.env, tokenSha256(existing.token));
+      if (trail === null) {
+        trail = await eventsAtSigning(c.env, {
+          userId: row.user_id, jobId: String(jobId), changeOrderId: String(changeOrderId), tokenHash: tokenSha256(existing.token),
+        });
+      }
       signed = signApproval(merged, {
         recordId,
         consent: sig.consent,
@@ -134,7 +138,8 @@ export async function changeRespondHandler(c) {
       }
       if (decision === 'declined' && esignActive(c.env, existing.snapshot)) {
         await logEvent(c.env, {
-          userId: row.user_id, tokenHash: tokenSha256(existing.token), event: 'declined', ip: edgeIp, userAgent,
+          userId: row.user_id, jobId: String(jobId), changeOrderId: String(changeOrderId), tokenHash: tokenSha256(existing.token),
+          event: 'declined', ip: edgeIp, userAgent,
         });
       }
       return ok(c, merged);

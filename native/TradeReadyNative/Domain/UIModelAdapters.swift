@@ -632,9 +632,19 @@ enum CanonicalUIAdapters {
     ) -> Bool {
         if !ignoringValidity {
             guard lhs.validUntil == rhs.validUntil,
-                  lhs.validUntilTimeZone == rhs.validUntilTimeZone
+                  lhs.validUntilTimeZone == rhs.validUntilTimeZone,
+                  lhs.esign?.timeZone == rhs.esign?.timeZone
             else { return false }
         }
+        // Phase 19 (spec §3.4): what is read and signed compares exactly; the
+        // certificate's zone (`esign.timeZone`) is a zone like
+        // `validUntilTimeZone`, so `ignoringValidity` ignores it too.
+        var lhsESign = lhs.esign, rhsESign = rhs.esign
+        lhsESign?.timeZone = nil; rhsESign?.timeZone = nil
+        guard lhs.scope == rhs.scope, lhs.terms == rhs.terms,
+              lhs.businessContact == rhs.businessContact,
+              lhs.signature == rhs.signature, lhsESign == rhsESign
+        else { return false }
         guard lhs.businessName == rhs.businessName,
               lhs.customerName == rhs.customerName,
               lhs.jobTitle == rhs.jobTitle,
@@ -670,6 +680,9 @@ enum CanonicalUIAdapters {
             && lhs.ip == rhs.ip
             && lhs.userAgent == rhs.userAgent
             && lhs.selection == rhs.selection
+            && lhs.signatureRecordId == rhs.signatureRecordId
+            && lhs.recordDigest == rhs.recordDigest
+            && lhs.signatureMethod == rhs.signatureMethod
             && lhs.preservation == rhs.preservation
     }
 
@@ -887,6 +900,9 @@ enum CanonicalUIAdapters {
         if let method = value.vehicleDeductionMethod, !method.isEmpty {
             complete["vehicleDeductionMethod"] = .string(method)
         }
+        // Phase 19: no terms stays absent; the pad is written only when off.
+        if !value.estimateTerms.isEmpty { complete["estimateTerms"] = .string(value.estimateTerms) }
+        if !value.signatureDrawPad { complete["signatureDrawPad"] = .bool(false) }
         return try decode(complete)
     }
 
@@ -1066,6 +1082,9 @@ enum CanonicalUIAdapters {
         if edit.value.reviewRequestDelayHours != original.reviewRequestDelayHours { fields["reviewRequestDelayHours"] = .number(Decimal(edit.value.reviewRequestDelayHours)) }
         // Phase 32: absent reads as 30, so an untouched default never writes the key.
         if edit.value.estimateValidityDays != original.estimateValidityDays { fields["estimateValidityDays"] = .number(Decimal(edit.value.estimateValidityDays)) }
+        // Phase 19: cleared terms remove the key; the pad (absent = on) writes once changed.
+        updateOptional(&fields, "estimateTerms", optional(edit.value.estimateTerms), optional(original.estimateTerms))
+        updateBool(&fields, "signatureDrawPad", edit.value.signatureDrawPad, original.signatureDrawPad)
         if edit.value.appearance != original.appearance { fields["appearance"] = .string(edit.value.appearance.rawValue) }
         if edit.value.bookingEnabled != original.bookingEnabled { fields["bookingEnabled"] = .bool(edit.value.bookingEnabled) }
 
@@ -1169,6 +1188,7 @@ enum CanonicalUIAdapters {
         result.reviewRequestDelayHours = value.reviewRequestDelayHours; result.reviewRequestTemplate = value.reviewRequestTemplate
         // Phase 32: absent = 30; a malformed stored value is clamped into 0…365.
         result.estimateValidityDays = min(max(value.estimateValidityDays ?? 30, 0), 365)
+        result.estimateTerms = value.estimateTerms ?? ""; result.signatureDrawPad = value.signatureDrawPad ?? true
         if case let .string(raw)? = value.preservation.unknownFields["appearance"] {
             result.appearance = Appearance(rawValue: raw) ?? .system
         }

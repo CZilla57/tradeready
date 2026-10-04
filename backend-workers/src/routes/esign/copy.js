@@ -1,19 +1,19 @@
 // GET /api/esign/copy?j=<jobId>&t=<token>[&c=<changeOrderId>]&format=pdf|json
 // The signer's copy (Phase 19 spec §3.5, D7). Token-gated like the estimate
-// routes, same CORS. Resolves through signature_records by the token's
-// SHA-256, so it keeps working after the job is edited or deleted; the job is
-// read only to lazily seal a record whose first insert failed. Serves the
-// deterministic PDF (default) or the sealed record envelope as JSON for
-// independent verification, and logs `copy_downloaded`.
+// routes, same CORS. Resolves through signature_records (then the
+// Worker-held signature_pending row, sealed lazily) by the token's SHA-256,
+// the job id and the change-order id — never through the job, which the owner
+// can write (spec §11.10) — so it keeps working after the job is edited or
+// deleted. Serves the deterministic PDF (default) or the sealed record
+// envelope as JSON for independent verification, and logs `copy_downloaded`.
 
-import { fetchJob } from '../../../lib/estimateStore.js';
 import { createRateLimiter } from '../../../lib/guards.js';
 import { applyCors } from '../../../lib/estimate/cors.js';
 import { clientIp } from '../../appCors.js';
 import { tokenSha256 } from '../../../lib/esign/record.js';
 import { edgeClientIp } from '../../../lib/esign/ip.js';
-import { fetchRecordByTokenHash, logEvent } from '../../../lib/esign/store.js';
-import { approvalForLink, ensureRecord, envelopeOf, signedPdfOf } from '../../../lib/esign/service.js';
+import { logEvent } from '../../../lib/esign/store.js';
+import { ensureRecord, envelopeOf, signedPdfOf } from '../../../lib/esign/service.js';
 import { signedPdfFilename } from '../../../lib/esign/pdf.js';
 
 const allow = createRateLimiter({ limit: 20 });
@@ -36,41 +36,23 @@ export async function esignCopyHandler(c) {
   if (format !== 'pdf' && format !== 'json') return c.json({ error: 'Unknown format.', code: 'invalid_request' }, 400);
 
   const tokenHash = tokenSha256(String(token));
-  let row;
+  // jobs.id is a global key, so (token hash, job, change order) is one
+  // owner's link even without the job row.
+  let ensured;
   try {
-    row = await fetchRecordByTokenHash(c.env, tokenHash);
+    ensured = await ensureRecord(c.env, { jobId: String(jobId), changeOrderId: coId ? String(coId) : null, tokenHash });
   } catch (err) {
     console.error('[esign/copy] record fetch failed:', err.message);
     return c.json({ error: 'Database error', code: 'server_error' }, 500);
   }
-  if (row) {
-    if (row.job_id !== String(jobId) || (row.change_order_id || null) !== (coId ? String(coId) : null)) {
-      return c.json(NOT_SIGNED, 404);
-    }
-  } else {
-    let job;
-    try {
-      job = await fetchJob(c.env, String(jobId));
-    } catch (err) {
-      console.error('[esign/copy] job fetch failed:', err.message);
-      return c.json({ error: 'Database error', code: 'server_error' }, 500);
-    }
-    const link = approvalForLink(job, { changeOrderId: coId, token: String(token) });
-    if (!link) return c.json(NOT_SIGNED, 404);
-    const ensured = await ensureRecord(c.env, {
-      userId: job.user_id,
-      jobId: String(jobId),
-      changeOrderId: link.changeOrderId,
-      documentType: link.documentType,
-      approval: link.approval,
-    });
-    if (!ensured) return c.json(NOT_SIGNED, 404);
-    if (!ensured.row) return c.json(PENDING, 503);
-    row = ensured.row;
-  }
+  if (!ensured) return c.json(NOT_SIGNED, 404);
+  if (!ensured.row) return c.json(PENDING, 503);
+  const row = ensured.row;
 
   await logEvent(c.env, {
     userId: row.user_id,
+    jobId: row.job_id,
+    changeOrderId: row.change_order_id || null,
     tokenHash,
     event: 'copy_downloaded',
     ip: edgeClientIp(c),

@@ -104,21 +104,56 @@ const eqParam = (u, k) => {
   return v == null ? undefined : decodeURIComponent(v).replace(/^eq\./, '');
 };
 
-function installBackend(initialRow, { failRecordInsert = 0, failResend = false, failEventsRead = false, authUser = OWNER } = {}) {
+// PostgREST filter semantics for the columns the Worker filters on: `eq.` or
+// `is.null`; an absent parameter doesn't filter.
+const FILTER_COLUMNS = ['id', 'approval_token_sha256', 'user_id', 'job_id', 'change_order_id', 'event'];
+function rowMatches(u, r) {
+  return FILTER_COLUMNS.every((k) => {
+    const raw = u.searchParams.get(k);
+    if (raw == null) return true;
+    if (raw === 'is.null') return r[k] == null;
+    return String(r[k]) === raw.replace(/^eq\./, '');
+  });
+}
+
+// Several jobs (several owners) can live in one fake; `db.job` is the first
+// one, which most tests use. Inserts with `resolution=ignore-duplicates`
+// dedupe on exactly the `on_conflict` columns the Worker names, so a test
+// sees the uniqueness the code relies on.
+function installBackend(initialRow, {
+  failRecordInsert = 0, failPendingInsert = 0, failResend = false, failEventsRead = false, authUser = OWNER,
+  authUsers = null, extraJobs = [],
+} = {}) {
   const db = {
-    job: initialRow ? { ...clone(initialRow), updated_at: 'v1', deleted: false } : null,
+    jobs: {},
+    primary: initialRow ? initialRow.id : null,
     version: 1,
     records: [],
+    pending: [],
     events: [],
     emails: [],
     jobWrites: [],
     recordInserts: 0,
+    pendingInserts: 0,
     failRecordInsert,
+    failPendingInsert,
     calls: [],
   };
+  for (const r of [initialRow, ...extraJobs].filter(Boolean)) db.jobs[r.id] = { ...clone(r), updated_at: 'v1', deleted: false };
+  Object.defineProperty(db, 'job', {
+    get() { return db.primary ? db.jobs[db.primary] || null : null; },
+    set(v) { db.jobs[db.primary] = v; },
+  });
+  const bearers = authUsers || (authUser ? { good: authUser } : {});
   let eventId = 0;
   let clock = 0;
   const stamp = () => new Date(NOW + (clock += 1000)).toISOString().replace('Z', '+00:00');
+  const insertIgnoringDuplicates = (u, table, row) => {
+    const cols = String(u.searchParams.get('on_conflict') || '').split(',').filter(Boolean);
+    if (cols.length && table.some((r) => cols.every((k) => r[k] === row[k]))) return jsonRes([], 201);
+    table.push(clone(row));
+    return jsonRes([row], 201);
+  };
   global.fetch = jest.fn(async (url, init = {}) => {
     const u = new URL(String(url));
     const method = init.method || 'GET';
@@ -128,24 +163,26 @@ function installBackend(initialRow, { failRecordInsert = 0, failResend = false, 
       return failResend ? jsonRes({ message: 'down' }, 503) : jsonRes({ id: 'em_1' });
     }
     if (u.pathname === '/auth/v1/user') {
-      return authUser && init.headers.Authorization === 'Bearer good' ? jsonRes({ id: authUser }) : jsonRes({ msg: 'bad' }, 401);
+      const who = bearers[String(init.headers.Authorization || '').replace(/^Bearer /, '')];
+      return who ? jsonRes({ id: who }) : jsonRes({ msg: 'bad' }, 401);
     }
     if (u.pathname === '/rest/v1/jobs') {
-      const live = db.job && !db.job.deleted && eqParam(u, 'id') === db.job.id
-        && (eqParam(u, 'user_id') === undefined || eqParam(u, 'user_id') === db.job.user_id);
-      if (method === 'GET') return jsonRes(live ? [clone(db.job)] : []);
+      const id = eqParam(u, 'id');
+      const job = id === undefined ? null : db.jobs[id];
+      const live = job && !job.deleted && (eqParam(u, 'user_id') === undefined || eqParam(u, 'user_id') === job.user_id);
+      if (method === 'GET') return jsonRes(live ? [clone(job)] : []);
       if (method === 'PATCH') {
-        if (!live || eqParam(u, 'updated_at') !== db.job.updated_at) return jsonRes([]);
+        if (!live || eqParam(u, 'updated_at') !== job.updated_at) return jsonRes([]);
         const { data } = JSON.parse(init.body);
         db.version += 1;
-        db.job = { ...db.job, data, updated_at: `v${db.version}` };
+        db.jobs[id] = { ...job, data, updated_at: `v${db.version}` };
         db.jobWrites.push(clone(data));
-        return jsonRes([{ data, updated_at: db.job.updated_at }]);
+        return jsonRes([{ data, updated_at: db.jobs[id].updated_at }]);
       }
       if (method === 'POST') {
         const b = JSON.parse(init.body);
         db.version += 1;
-        db.job = { ...db.job, data: b.data, updated_at: `v${db.version}` };
+        db.jobs[b.id] = { ...db.jobs[b.id], id: b.id, user_id: b.user_id, data: b.data, deleted: false, updated_at: `v${db.version}` };
         db.jobWrites.push(clone(b.data));
         return jsonRes([], 201);
       }
@@ -154,19 +191,17 @@ function installBackend(initialRow, { failRecordInsert = 0, failResend = false, 
       if (method === 'POST') {
         db.recordInserts += 1;
         if (db.failRecordInsert > 0) { db.failRecordInsert -= 1; return jsonRes({ message: 'db down' }, 503); }
-        const row = JSON.parse(init.body);
-        if (db.records.some((r) => r.approval_token_sha256 === row.approval_token_sha256)) return jsonRes([], 201);
-        db.records.push(clone(row));
-        return jsonRes([row], 201);
+        return insertIgnoringDuplicates(u, db.records, JSON.parse(init.body));
       }
-      const match = db.records.filter((r) => ['id', 'approval_token_sha256', 'user_id', 'job_id', 'change_order_id']
-        .every((k) => {
-          const raw = u.searchParams.get(k);
-          if (raw == null) return true;
-          if (raw === 'is.null') return r[k] == null;
-          return String(r[k]) === raw.replace(/^eq\./, '');
-        }));
-      return jsonRes(clone(match.slice(0, 1)));
+      return jsonRes(clone(db.records.filter((r) => rowMatches(u, r)).slice(0, 1)));
+    }
+    if (u.pathname === '/rest/v1/signature_pending') {
+      if (method === 'POST') {
+        db.pendingInserts += 1;
+        if (db.failPendingInsert > 0) { db.failPendingInsert -= 1; return jsonRes({ message: 'db down' }, 503); }
+        return insertIgnoringDuplicates(u, db.pending, JSON.parse(init.body));
+      }
+      return jsonRes(clone(db.pending.filter((r) => rowMatches(u, r)).slice(0, 1)));
     }
     if (u.pathname === '/rest/v1/signature_events') {
       if (method === 'POST') {
@@ -175,10 +210,8 @@ function installBackend(initialRow, { failRecordInsert = 0, failResend = false, 
         return jsonRes(null, 201);
       }
       if (failEventsRead) return jsonRes({ message: 'down' }, 503);
-      const h = eqParam(u, 'approval_token_sha256');
-      const ev = eqParam(u, 'event');
       const limit = Number(u.searchParams.get('limit') || 1000);
-      return jsonRes(clone(db.events.filter((e) => e.approval_token_sha256 === h && (!ev || e.event === ev)).slice(0, limit)));
+      return jsonRes(clone(db.events.filter((e) => rowMatches(u, e)).slice(0, limit)));
     }
     throw new Error(`unexpected ${method} ${url}`);
   });
@@ -239,8 +272,8 @@ async function respond(db, body, env = V2) {
 describe('respond: approve with consent writes the decision, then the sealed record', () => {
   test('decision first with the four server keys and the edge IP; record sealed and verifiable', async () => {
     const db = installBackend(jobRow());
-    db.events.push({ id: 900, user_id: OWNER, approval_token_sha256: sha(TOKEN), event: 'link_created', ip: null, created_at: '2026-10-02T12:00:00.250+00:00' });
-    db.events.push({ id: 901, user_id: OWNER, approval_token_sha256: sha(TOKEN), event: 'viewed', ip: EDGE_IP, created_at: '2026-10-03T17:59:00+00:00' });
+    db.events.push({ id: 900, user_id: OWNER, job_id: 'job-1', change_order_id: null, approval_token_sha256: sha(TOKEN), event: 'link_created', ip: null, created_at: '2026-10-02T12:00:00.250+00:00' });
+    db.events.push({ id: 901, user_id: OWNER, job_id: 'job-1', change_order_id: null, approval_token_sha256: sha(TOKEN), event: 'viewed', ip: EDGE_IP, created_at: '2026-10-03T17:59:00+00:00' });
     const res = await respond(db, approveBody(db));
     expect(res.status).toBe(200);
     const a = db.job.data.approval;
@@ -730,5 +763,249 @@ describe('POST /api/esign/record (owner)', () => {
     expect(res.status).toBe(200);
     expect(db.records).toHaveLength(1);
     expect(res.body.recordDigest).toBe(db.job.data.approval.recordDigest);
+  });
+});
+
+// ── security review (2026-10-03): only Worker-captured evidence is sealed ─
+//
+// The job blob is the owner's: RLS lets the owner's JWT insert and update
+// `jobs` freely, and the approval-preserve trigger only freezes an approval
+// the Worker already decided under the SAME token (it never fires on INSERT,
+// and leaves a pending→approved write or a token swap alone). Everything in
+// the record is deterministic, so an owner can compute a matching
+// recordDigest for a signature nobody made. None of that may ever be sealed.
+
+const OTHER_OWNER = '99999999-2222-4333-8444-555555555555';
+const TOKEN_X = 'tok_other_link_0123456789';
+
+// What a malicious owner can build with the public algorithm (this repo's own
+// module): a backdated "customer" signature with a made-up IP, user agent and
+// trail, and a recordDigest that matches it exactly.
+function forgeApproval({ token = TOKEN, snapshot = esignSnapshot(), jobId = 'job-1', changeOrderId = null, documentType = 'estimate' } = {}) {
+  const { signApproval, recordFromApproval, recordDigest } = require('../backend-workers/lib/esign/record.js');
+  const merged = {
+    token, sentAt: '2026-09-01T12:00:00.000Z', snapshot,
+    decision: 'approved', consentAt: '2026-09-01T15:00:00.000Z', signerName: 'Pat Lee',
+    ip: '192.0.2.77', userAgent: 'Mozilla/5.0 (forged)',
+  };
+  const forged = signApproval(merged, {
+    recordId: '0f0f0f0f-1111-4222-8333-444455556666', consent: { version: 1 }, drawn: DRAWN, email: null,
+    events: [{ type: 'link_created', at: '2026-09-01T12:00:00.000Z', actor: 'owner' }, { type: 'viewed', at: '2026-09-01T14:00:00.000Z', ip: '192.0.2.77' }],
+    jobId, changeOrderId, documentType,
+  });
+  // The forgery is internally consistent: the old lazy seal would accept it.
+  expect(recordDigest(recordFromApproval({ approval: forged.approval, jobId, changeOrderId, documentType }))).toBe(forged.approval.recordDigest);
+  return forged.approval;
+}
+
+describe('security: an owner-authored approval is never sealed', () => {
+  const ownerC = (body) => fakeC({ method: 'POST', body, headers: { authorization: 'Bearer good' } });
+
+  test('estimate: a forged approval with a correct digest is not sealed by view, copy or the owner route', async () => {
+    // A brand-new job row carrying the forged approval (an owner INSERT; the
+    // preserve trigger never runs on INSERT), and the same forgery written
+    // over a pending link (pending → approved is a write the trigger allows).
+    for (const start of ['insert', 'pending']) {
+      const db = installBackend(jobRow());
+      const approval = forgeApproval();
+      if (start === 'insert') db.job = { ...db.job, data: { id: 'job-1', approval } };
+      else db.job.data.approval = { ...db.job.data.approval, ...approval };
+
+      for (const env of [V2, {}]) {
+        const c = fakeC({ query: { j: 'job-1', t: TOKEN }, env });
+        const view = await estimateViewHandler(c);
+        await c.flush();
+        expect(view.status).toBe(200);
+        expect(view.body.signed).toBeUndefined();
+      }
+      const copy = await esignCopyHandler(fakeC({ query: { j: 'job-1', t: TOKEN } }));
+      expect([copy.status, copy.body.code]).toEqual([404, 'not_signed']);
+      const json = await esignCopyHandler(fakeC({ query: { j: 'job-1', t: TOKEN, format: 'json' } }));
+      expect(json.status).toBe(404);
+      const owner = await esignRecordHandler(ownerC({ jobId: 'job-1' }));
+      expect([owner.status, owner.body.code]).toEqual([404, 'record_not_found']);
+      const pinned = await esignRecordHandler(ownerC({ jobId: 'job-1', recordId: approval.signatureRecordId }));
+      expect(pinned.status).toBe(404);
+
+      expect(db.records).toHaveLength(0);
+      expect(db.recordInserts).toBe(0);
+      const verify = await esignVerifyHandler(fakeC({ query: { r: approval.signatureRecordId, d: approval.recordDigest } }));
+      expect(verify.body).toEqual({ valid: false });
+    }
+  });
+
+  test('change order: a forged approval is not sealed by change-view, copy or the owner route', async () => {
+    const approval = forgeApproval({ token: CO_TOKEN, snapshot: coSnapshot(), changeOrderId: 'co-1', documentType: 'change_order' });
+    const db = installBackend(jobRow({ changeOrders: [changeOrder({ approval })] }));
+    const c = fakeC({ query: { j: 'job-1', co: 'co-1', t: CO_TOKEN }, env: V2 });
+    const view = await changeViewHandler(c);
+    await c.flush();
+    expect(view.body.signed).toBeUndefined();
+    expect((await esignCopyHandler(fakeC({ query: { j: 'job-1', t: CO_TOKEN, c: 'co-1' } }))).status).toBe(404);
+    expect((await esignRecordHandler(ownerC({ jobId: 'job-1', changeOrderId: 'co-1' }))).status).toBe(404);
+    expect(db.records).toHaveLength(0);
+    expect(db.recordInserts).toBe(0);
+  });
+
+  test('a legacy approved estimate stays legacy: no record, no lookup', async () => {
+    const db = installBackend(jobRow({ approval: { decision: 'approved', signerName: 'Pat', consentAt: '2026-10-02T09:00:00.000Z', ip: '1.1.1.1', userAgent: 'UA' } }));
+    const c = fakeC({ query: { j: 'job-1', t: TOKEN }, env: V2 });
+    const view = await estimateViewHandler(c);
+    await c.flush();
+    expect(view.body.signed).toBeUndefined();
+    expect(db.calls.filter((x) => /signature_(records|pending)/.test(x))).toEqual([]);
+  });
+});
+
+describe('security: genuine lazy sealing reads the Worker-held evidence, not the job', () => {
+  test('a failed first insert is sealed later exactly as signed, even if the owner rewrote the approval meanwhile', async () => {
+    const db = installBackend(jobRow(), { failRecordInsert: 1 });
+    const res = await respond(db, approveBody(db));
+    expect(res.body.recordPending).toBe(true);
+    expect(db.records).toHaveLength(0);
+    expect(db.pending).toHaveLength(1);
+    expect(db.pending[0]).toMatchObject({
+      id: res.body.recordId, user_id: OWNER, job_id: 'job-1', change_order_id: null,
+      approval_token_sha256: sha(TOKEN), document_type: 'estimate', record_digest: res.body.recordDigest,
+    });
+
+    // The owner's device rewrites the stored approval with a self-consistent
+    // forgery for the same link (other name, no drawing, recomputed digest).
+    const forged = forgeApproval();
+    db.job.data.approval = { ...db.job.data.approval, ...forged, signatureRecordId: res.body.recordId };
+
+    const c = fakeC({ query: { j: 'job-1', t: TOKEN }, env: V2 });
+    const view = await estimateViewHandler(c);
+    await c.flush();
+    expect(db.records).toHaveLength(1);
+    const row = db.records[0];
+    expect(row.id).toBe(res.body.recordId);
+    expect(row.record_digest).toBe(res.body.recordDigest);
+    expect(row.record.signedAt).toBe(new Date(NOW).toISOString());
+    expect(row.record.signer).toEqual({ typedName: 'Pat Lee', drawn: DRAWN, email: 'pat@example.test' });
+    expect(row.record.ip).toBe(res.edgeIp);
+    expect(await verifySeal(SEAL_ENV, res.body.recordDigest, 'k-test', row.seal)).toBe(true);
+    // The page shows the sealed record, never the blob's claims.
+    expect(view.body.signed).toEqual({
+      recordId: res.body.recordId, recordDigest: res.body.recordDigest, signatureMethod: 'typed_drawn',
+      signedAt: new Date(NOW).toISOString(), typedName: 'Pat Lee', drawn: DRAWN, recordPending: false,
+    });
+  });
+
+  test('while it cannot be sealed the page shows the Worker-held signature as pending', async () => {
+    const db = installBackend(jobRow());
+    const c0 = fakeC({ method: 'POST', body: approveBody(db), env: { ...V2, ESIGN_SEAL_PRIVATE_KEY: '' } });
+    const res = await estimateRespondHandler(c0);
+    await c0.flush();
+    expect(res.body.recordPending).toBe(true);
+    db.job.data.approval.signerName = 'Mallory';
+    const c = fakeC({ query: { j: 'job-1', t: TOKEN }, env: { ...V2, ESIGN_SEAL_PRIVATE_KEY: '' } });
+    const view = await estimateViewHandler(c);
+    await c.flush();
+    expect(view.body.signed).toMatchObject({ recordId: res.body.recordId, typedName: 'Pat Lee', recordPending: true });
+    expect(db.records).toHaveLength(0);
+  });
+
+  test('the signer copy seals a pending record even after the job is gone', async () => {
+    const db = installBackend(jobRow(), { failRecordInsert: 1 });
+    const res = await respond(db, approveBody(db));
+    expect(res.body.recordPending).toBe(true);
+    db.job.deleted = true;
+    const copy = await esignCopyHandler(fakeC({ query: { j: 'job-1', t: TOKEN, format: 'json' } }));
+    expect(copy.status).toBe(200);
+    expect(copy.body).toMatchObject({ recordId: res.body.recordId, recordDigest: res.body.recordDigest });
+    expect(db.records).toHaveLength(1);
+  });
+
+  test('change order: a failed first insert is sealed later from the Worker-held evidence', async () => {
+    const db = installBackend(jobRow({ changeOrders: [changeOrder()] }), { failRecordInsert: 1 });
+    const c0 = fakeC({ method: 'POST', env: V2, body: {
+      jobId: 'job-1', changeOrderId: 'co-1', token: CO_TOKEN, decision: 'approved', signerName: 'Pat Lee',
+      snapshotDigest: snapshotDigest(coSnapshot()), consent: { accepted: true, version: 1 },
+    } });
+    const res = await changeRespondHandler(c0);
+    await c0.flush();
+    expect(res.body.recordPending).toBe(true);
+    expect(db.pending[0]).toMatchObject({ change_order_id: 'co-1', document_type: 'change_order' });
+    const owner = await esignRecordHandler(fakeC({ method: 'POST', body: { jobId: 'job-1', changeOrderId: 'co-1' }, headers: { authorization: 'Bearer good' } }));
+    expect(owner.status).toBe(200);
+    expect(owner.body).toMatchObject({ recordId: res.body.recordId, recordDigest: res.body.recordDigest, changeOrderId: 'co-1' });
+    expect(db.records).toHaveLength(1);
+  });
+
+  test('if the pending copy cannot be stored either, nothing is ever sealed from the blob', async () => {
+    const db = installBackend(jobRow(), { failRecordInsert: 1, failPendingInsert: 1 });
+    const res = await respond(db, approveBody(db));
+    expect(res.status).toBe(200);
+    expect(res.body.recordPending).toBe(true);
+    expect(db.job.data.approval.decision).toBe('approved');
+    const c = fakeC({ query: { j: 'job-1', t: TOKEN }, env: V2 });
+    const view = await estimateViewHandler(c);
+    await c.flush();
+    expect(view.body.signed).toBeUndefined();
+    expect(db.records).toHaveLength(0);
+  });
+});
+
+describe('security: link lookups are bound to the owner, job and change order', () => {
+  test("another owner who knows a link's token cannot take its record slot, see its record or import its trail", async () => {
+    // OTHER_OWNER received owner A's link as A's customer, so they know TOKEN,
+    // and they put it on a job of their own and "sign" that first.
+    const theirs = { id: 'job-b', user_id: OTHER_OWNER, data: { id: 'job-b', approval: { token: TOKEN, sentAt: '2026-10-02T12:00:00.000Z', snapshot: esignSnapshot({ total: 1 }) } } };
+    const db = installBackend(jobRow(), { extraJobs: [theirs], authUsers: { good: OWNER, other: OTHER_OWNER } });
+    db.events.push({ id: 900, user_id: OWNER, job_id: 'job-1', change_order_id: null, approval_token_sha256: sha(TOKEN), event: 'viewed', ip: EDGE_IP, created_at: '2026-10-03T17:59:00+00:00' });
+
+    const b = await respond(db, { ...approveBody(db), jobId: 'job-b', snapshotDigest: snapshotDigest(theirs.data.approval.snapshot) });
+    expect(b.status).toBe(200);
+    const bRecord = db.records.find((r) => r.job_id === 'job-b');
+    expect(bRecord.record.events).toEqual([]);
+
+    const a = await respond(db, approveBody(db));
+    expect(a.status).toBe(200);
+    expect(a.body.recordPending).toBeUndefined();
+    const aRecord = db.records.find((r) => r.job_id === 'job-1');
+    expect(aRecord).toMatchObject({ id: a.body.recordId, user_id: OWNER });
+    expect(aRecord.record.events).toEqual([{ type: 'viewed', at: '2026-10-03T17:59:00.000Z', ip: EDGE_IP }]);
+
+    const copy = await esignCopyHandler(fakeC({ query: { j: 'job-1', t: TOKEN, format: 'json' } }));
+    expect([copy.status, copy.body.recordId]).toEqual([200, a.body.recordId]);
+    const theirCopy = await esignCopyHandler(fakeC({ query: { j: 'job-b', t: TOKEN, format: 'json' } }));
+    expect(theirCopy.body.recordId).toBe(b.body.recordId);
+
+    const mine = await esignRecordHandler(fakeC({ method: 'POST', body: { jobId: 'job-1' }, headers: { authorization: 'Bearer good' } }));
+    expect(mine.body.recordId).toBe(a.body.recordId);
+    expect(mine.body.events.map((e) => e.type)).toEqual(['viewed', 'signed', 'copy_emailed', 'copy_downloaded']);
+    const other = await esignRecordHandler(fakeC({ method: 'POST', body: { jobId: 'job-b' }, headers: { authorization: 'Bearer other' } }));
+    expect(other.body.recordId).toBe(b.body.recordId);
+    expect(other.body.events.map((e) => e.type)).toEqual(['signed', 'copy_emailed', 'copy_downloaded']);
+    expect(JSON.stringify(other.body)).not.toContain(EDGE_IP);
+  });
+
+  test("an owner who reuses another job's token does not seal that job's views into the new record", async () => {
+    const db = installBackend(jobRow({ approval: { token: TOKEN_X } }));
+    // Genuine customer views of the owner's OTHER job, under TOKEN_X.
+    db.events.push({ id: 901, user_id: OWNER, job_id: 'job-x', change_order_id: null, approval_token_sha256: sha(TOKEN_X), event: 'link_created', ip: null, created_at: '2026-09-20T12:00:00+00:00' });
+    db.events.push({ id: 902, user_id: OWNER, job_id: 'job-x', change_order_id: null, approval_token_sha256: sha(TOKEN_X), event: 'viewed', ip: '203.0.113.50', created_at: '2026-09-20T13:00:00+00:00' });
+    const res = await respond(db, approveBody(db, { token: TOKEN_X }));
+    expect(res.status).toBe(200);
+    expect(db.records[0].record.events).toEqual([]);
+    expect(db.records[0].job_id).toBe('job-1');
+  });
+
+  test('every event the Worker logs names its job and change order', async () => {
+    const db = installBackend(jobRow({ changeOrders: [changeOrder()] }));
+    const c = fakeC({ query: { j: 'job-1', t: TOKEN }, env: V2 });
+    await estimateViewHandler(c);
+    await c.flush();
+    const cc = fakeC({ query: { j: 'job-1', co: 'co-1', t: CO_TOKEN }, env: V2 });
+    await changeViewHandler(cc);
+    await cc.flush();
+    await respond(db, approveBody(db));
+    await esignCopyHandler(fakeC({ query: { j: 'job-1', t: TOKEN } }));
+    expect(db.events.length).toBeGreaterThanOrEqual(5);
+    for (const e of db.events) {
+      expect(e.job_id).toBe('job-1');
+      expect(e.change_order_id).toBe(e.approval_token_sha256 === sha(CO_TOKEN) ? 'co-1' : null);
+    }
   });
 });

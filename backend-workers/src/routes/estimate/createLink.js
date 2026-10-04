@@ -122,7 +122,7 @@ export async function estimateCreateLinkHandler(c) {
         console.error('[estimate/create-link] upsert failed:', err.message);
         return c.json({ error: 'Database error' }, 500);
       }
-      await logLinkCreated(c.env, userId, plan.token, snapshot);
+      await logLinkCreated(c.env, { userId, jobId, changeOrderId: String(changeOrderId), token: plan.token, snapshot });
     }
     const url = `${CHANGE_PUBLIC_BASE}?j=${encodeURIComponent(jobId)}&co=${encodeURIComponent(changeOrderId)}&t=${encodeURIComponent(plan.token)}`;
     return c.json({ url, token: plan.token, sentAt: plan.sentAt }, 200);
@@ -138,7 +138,7 @@ export async function estimateCreateLinkHandler(c) {
       console.error('[estimate/create-link] upsert failed:', err.message);
       return c.json({ error: 'Database error' }, 500);
     }
-    await logLinkCreated(c.env, userId, plan.token, snapshot);
+    await logLinkCreated(c.env, { userId, jobId, changeOrderId: null, token: plan.token, snapshot });
   }
 
   const url = `${PUBLIC_BASE}?j=${encodeURIComponent(jobId)}&t=${encodeURIComponent(plan.token)}`;
@@ -146,8 +146,9 @@ export async function estimateCreateLinkHandler(c) {
 }
 
 // Phase 19 audit trail: the authenticated owner sent (or re-sent) this link.
-// Best-effort (logEvent never throws); the owner's IP is not recorded.
-async function logLinkCreated(env, userId, token, snapshot) {
+// Best-effort (logEvent never throws); the owner's IP is not recorded. The
+// event names its job and change order, like every esign event.
+async function logLinkCreated(env, { userId, jobId, changeOrderId, token, snapshot }) {
   if (!esignActive(env, snapshot)) return;
-  await logEvent(env, { userId, tokenHash: tokenSha256(token), event: 'link_created' });
+  await logEvent(env, { userId, jobId: String(jobId), changeOrderId, tokenHash: tokenSha256(token), event: 'link_created' });
 }

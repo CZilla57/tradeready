@@ -555,10 +555,10 @@ describe('store wire format', () => {
   afterEach(() => { delete global.fetch; calls.length = 0; });
   const respond = (body, status = 200) => ({ ok: status < 400, status, json: async () => body, text: async () => JSON.stringify(body) });
 
-  test('insertRecord: insert-if-absent on the token hash; reports whether it created the row', async () => {
+  test('insertRecord: insert-if-absent per link (token hash + job + change order); reports whether it created the row', async () => {
     global.fetch = async (url, init) => { calls.push({ url: String(url), init }); return respond([{ id: 'r' }], 201); };
     assert.equal(await store.insertRecord(ENV, { id: 'r' }), true);
-    assert.equal(calls[0].url, 'https://supa.test/rest/v1/signature_records?on_conflict=approval_token_sha256');
+    assert.equal(calls[0].url, 'https://supa.test/rest/v1/signature_records?on_conflict=approval_token_sha256,job_id,change_order_id');
     assert.equal(calls[0].init.method, 'POST');
     assert.equal(calls[0].init.headers.Prefer, 'resolution=ignore-duplicates,return=representation');
     global.fetch = async () => respond([], 201);
@@ -578,14 +578,39 @@ describe('store wire format', () => {
     assert.match(calls[1], /user_id=eq\.u1&job_id=eq\.j1&change_order_id=eq\.co1&id=eq\.r1/);
   });
 
-  test('logEvent posts the row and never throws', async () => {
+  test('logEvent posts the row, naming its job and change order, and never throws', async () => {
     global.fetch = async (url, init) => { calls.push({ url: String(url), body: JSON.parse(init.body) }); return respond(null, 201); };
-    await store.logEvent(ENV, { userId: 'u1', tokenHash: 'h', event: 'viewed', ip: '1.2.3.4', userAgent: 'x'.repeat(400) });
+    await store.logEvent(ENV, { userId: 'u1', jobId: 'j1', tokenHash: 'h', event: 'viewed', ip: '1.2.3.4', userAgent: 'x'.repeat(400) });
     assert.equal(calls[0].url, 'https://supa.test/rest/v1/signature_events');
-    assert.deepEqual(Object.keys(calls[0].body).sort(), ['approval_token_sha256', 'event', 'ip', 'user_agent', 'user_id']);
+    assert.deepEqual(Object.keys(calls[0].body).sort(), ['approval_token_sha256', 'change_order_id', 'event', 'ip', 'job_id', 'user_agent', 'user_id']);
+    assert.equal(calls[0].body.job_id, 'j1');
+    assert.equal(calls[0].body.change_order_id, null);
     assert.equal(calls[0].body.user_agent.length, 300);
+    await store.logEvent(ENV, { userId: 'u1', jobId: 'j1', changeOrderId: 'co1', tokenHash: 'h', event: 'signed' });
+    assert.equal(calls[1].body.change_order_id, 'co1');
     global.fetch = async () => { throw new Error('down'); };
-    await assert.doesNotReject(store.logEvent(ENV, { userId: 'u1', tokenHash: 'h', event: 'viewed' }));
+    await assert.doesNotReject(store.logEvent(ENV, { userId: 'u1', jobId: 'j1', tokenHash: 'h', event: 'viewed' }));
+  });
+
+  test('insertPending: the same per-link insert-if-absent, into signature_pending', async () => {
+    global.fetch = async (url, init) => { calls.push({ url: String(url), init }); return respond([{ id: 'r' }], 201); };
+    assert.equal(await store.insertPending(ENV, { id: 'r' }), true);
+    assert.equal(calls[0].url, 'https://supa.test/rest/v1/signature_pending?on_conflict=approval_token_sha256,job_id,change_order_id');
+    assert.equal(calls[0].init.headers.Prefer, 'resolution=ignore-duplicates,return=representation');
+  });
+
+  test('link lookups are bound to job and change order; events also to owner and token', async () => {
+    global.fetch = async (url) => { calls.push(String(url)); return respond([]); };
+    await store.fetchRecordForLink(ENV, { jobId: 'j1', changeOrderId: null, tokenHash: 'h' });
+    await store.fetchPendingForLink(ENV, { userId: 'u1', jobId: 'j1', changeOrderId: 'co1', tokenHash: 'h' });
+    await store.listEvents(ENV, { userId: 'u1', jobId: 'j1', changeOrderId: null, tokenHash: 'h' }, { event: 'viewed', limit: 20 });
+    assert.match(calls[0], /signature_records\?job_id=eq\.j1&change_order_id=is\.null&approval_token_sha256=eq\.h&order=signed_at\.desc/);
+    assert.match(calls[1], /signature_pending\?user_id=eq\.u1&job_id=eq\.j1&change_order_id=eq\.co1&approval_token_sha256=eq\.h&/);
+    assert.match(calls[2], /signature_events\?user_id=eq\.u1&job_id=eq\.j1&change_order_id=is\.null&approval_token_sha256=eq\.h&event=eq\.viewed&/);
+    // Never a token-only (or job-less) lookup.
+    assert.throws(() => store.linkQuery({ tokenHash: 'h' }), /job id/);
+    assert.throws(() => store.linkQuery({ jobId: 'j1' }), /owner or a token/);
+    await assert.rejects(store.listEvents(ENV, { jobId: 'j1', tokenHash: 'h' }), /owner or a token/);
   });
 });
 
@@ -595,8 +620,8 @@ describe('retention (§3.8, decision 19-Q6): account deletion keeps deleting sig
   const audit = fs.readFileSync(path.join(root, 'supabase/verify/account_deletion_cascade.sql'), 'utf8');
   const code = migration.replace(/--.*$/gm, '');
 
-  test('both tables cascade from auth.users, and nothing blocks the delete', () => {
-    for (const table of ['signature_records', 'signature_events']) {
+  test('all three tables cascade from auth.users, and nothing blocks the delete', () => {
+    for (const table of ['signature_records', 'signature_pending', 'signature_events']) {
       const body = code.slice(code.indexOf(`create table if not exists public.${table}`));
       const ddl = body.slice(0, body.indexOf(');'));
       assert.match(ddl, /user_id\s+uuid not null references auth\.users\(id\) on delete cascade/, table);
@@ -604,6 +629,14 @@ describe('retention (§3.8, decision 19-Q6): account deletion keeps deleting sig
     assert.doesNotMatch(code, /before\s+delete/i, 'a delete trigger would block account deletion');
     assert.match(code, /before update on public\.signature_records/);
     assert.match(code, /before update on public\.signature_events/);
+    assert.match(code, /before update on public\.signature_pending/);
+  });
+
+  test('signature_pending is service-role only: RLS on, no policy, no client grant (spec §11.10)', () => {
+    assert.match(code, /alter table public\.signature_pending enable row level security/);
+    assert.match(code, /revoke all on table public\.signature_pending from anon, authenticated/);
+    assert.doesNotMatch(code, /create policy[^;]*on public\.signature_pending/);
+    assert.doesNotMatch(code, /grant [^;]* on table public\.signature_pending/);
   });
 
   test('the account-deletion audit expects both tables', () => {

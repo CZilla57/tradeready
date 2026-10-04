@@ -429,7 +429,8 @@ struct JobDetailView: View {
         NativeJobProfitabilitySection(jobID: job.id)
         NativeJobPhotosView(jobID: job.id)
         statusSection(job)
-        EstimateApprovalHistorySection(approvals: store.estimateApprovalHistory(jobID: job.id))
+        NativeEstimateSignatureSection(jobID: job.id) // Phase 19: the customer's signature and audit trail
+        EstimateApprovalHistorySection(approvals: store.estimateApprovalHistory(jobID: job.id), jobID: job.id)
         if !job.notes.isEmpty {
             Section("Notes") { Text(job.notes) }
         }
@@ -826,12 +827,13 @@ struct NativeEstimateValidityEditorView: View {
 
 private struct EstimateApprovalHistorySection: View {
     let approvals: [Canonical.EstimateApproval]
+    let jobID: String
 
     var body: some View {
         if !approvals.isEmpty {
             Section("Estimate history") {
                 ForEach(Array(approvals.enumerated()), id: \.offset) { index, approval in
-                    EstimateApprovalHistoryRow(approval: approval, sequence: index + 1)
+                    EstimateApprovalHistoryRow(approval: approval, sequence: index + 1, jobID: jobID)
                 }
             }
         }
@@ -841,6 +843,7 @@ private struct EstimateApprovalHistorySection: View {
 private struct EstimateApprovalHistoryRow: View {
     let approval: Canonical.EstimateApproval
     let sequence: Int
+    let jobID: String
 
     private var title: String {
         "\((approval.decision ?? "reviewed").capitalized) estimate \(sequence)"
@@ -855,7 +858,10 @@ private struct EstimateApprovalHistoryRow: View {
             LabeledContent("Estimate", value: approval.snapshot.jobTitle)
             LabeledContent("Total", value: money(approval.snapshot.total))
             LabeledContent("Sent", value: approval.sentAt)
-            if let signer = approval.signerName, !signer.isEmpty {
+            // Phase 19: an approval shows its signature (or "before audit trail").
+            if let evidence = NativeESignature.evidence(for: approval) {
+                NativeApprovalEvidenceRows(evidence: evidence, jobID: jobID, changeOrderID: nil)
+            } else if let signer = approval.signerName, !signer.isEmpty {
                 LabeledContent("Customer", value: signer)
             }
             if let reason = approval.declineReason, !reason.isEmpty {

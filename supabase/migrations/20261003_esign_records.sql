@@ -6,41 +6,53 @@
 -- stage B (decision 19-Q1), before the Worker ships with ESIGN_V2 on.
 -- Additive: while ESIGN_V2 is off nothing reads or writes these tables.
 --
--- 1. public.signature_records — one sealed record per signed approval link
---    (unique on the SHA-256 of the approval token; the raw token is never
---    stored). `record` is the canonical record JSON, `record_digest` its
---    SHA-256, `seal` the base64 Ed25519 signature over the digest bytes.
--- 2. public.signature_events — the audit log per link: link_created,
+-- A link is (owner, job, change order, approval token). The raw token is
+-- never stored, only its SHA-256.
+--
+-- 1. public.signature_records — one sealed record per signed link (unique on
+--    token hash + job + change order, NULLS NOT DISTINCT: PostgreSQL 15+).
+--    `record` is the canonical record JSON, `record_digest` its SHA-256,
+--    `seal` the base64 Ed25519 signature over the digest bytes.
+-- 2. public.signature_pending — Worker-captured evidence of a signature
+--    whose first seal or insert failed: the record built when the customer
+--    signed, waiting to be sealed lazily. Same per-link uniqueness. SERVICE
+--    ROLE ONLY (RLS on, no policy, no client grant): a seal is only ever made
+--    from a row the Worker wrote, never from the owner-writable job blob
+--    (spec §11.10, security review 2026-10-03).
+-- 3. public.signature_events — the audit log per link: link_created,
 --    viewed, declined, signed, copy_emailed, copy_email_failed,
---    copy_downloaded.
+--    copy_downloaded. Each row names its job and change order; the Worker
+--    reads events filtered on owner + job + change order + token hash.
 --
 -- APPEND-ONLY. Only the Worker (service role) inserts. A BEFORE UPDATE
 -- trigger refuses every update, for every role. There is deliberately NO
 -- delete trigger: rows must still go when the owner deletes their account
 -- (ON DELETE CASCADE from auth.users, decision 19-Q6 "keep deleting", which
 -- is what privacy.html already says). No client role holds insert, update or
--- delete; the owner may only read their own rows (RLS).
+-- delete; the owner may only read their own records and events (RLS), and
+-- cannot read signature_pending at all.
 --
--- 3. public.preserve_job_approvals() (20261002_job_approval_preserve.sql) is
+-- 4. public.preserve_job_approvals() (20261002_job_approval_preserve.sql) is
 --    replaced with the SAME body plus four server-owned keys —
 --    signatureRecordId, recordDigest, signatureMethod and signatureEvidence —
 --    in both server_keys and frozen_keys, so a stale device push can't strip
 --    the e-signature keys from a decided approval. Nothing else changes; the
 --    trigger itself is untouched. (signatureEvidence is the fourth key beyond
---    the spec's three: it carries the inputs a lazy re-seal needs — spec
---    §11.3.)
+--    the spec's three: an informational copy for the owner app, never an
+--    input to a seal — spec §11.3, §11.10.)
 --
 -- Verify: sh supabase/verify/esign_records.sh (throwaway local Postgres),
 -- then supabase/migrations/verify/20261003_esign_records_verify.sql against
 -- the project with psql -v ON_ERROR_STOP=1. Also re-run
--- supabase/verify/account_deletion_cascade.sql (it now expects both tables).
+-- supabase/verify/account_deletion_cascade.sql (every user_id table must
+-- cascade, signature_pending included).
 --
 -- Idempotent: safe to re-run.
 
 create table if not exists public.signature_records (
   id                     uuid primary key,
   user_id                uuid not null references auth.users(id) on delete cascade,
-  approval_token_sha256  text not null unique check (approval_token_sha256 ~ '^[0-9a-f]{64}$'),
+  approval_token_sha256  text not null check (approval_token_sha256 ~ '^[0-9a-f]{64}$'),
   job_id                 text not null,
   change_order_id        text,
   document_type          text not null check (document_type in ('estimate', 'change_order')),
@@ -50,15 +62,43 @@ create table if not exists public.signature_records (
   seal_key_id            text not null,
   seal                   text not null,
   signed_at              timestamptz not null,
-  created_at             timestamptz not null default now()
+  created_at             timestamptz not null default now(),
+  constraint signature_records_document_kind
+    check ((document_type = 'change_order') = (change_order_id is not null)),
+  -- One record per link. The Worker inserts with
+  -- on_conflict=approval_token_sha256,job_id,change_order_id.
+  constraint signature_records_one_per_link
+    unique nulls not distinct (approval_token_sha256, job_id, change_order_id)
 );
 
 create index if not exists signature_records_owner_job
   on public.signature_records (user_id, job_id);
 
+create table if not exists public.signature_pending (
+  id                     uuid primary key,
+  user_id                uuid not null references auth.users(id) on delete cascade,
+  approval_token_sha256  text not null check (approval_token_sha256 ~ '^[0-9a-f]{64}$'),
+  job_id                 text not null,
+  change_order_id        text,
+  document_type          text not null check (document_type in ('estimate', 'change_order')),
+  record                 jsonb not null,
+  record_digest          text not null check (record_digest ~ '^[0-9a-f]{64}$'),
+  signed_at              timestamptz not null,
+  created_at             timestamptz not null default now(),
+  constraint signature_pending_document_kind
+    check ((document_type = 'change_order') = (change_order_id is not null)),
+  constraint signature_pending_one_per_link
+    unique nulls not distinct (approval_token_sha256, job_id, change_order_id)
+);
+
+create index if not exists signature_pending_owner_job
+  on public.signature_pending (user_id, job_id);
+
 create table if not exists public.signature_events (
   id                     bigint generated always as identity primary key,
   user_id                uuid not null references auth.users(id) on delete cascade,
+  job_id                 text not null,
+  change_order_id        text,
   approval_token_sha256  text not null check (approval_token_sha256 ~ '^[0-9a-f]{64}$'),
   event                  text not null check (event in (
                            'link_created', 'viewed', 'declined', 'signed',
@@ -68,8 +108,8 @@ create table if not exists public.signature_events (
   created_at             timestamptz not null default now()
 );
 
-create index if not exists signature_events_token
-  on public.signature_events (approval_token_sha256, created_at);
+create index if not exists signature_events_link
+  on public.signature_events (approval_token_sha256, job_id, created_at);
 
 -- Append-only: refuse every UPDATE (service role included).
 create or replace function public.esign_refuse_update()
@@ -92,14 +132,22 @@ create trigger signature_records_no_update
   for each row
   execute function public.esign_refuse_update();
 
+drop trigger if exists signature_pending_no_update on public.signature_pending;
+create trigger signature_pending_no_update
+  before update on public.signature_pending
+  for each row
+  execute function public.esign_refuse_update();
+
 drop trigger if exists signature_events_no_update on public.signature_events;
 create trigger signature_events_no_update
   before update on public.signature_events
   for each row
   execute function public.esign_refuse_update();
 
--- RLS: the owner reads their own rows; nobody but the service role writes.
+-- RLS: the owner reads their own records and events; nobody but the service
+-- role writes. signature_pending has no policy: service role only.
 alter table public.signature_records enable row level security;
+alter table public.signature_pending enable row level security;
 alter table public.signature_events enable row level security;
 
 drop policy if exists "read own signature records" on public.signature_records;
@@ -117,11 +165,12 @@ create policy "read own signature events"
 -- The hosted project grants ALL on new public tables to the API roles by
 -- default; take writes back so the policies are not the only guard.
 revoke all on table public.signature_records from anon, authenticated;
+revoke all on table public.signature_pending from anon, authenticated;
 revoke all on table public.signature_events from anon, authenticated;
 grant select on table public.signature_records to authenticated;
 grant select on table public.signature_events to authenticated;
 
--- 3. preserve_job_approvals(): 20261002's body with the e-signature keys
+-- 4. preserve_job_approvals(): 20261002's body with the e-signature keys
 -- added to server_keys and frozen_keys. The trigger is unchanged.
 create or replace function public.preserve_job_approvals()
 returns trigger
@@ -254,5 +303,6 @@ $$;
 --   lists. The tables are evidence: drop them only if no record was ever
 --   sealed (select count(*) from public.signature_records), e.g.
 --     drop table if exists public.signature_events;
+--     drop table if exists public.signature_pending;
 --     drop table if exists public.signature_records;
 --     drop function if exists public.esign_refuse_update();

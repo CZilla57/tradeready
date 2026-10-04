@@ -218,6 +218,7 @@ struct BusinessProfileSettings: View {
             LabeledField(label: "Default terms shown on invoices & estimates") {
                 TextField("Payment due upon completion. We accept check, card, or bank transfer.", text: $store.settings.paymentNotes, axis: .vertical).lineLimit(3...7)
             }
+            NativeESignatureSettingsRows() // Phase 19: signature pad and agreement terms
         }
     })
     .nativeAnalyticsScreen(.settingsBusiness) }
@@ -971,6 +972,7 @@ struct AccountSettings: View {
                 Section {
                     Text("This permanently deletes your account and all server and device data, including jobs, invoices, customers, and expenses. This cannot be undone.")
                         .foregroundStyle(.secondary)
+                    Text(NativeESignature.accountDeletionWarning).foregroundStyle(.secondary) // Phase 19 (19-Q6)
                 }
                 Section("TYPE DELETE TO CONFIRM") {
                     TextField(NativeAccountDeletionConfirmation.phrase, text: $deleteConfirmationText)
