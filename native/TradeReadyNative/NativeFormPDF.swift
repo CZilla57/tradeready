@@ -1,4 +1,6 @@
+import CoreGraphics
 import Foundation
+import ImageIO
 
 // MARK: - Phase 20: job form PDF report (spec §5)
 //
@@ -193,8 +195,44 @@ struct NativeFormPDFDocument: Equatable, Sendable {
     }
 }
 
+/// Review fix (2026-10-03): a form can link 100 items × 10 photos of up to
+/// 6 MiB each, so the renderer never holds the full-size bytes. It reads each
+/// photo from its file inside the render task, one at a time, and keeps only
+/// this downscaled copy. ImageIO and CoreGraphics only, so the host suite
+/// drives it.
+enum NativeFormPDFPhotoScaling {
+    /// The longest side of a drawn photo in pixels: 160 pt at 2× (spec §5).
+    static let maxPixelSize = 320
+    static let jpegQuality = 0.7
+
+    /// Decodes the image file at `url` straight to a thumbnail no larger than
+    /// `maxPixelSize` on its longest side, with its EXIF orientation applied
+    /// (ImageIO subsamples; the full-size bitmap is never built). Nil when
+    /// the file is missing or is not an image.
+    static func thumbnail(at url: URL, maxPixelSize: Int = maxPixelSize) -> CGImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
+        else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
+    /// The thumbnail recompressed as JPEG, so the PDF stays small.
+    static func jpegData(_ image: CGImage, quality: Double = jpegQuality) -> Data? {
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(output as CFMutableData, "public.jpeg" as CFString, 1, nil)
+        else { return nil }
+        CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return output as Data
+    }
+}
+
 #if canImport(UIKit)
-import ImageIO
 import UIKit
 
 enum NativeFormPDFError: LocalizedError {
@@ -219,24 +257,25 @@ enum NativeFormPDFRenderer {
     private static let totalWash = UIColor(document: NativeAccessibilityAudit.DocumentPalette.totalWash)
 
     /// Photos: up to four per row. Each is downscaled to fit 160 pt (at 2×)
-    /// and JPEG-recompressed before drawing (spec §5).
+    /// and JPEG-recompressed before drawing (spec §5;
+    /// `NativeFormPDFPhotoScaling`).
     private static let photosPerRow = 4
     private static let photoGap: CGFloat = 10
     private static var photoCell: CGFloat { (contentWidth - photoGap * CGFloat(photosPerRow - 1)) / CGFloat(photosPerRow) }
-    private static let photoFitPoints: CGFloat = 160
-    private static let photoJPEGQuality: CGFloat = 0.7
 
     private static let badgeFont = UIFont.systemFont(ofSize: 9, weight: .bold)
     private static let labelFont = UIFont.systemFont(ofSize: 12)
     private static let answerFont = UIFont.systemFont(ofSize: 11)
     private static let noteFont = UIFont.systemFont(ofSize: 10)
 
-    /// `photoData` holds the bytes of the available photos by id; a photo
-    /// whose bytes are missing or unreadable draws the placeholder.
+    /// `photoFiles` holds the local file of each available photo by id. Each
+    /// is read and downscaled only as it is drawn (call this off the main
+    /// thread); a photo whose file is missing or unreadable draws the
+    /// placeholder.
     static func data(
         for document: NativeFormPDFDocument,
         logoReference: String?,
-        photoData: [String: Data]
+        photoFiles: [String: URL]
     ) throws -> Data {
         let format = UIGraphicsPDFRendererFormat()
         format.documentInfo = [
@@ -367,7 +406,7 @@ enum NativeFormPDFRenderer {
                             for (offset, photo) in row.photos[start ..< min(start + photosPerRow, row.photos.count)].enumerated() {
                                 let rect = CGRect(x: margin + CGFloat(offset) * (photoCell + photoGap), y: y,
                                                   width: photoCell, height: photoCell)
-                                drawPhoto(photo, data: photoData[photo.id], in: rect)
+                                drawPhoto(photo, file: photoFiles[photo.id], in: rect)
                             }
                             y += photoCell + photoGap
                         }
@@ -412,9 +451,11 @@ enum NativeFormPDFRenderer {
                  alignment: .center, characterSpacing: 0.5)
     }
 
-    private static func drawPhoto(_ photo: NativeFormPDFPhoto, data: Data?, in rect: CGRect) {
+    private static func drawPhoto(_ photo: NativeFormPDFPhoto, file: URL?, in rect: CGRect) {
         let frame = UIBezierPath(roundedRect: rect, cornerRadius: 6)
-        if photo.isAvailable, let data, let image = downscaledPhoto(data) {
+        // One photo at a time: the pool frees its decode before the next.
+        let image = autoreleasepool { photo.isAvailable ? file.flatMap(downscaledPhoto(at:)) : nil }
+        if let image {
             guard let context = UIGraphicsGetCurrentContext() else { return }
             context.saveGState()
             frame.addClip()
@@ -439,21 +480,14 @@ enum NativeFormPDFRenderer {
         }
     }
 
-    /// Decodes straight to a thumbnail (no full-size decode), then recompresses
-    /// it as JPEG so the PDF stays small.
-    static func downscaledPhoto(_ data: Data) -> UIImage? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceThumbnailMaxPixelSize: Int(photoFitPoints * 2)
-        ]
-        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
-        let image = UIImage(cgImage: thumbnail, scale: 2, orientation: .up)
-        guard let jpeg = image.jpegData(compressionQuality: photoJPEGQuality),
+    /// Reads the photo file straight to a thumbnail (no full-size decode),
+    /// then recompresses it as JPEG so the PDF stays small
+    /// (`NativeFormPDFPhotoScaling`, host-tested).
+    static func downscaledPhoto(at url: URL) -> UIImage? {
+        guard let thumbnail = NativeFormPDFPhotoScaling.thumbnail(at: url) else { return nil }
+        guard let jpeg = NativeFormPDFPhotoScaling.jpegData(thumbnail),
               let recompressed = UIImage(data: jpeg, scale: 2)
-        else { return image }
+        else { return UIImage(cgImage: thumbnail, scale: 2, orientation: .up) }
         return recompressed
     }
 

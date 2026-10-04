@@ -31,7 +31,9 @@ struct NativeJobFormsSection: View {
                     .foregroundStyle(.secondary)
             }
             ForEach(forms, id: \.id) { form in
-                let summary = NativeJobFormsPresentation.rowSummary(form)
+                let summary = NativeJobFormsPresentation.rowSummary(
+                    form, hasUnsavedText: store.hasHeldFormText(formID: form.id)
+                )
                 Button {
                     openForm = NativeOpenForm(id: form.id)
                 } label: {
@@ -107,6 +109,9 @@ private struct NativeJobFormRow: View {
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                     NativeFormStatusBadge(isCompleted: summary.isCompleted, label: summary.statusLabel)
+                }
+                if let unsaved = summary.unsavedLabel {
+                    NativeFormUnsavedLabel(text: unsaved)
                 }
             }
             Spacer(minLength: 6)
@@ -227,8 +232,12 @@ struct NativeJobFormView: View {
     let formID: String
 
     /// What is being typed, by item and field; committed on end-edit, after a
-    /// pause, and before any action that reads the form.
+    /// pause, and before any action that reads the form. A draft is cleared
+    /// only once it is saved: a refused one stays, marked "Not saved" with
+    /// its reason, and is handed to the store if the screen closes.
     @State private var drafts: [NativeJobFormsPresentation.DraftKey: String] = [:]
+    @State private var draftRefusals: [NativeJobFormsPresentation.DraftKey: NativeJobForms.FormError] = [:]
+    @State private var unsavedOnClose: String?
     @State private var openedNotes: Set<String> = []
     /// After a refused "Mark complete", each missing item says what it needs.
     @State private var showsMissing = false
@@ -264,13 +273,22 @@ struct NativeJobFormView: View {
             .nativeKeyboardDoneBar()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") {
-                        commitDrafts()
-                        dismiss()
-                    }
-                    .fontWeight(.semibold)
-                    .keyboardShortcut(.cancelAction)
+                    Button("Done", action: done)
+                        .fontWeight(.semibold)
+                        .keyboardShortcut(.cancelAction)
                 }
+            }
+            .alert(
+                NativeJobFormsPresentation.unsavedTextTitle,
+                isPresented: Binding(get: { unsavedOnClose != nil }, set: { if !$0 { unsavedOnClose = nil } })
+            ) {
+                Button("Keep editing", role: .cancel) { unsavedOnClose = nil }
+                Button("Close") {
+                    unsavedOnClose = nil
+                    dismiss()
+                }
+            } message: {
+                Text(unsavedOnClose ?? "")
             }
             .alert(
                 notice?.title ?? "",
@@ -284,6 +302,7 @@ struct NativeJobFormView: View {
             .nativeConfirmation($confirmationRequest) { intent in
                 guard case .deleteForm(let recordID) = intent else { return }
                 drafts = [:]
+                draftRefusals = [:]
                 if store.deleteForm(id: recordID) {
                     dismiss()
                 } else {
@@ -307,7 +326,8 @@ struct NativeJobFormView: View {
                 }
             }
         }
-        .onDisappear { commitDrafts() }
+        .onAppear(perform: restoreHeldDrafts)
+        .onDisappear(perform: holdUnsavedDrafts)
     }
 
     // MARK: Content
@@ -345,15 +365,17 @@ struct NativeJobFormView: View {
             titleVisibility: .hidden,
             presenting: photoAction
         ) { target in
-            Button("View photo") { viewerPhoto = target }
+            if target.isResolved {
+                Button("View photo") { viewerPhoto = target }
+            }
             if editable {
                 Button("Remove from this item", role: .destructive) {
                     report(store.removeFormItemPhoto(formID: formID, itemID: target.itemID, photoID: target.photoID))
                 }
             }
             Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text(editable ? "Removing it from this item keeps it in the job's Photos section." : "This form is complete and read-only.")
+        } message: { target in
+            Text(NativeJobFormsPresentation.photoActionMessage(isResolved: target.isResolved, editable: editable))
         }
     }
 
@@ -419,7 +441,8 @@ struct NativeJobFormView: View {
                 }
                 .disabled(!editable)
                 Button {
-                    commitDrafts()
+                    // A new refusal's notice comes first; the prompt can wait.
+                    guard commitDrafts().newProblem == nil else { return }
                     templateTitle = NativeJobFormsPresentation.defaultTemplateTitle(form)
                     showingTemplatePrompt = true
                 } label: {
@@ -473,13 +496,17 @@ struct NativeJobFormView: View {
                 }
             case .text:
                 itemLabel(item)
+                let answerKey = NativeJobFormsPresentation.DraftKey(itemID: item.id, field: .answer)
                 NativeFormTextField(
                     prompt: "Answer",
                     accessibilityTitle: "Answer for \(item.label)",
                     text: draftBinding(item, .answer),
                     isEditable: editable,
-                    onCommit: { commitDraft(.init(itemID: item.id, field: .answer)) }
+                    onCommit: { commitDraft(answerKey) }
                 )
+                if let refusal = draftRefusals[answerKey] {
+                    NativeFormUnsavedLabel(text: NativeJobFormsPresentation.unsavedFieldText(refusal))
+                }
             case .section, nil:
                 itemLabel(item)
                 Text(NativeJobFormsPresentation.unsupportedItemMessage)
@@ -523,6 +550,9 @@ struct NativeJobFormView: View {
                 onCommit: { commitDraft(key) }
             )
             .font(.subheadline)
+            if let refusal = draftRefusals[key] {
+                NativeFormUnsavedLabel(text: NativeJobFormsPresentation.unsavedFieldText(refusal))
+            }
         } else if editable {
             Button {
                 openedNotes.insert(item.id)
@@ -537,19 +567,33 @@ struct NativeJobFormView: View {
     @ViewBuilder
     private func photoArea(_ item: Canonical.FormItem, jobID: String, editable: Bool, existing: Set<String>) -> some View {
         let slots = NativeJobFormsPresentation.photoSlots(item, existingPhotoIDs: existing)
-        if !slots.resolvedIDs.isEmpty {
+        if slots.storedCount > 0 {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(Array(slots.resolvedIDs.enumerated()), id: \.element) { index, photoID in
                         let bytes = store.jobPhotoBytes(photoID: photoID)
                         Button {
-                            photoAction = NativeFormPhotoTarget(jobID: jobID, itemID: item.id, photoID: photoID)
+                            photoAction = NativeFormPhotoTarget(jobID: jobID, itemID: item.id, photoID: photoID, isResolved: true)
                         } label: {
                             NativeFormPhotoThumbnail(photoID: photoID, bytes: bytes)
                         }
                         .buttonStyle(.borderless)
                         .accessibilityLabel(NativeJobFormsPresentation.photoAccessibilityLabel(
-                            index: index, count: slots.resolvedIDs.count, itemLabel: item.label, isAvailable: bytes != nil
+                            index: index, count: slots.storedCount, itemLabel: item.label, isAvailable: bytes != nil
+                        ))
+                        .accessibilityHint("Shows photo actions")
+                    }
+                    // Linked photos whose record is not here (deleted, or not
+                    // synced yet): shown, counted, and only removed by the owner.
+                    ForEach(Array(slots.unresolvedIDs.enumerated()), id: \.element) { offset, photoID in
+                        Button {
+                            photoAction = NativeFormPhotoTarget(jobID: jobID, itemID: item.id, photoID: photoID, isResolved: false)
+                        } label: {
+                            NativeFormUnresolvedPhotoTile()
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel(NativeJobFormsPresentation.unresolvedPhotoAccessibilityLabel(
+                            index: slots.resolvedIDs.count + offset, count: slots.storedCount, itemLabel: item.label
                         ))
                         .accessibilityHint("Shows photo actions")
                     }
@@ -576,7 +620,7 @@ struct NativeJobFormView: View {
                         }
                     )
                 }
-                if !slots.resolvedIDs.isEmpty || item.isPhotoRequired {
+                if slots.storedCount > 0 || item.isPhotoRequired {
                     Text(NativeJobFormsPresentation.photoCountLabel(slots))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
@@ -613,33 +657,81 @@ struct NativeJobFormView: View {
 
     /// Writes one typed answer or note if it differs from what is stored.
     private func commitDraft(_ key: NativeJobFormsPresentation.DraftKey) {
-        guard let draft = drafts[key] else { return }
-        drafts[key] = nil
-        guard let item = form?.items.first(where: { $0.id == key.itemID }) else { return }
-        let stored = key.field == .answer ? item.text : item.note
-        guard let value = NativeJobFormsPresentation.textToCommit(draft: draft, stored: stored) else { return }
-        switch key.field {
-        case .answer: report(store.setFormItemText(formID: formID, itemID: key.itemID, value))
-        case .note: report(store.setFormItemNote(formID: formID, itemID: key.itemID, value))
+        commitDrafts(only: [key])
+    }
+
+    /// Writes the typed answers and notes that differ from what is stored. A
+    /// draft is cleared only once saved; a refused one stays with its reason
+    /// (`NativeJobFormsPresentation.commitDrafts`), and a new refusal is
+    /// shown once.
+    @discardableResult
+    private func commitDrafts(
+        only keys: [NativeJobFormsPresentation.DraftKey]? = nil,
+        announce: Bool = true
+    ) -> NativeJobFormsPresentation.DraftCommitOutcome {
+        let outcome = NativeJobFormsPresentation.commitDrafts(
+            drafts, refusals: draftRefusals, only: keys, form: form
+        ) { key, value in
+            switch key.field {
+            case .answer: store.setFormItemText(formID: formID, itemID: key.itemID, value)
+            case .note: store.setFormItemNote(formID: formID, itemID: key.itemID, value)
+            }
+        }
+        if drafts != outcome.drafts { drafts = outcome.drafts }
+        if draftRefusals != outcome.refusals { draftRefusals = outcome.refusals }
+        if announce, let problem = outcome.newProblem {
+            notice = .init(title: NativeJobFormsPresentation.unsavedTextTitle, message: NativeJobFormsPresentation.message(for: problem))
+        }
+        return outcome
+    }
+
+    /// Done: closes once every typed text is saved. Otherwise the owner
+    /// chooses Keep editing, or Close, which hands the text to the store.
+    private func done() {
+        let outcome = commitDrafts(announce: false)
+        if outcome.isAllSaved, outcome.dropped.isEmpty {
+            dismiss()
+        } else if outcome.isAllSaved, let problem = outcome.newProblem {
+            // Text for an item removed meanwhile: say so before closing.
+            notice = .init(title: NativeJobFormsPresentation.unsavedTextTitle, message: NativeJobFormsPresentation.message(for: problem))
+        } else {
+            unsavedOnClose = NativeJobFormsPresentation.unsavedOnCloseMessage(
+                count: outcome.drafts.count,
+                reason: NativeJobFormsPresentation.firstRefusal(outcome.refusals, form: form)
+            )
         }
     }
 
-    private func commitDrafts() {
-        guard let form else {
-            drafts = [:]
-            return
-        }
-        for pending in NativeJobFormsPresentation.pendingCommits(drafts: drafts, form: form) {
-            commitDraft(pending.key)
-        }
-        drafts = [:]
+    /// Text this form's screen closed without saving comes back into its
+    /// fields, still marked "Not saved", with a notice.
+    private func restoreHeldDrafts() {
+        guard let held = store.takeHeldFormDrafts(formID: formID) else { return }
+        let restoration = NativeJobFormsPresentation.draftRestoration(drafts: held.drafts, refusals: held.refusals, form: form)
+        guard let message = restoration.message else { return }
+        drafts.merge(restoration.drafts) { current, _ in current }
+        draftRefusals.merge(restoration.refusals) { current, _ in current }
+        notice = .init(title: NativeJobFormsPresentation.unsavedTextTitle, message: message)
+    }
+
+    /// Closing (Done, a swipe, or the job going away) makes a last try; what
+    /// is still refused is held by the store, never dropped silently.
+    private func holdUnsavedDrafts() {
+        let outcome = commitDrafts(announce: false)
+        store.holdFormDrafts(outcome.drafts, refusals: outcome.refusals, formID: formID)
     }
 
     private func markComplete() {
         guard !isCompleting else { return }
         isCompleting = true
         defer { isCompleting = false }
-        commitDrafts()
+        // Completing locks the form: every typed text must be saved first.
+        let outcome = commitDrafts()
+        guard outcome.isAllSaved, outcome.newProblem == nil else {
+            if outcome.newProblem == nil, let reason = NativeJobFormsPresentation.firstRefusal(outcome.refusals, form: form) {
+                notice = .init(title: NativeJobFormsPresentation.unsavedTextTitle, message: NativeJobFormsPresentation.message(for: reason))
+            }
+            return
+        }
         switch store.completeForm(id: formID) {
         case .completed:
             showsMissing = false
@@ -655,7 +747,11 @@ struct NativeJobFormView: View {
     }
 
     private func reopen() {
-        if case let .failure(error) = store.reopenForm(id: formID) {
+        switch store.reopenForm(id: formID) {
+        case .success:
+            // Text kept while the form was read-only can be saved now.
+            commitDrafts()
+        case let .failure(error):
             notice = .init(title: "Couldn't reopen form", message: NativeJobFormsPresentation.message(for: error))
         }
     }
@@ -677,12 +773,12 @@ struct NativeJobFormView: View {
         else { return }
         let existing = Set(store.jobPhotos(for: jobID).map(\.id))
         let slots = NativeJobFormsPresentation.photoSlots(item, existingPhotoIDs: existing)
+        // Every stored link counts, so this matches the domain's cap. Links to
+        // photos not on this device are never detached here: they may not
+        // have synced yet (review fix 2026-10-03).
         guard !slots.isFull else {
             notice = .init(title: "Photo not added", message: NativeJobFormsPresentation.message(for: .tooManyPhotos))
             return
-        }
-        for photoID in NativeJobFormsPresentation.danglingIDsToDetach(slots, adding: 1) {
-            _ = store.removeFormItemPhoto(formID: formID, itemID: itemID, photoID: photoID)
         }
         guard store.createJobPhoto(
             jobID: jobID, sourceData: data, width: width, height: height, formID: formID, formItemID: itemID
@@ -699,15 +795,20 @@ struct NativeJobFormView: View {
     /// alive through the share sheet and removed on dismissal.
     private func sharePDF(job: Job) {
         guard !isExportingPDF else { return }
-        commitDrafts()
+        // A new refusal's notice comes first. Text already marked "Not
+        // saved" (say, on a form completed elsewhere) doesn't block sharing
+        // the saved form.
+        guard commitDrafts().newProblem == nil else { return }
         guard let current = store.form(id: formID) else { return }
         isExportingPDF = true
         cleanupPDFShare()
         let photos = store.jobPhotos(for: job.id)
         let referenced = Set(current.items.flatMap { $0.photoIds ?? [] })
-        var bytes: [String: Data] = [:]
+        // Only where each photo's bytes are: the render task reads and
+        // downscales them one at a time (review fix 2026-10-03).
+        var files: [String: URL] = [:]
         for photo in photos where referenced.contains(photo.id) {
-            if let data = store.jobPhotoBytes(photoID: photo.id) { bytes[photo.id] = data }
+            if let url = store.jobPhotoFileURL(photoID: photo.id) { files[photo.id] = url }
         }
         let settings = store.settings
         let document = NativeFormPDFDocument(
@@ -721,14 +822,14 @@ struct NativeJobFormView: View {
             businessEmail: settings.email,
             businessAddress: settings.address,
             jobPhotos: photos,
-            availablePhotoIDs: Set(bytes.keys)
+            availablePhotoIDs: Set(files.keys)
         )
         let logo = settings.logoPhoto
-        let photoData = bytes
+        let photoFiles = files
         Task {
             do {
                 let url = try await Task.detached(priority: .userInitiated) {
-                    let data = try NativeFormPDFRenderer.data(for: document, logoReference: logo, photoData: photoData)
+                    let data = try NativeFormPDFRenderer.data(for: document, logoReference: logo, photoFiles: photoFiles)
                     let directory = FileManager.default.temporaryDirectory
                         .appending(path: "TradeReadyFormExports", directoryHint: .isDirectory)
                         .appending(path: UUID().uuidString, directoryHint: .isDirectory)
@@ -781,7 +882,20 @@ private struct NativeFormPhotoTarget: Identifiable {
     let jobID: String
     let itemID: String
     let photoID: String
+    /// False for a linked photo whose record is not on this device.
+    let isResolved: Bool
     var id: String { "\(itemID)/\(photoID)" }
+}
+
+/// "Not saved…" or "Unsaved text": a symbol and text, never color alone.
+private struct NativeFormUnsavedLabel: View {
+    let text: String
+
+    var body: some View {
+        Label(text, systemImage: "exclamationmark.triangle")
+            .font(.footnote.weight(.medium))
+            .foregroundStyle(Color.tradeWarningText)
+    }
 }
 
 /// One frozen PDF share: the temp file lives through the share sheet and is
@@ -862,6 +976,29 @@ private struct NativeFormPhotoButtons: View {
                 }
             }
         }
+    }
+}
+
+/// A linked photo whose record is not on this device (deleted, or not synced
+/// here yet): a same-size tile that says so in text.
+private struct NativeFormUnresolvedPhotoTile: View {
+    @ScaledMetric(relativeTo: .caption2) private var scaledSide: CGFloat = 72
+
+    private var side: CGFloat { min(max(scaledSide, 72), 120) }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: "questionmark.square.dashed")
+                .font(.title3)
+            Text(NativeJobFormsPresentation.unresolvedPhotoTileText)
+                .font(.caption2)
+                .multilineTextAlignment(.center)
+                .minimumScaleFactor(0.7)
+        }
+        .foregroundStyle(.secondary)
+        .padding(6)
+        .frame(width: side, height: side)
+        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 

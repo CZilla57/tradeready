@@ -1739,8 +1739,18 @@ struct StoreIntegrationTests {
             expect(reopened.completedAt == nil && reopened.items == completed.items, "forms: reopening keeps the answers")
             expect(queueStore.reopenForm(id: formID) == .failure(.notCompleted), "forms: reopening twice is refused")
 
+            // Review fix (2026-10-03): the form PDF reads each photo from its
+            // file inside the render task instead of holding every photo's bytes.
+            let photoFile = queueStore.jobPhotoFileURL(photoID: photo.id)
+            expect(photoFile.flatMap { try? Data(contentsOf: $0) } == queueStore.jobPhotoBytes(photoID: photo.id)
+                   && photoFile != nil,
+                   "forms: a photo's file holds the same bytes the screen shows")
+            expect(queueStore.jobPhotoFileURL(photoID: "p1_missing") == nil && queueStore.jobPhotoFileURL(photoID: "../x") == nil,
+                   "forms: a photo with no bytes here, or an invalid id, has no file")
+
             // A deleted photo leaves a dangling id that no longer satisfies the item.
             expect(queueStore.deleteJobPhoto(photoID: photo.id), "forms: the job photo deletes")
+            expect(queueStore.jobPhotoFileURL(photoID: photo.id) == nil, "forms: a deleted photo's file is gone")
             expect(queueStore.form(id: formID)?.items[1].photoIds == [photo.id], "forms: the item keeps the dangling id")
             expect(queueStore.formItemPhotos(formID: formID, itemID: "fi_2").isEmpty, "forms: a dangling id resolves to nothing")
             expect(queueStore.formMissingItems(queueStore.form(id: formID)!).map(\.reasons) == [[.photoUnavailable]],
@@ -4584,6 +4594,40 @@ struct StoreIntegrationTests {
                    "10.12 fix1 I7a: the relaunched, re-activated store reads back a real (non-nil) checklist state")
             expect(relaunched.setupChecklistState?.isDone(.rate) == false,
                    "10.12 fix1 I7a: the on-disk setup-checklist store was actually removed by applyCompletedSignOutState, not just the in-memory copy")
+        }
+
+        // --- Phase 20 review fix (2026-10-03): form text a closing screen could
+        // not save is held in memory by form id, taken back once by the screen
+        // that owns it, and scrubbed at an account boundary.
+        do {
+            let (store, _) = try seed08Store(settings: settings08(), tag: "forms-held-text")
+            seed08Owner(store, binding: hexBinding("bind-forms-held"))
+            let heldFormID = "fm1759420800000_held"
+            let answer = NativeJobFormsPresentation.DraftKey(itemID: "fi_12", field: .answer)
+            expect(!store.hasHeldFormText(formID: heldFormID) && store.takeHeldFormDrafts(formID: heldFormID) == nil
+                   && store.takeHeldFormTitle(formID: heldFormID) == nil,
+                   "forms held text: nothing is held at first")
+            store.holdFormDrafts([answer: "Three breakers"], refusals: [answer: .readOnlyCompleted], formID: heldFormID)
+            store.holdFormTitle("Panel check", refusal: .notSaved, formID: heldFormID)
+            expect(store.hasHeldFormText(formID: heldFormID), "forms held text: the form's row can say it has unsaved text")
+            let drafts = store.takeHeldFormDrafts(formID: heldFormID)
+            expect(drafts?.drafts == [answer: "Three breakers"] && drafts?.refusals == [answer: .readOnlyCompleted],
+                   "forms held text: the fill screen takes back its text with the reasons")
+            expect(store.takeHeldFormDrafts(formID: heldFormID) == nil && store.hasHeldFormText(formID: heldFormID),
+                   "forms held text: taken once; the editor's title is still held")
+            let title = store.takeHeldFormTitle(formID: heldFormID)
+            expect(title?.title == "Panel check" && title?.refusal == .notSaved && store.heldFormText.isEmpty,
+                   "forms held text: the editor takes back its title, and nothing is left")
+            store.holdFormDrafts([answer: "x"], refusals: [answer: .notSaved], formID: heldFormID)
+            store.holdFormDrafts([:], refusals: [answer: .notSaved], formID: heldFormID)
+            expect(store.heldFormText.isEmpty, "forms held text: a screen that closes with everything saved releases what was held")
+            store.holdFormTitle(nil, refusal: .notSaved, formID: heldFormID)
+            expect(store.heldFormText.isEmpty, "forms held text: no title, nothing held")
+            store.holdFormDrafts([answer: "Kept"], refusals: [:], formID: heldFormID)
+            store.holdFormTitle("Kept title", refusal: nil, formID: heldFormID)
+            store.testApplyCompletedSignOutState()
+            expect(store.heldFormText.isEmpty && !store.hasHeldFormText(formID: heldFormID),
+                   "forms held text: an account boundary scrubs held text")
         }
 
         // --- I7(b): apply a mute, cross a boundary, relaunch/reactivate, and

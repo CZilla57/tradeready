@@ -1,4 +1,6 @@
+import CoreGraphics
 import Foundation
+import ImageIO
 
 // Phase 20 (custom job / inspection forms) pure-domain host tests:
 // `Canonical.Form`/`Canonical.FormItem` round-trips and `NativeJobForms`
@@ -657,6 +659,10 @@ run("presentation: job detail rows and status") {
     expectEqual(open.statusLabel, "In progress", "an open form's badge says In progress")
     expect(!open.isCompleted, "not completed")
     expectEqual(open.accessibilityLabel, "Sample, 1 of 5 answered, in progress", "the row reads as one sentence")
+    expectEqual(open.unsavedLabel, nil, "no unsaved text")
+    let unsaved = Presentation.rowSummary(form, hasUnsavedText: true)
+    expectEqual(unsaved.unsavedLabel, "Unsaved text", "a form whose screen closed with unsaved text says so in text")
+    expectEqual(unsaved.accessibilityLabel, "Sample, 1 of 5 answered, in progress, unsaved text", "and VoiceOver reads it")
     expectEqual(open.id, formID, "rows are identified by form id")
     expectEqual(Presentation.statusText(form, calendar: phoenix), "In progress", "status text while open")
     expect(Presentation.isEditable(form), "an open instance is editable")
@@ -738,9 +744,19 @@ run("presentation: text drafts commit only real changes") {
         .init(itemID: "fi_99", field: .answer): "gone",
         .init(itemID: "fi_3", field: .note): "",
     ]
-    let pending = Presentation.pendingCommits(drafts: drafts, form: form)
-    expectEqual(pending.map(\.key.itemID), ["fi_2", "fi_6"], "only changed drafts, in form order; gone items dropped")
-    expectEqual(pending.map(\.value), ["new note", "later item"], "the typed values")
+    expectEqual(Presentation.commitOrder(drafts: drafts, form: form).map { "\($0.itemID)/\($0.field.rawValue)" },
+                ["fi_2/note", "fi_3/note", "fi_4/answer", "fi_6/answer", "fi_99/answer"],
+                "drafts commit in form order, answer before note; a gone item's draft comes last")
+    expectEqual(Presentation.draftCommitStep(.init(itemID: "fi_2", field: .note), draft: "new note", form: form),
+                .write("new note"), "a changed note is written")
+    expectEqual(Presentation.draftCommitStep(.init(itemID: "fi_4", field: .answer), draft: "41 psi", form: form),
+                .clear, "an unchanged answer is cleared without a write")
+    expectEqual(Presentation.draftCommitStep(.init(itemID: "fi_3", field: .note), draft: "", form: form),
+                .clear, "an empty note over no note is unchanged")
+    expectEqual(Presentation.draftCommitStep(.init(itemID: "fi_99", field: .answer), draft: "gone", form: form),
+                .itemGone, "an item that is gone takes nothing")
+    expectEqual(Presentation.draftCommitStep(.init(itemID: "fi_2", field: .note), draft: "x", form: nil),
+                .itemGone, "a form that is gone takes nothing")
     expectEqual(Presentation.storedText(form.items[3], field: .answer), "41 psi", "stored answer")
     expectEqual(Presentation.storedText(form.items[3], field: .note), "", "absent note reads empty")
     expect(Presentation.showsNote(form.items[1], opened: false), "an item with a note shows it")
@@ -752,27 +768,34 @@ run("presentation: text drafts commit only real changes") {
 
 run("presentation: photo slots") {
     var item = sample().items[4]
-    item.photoIds = ["p1", "p_gone", "p2"]
+    item.photoIds = ["p1", "p_unsynced", "p2"]
     let slots = Presentation.photoSlots(item, existingPhotoIDs: ["p1", "p2", "p_other"])
     expectEqual(slots.resolvedIDs, ["p1", "p2"], "resolved in stored order")
-    expectEqual(slots.danglingIDs, ["p_gone"], "a deleted photo is dangling")
-    expectEqual(slots.remaining, 8, "room counts only the shown photos")
+    expectEqual(slots.unresolvedIDs, ["p_unsynced"], "a link whose photo record is not here is unresolved")
+    expectEqual(slots.remaining, 7, "room counts every stored link, as the domain cap does")
     expect(!slots.isFull, "not full")
-    expectEqual(Presentation.photoCountLabel(slots), "2 of 10 photos", "count label")
-    expectEqual(Presentation.danglingIDsToDetach(slots, adding: 1), [], "nothing to detach while the stored ids fit")
+    expectEqual(slots.storedCount, 3, "three links")
+    expectEqual(Presentation.photoCountLabel(slots), "3 of 10 photos", "the count matches the tiles shown, unresolved included")
 
-    item.photoIds = (1 ... 7).map { "p\($0)" } + ["g1", "g2", "g3"]
-    let crowded = Presentation.photoSlots(item, existingPhotoIDs: Set((1 ... 7).map { "p\($0)" }))
-    expectEqual(crowded.remaining, 3, "three slots shown")
-    expectEqual(Presentation.danglingIDsToDetach(crowded, adding: 1), ["g1"], "one dangling id makes room for one photo")
-    expectEqual(Presentation.danglingIDsToDetach(crowded, adding: 3), ["g1", "g2", "g3"], "three for three")
+    // Review fix (2026-10-03): a photo captured on another device can reach
+    // this device's form before its record does (photos and forms pull as
+    // separate tables). Its link must survive a capture here.
+    item.photoIds = (1 ... 9).map { "p\($0)" } + ["p_from_other_device"]
+    let crowded = Presentation.photoSlots(item, existingPhotoIDs: Set((1 ... 9).map { "p\($0)" }))
+    expect(crowded.isFull && crowded.remaining == 0, "nine shown plus one not synced yet: the item is full")
     var form = sample()
     form.items[4].photoIds = item.photoIds
-    for id in Presentation.danglingIDsToDetach(crowded, adding: 1) {
-        form = try NativeJobForms.removePhoto(form, itemID: "fi_5", photoID: id)
+    expectError(.tooManyPhotos, "the screen's room agrees with the domain: an eleventh link is refused") {
+        try NativeJobForms.addPhoto(form, itemID: "fi_5", photoID: "p10")
     }
-    form = try NativeJobForms.addPhoto(form, itemID: "fi_5", photoID: "p8")
-    expectEqual(form.items[4].photoIds?.count, 10, "after detaching, the domain accepts the new photo")
+    expectEqual(form.items[4].photoIds?.last, "p_from_other_device", "the unsynced link is never detached automatically")
+    let synced = Presentation.photoSlots(item, existingPhotoIDs: Set((1 ... 9).map { "p\($0)" } + ["p_from_other_device"]))
+    expectEqual(synced.resolvedIDs.last, "p_from_other_device", "once its record syncs, the same link resolves in place")
+    form = try NativeJobForms.removePhoto(form, itemID: "fi_5", photoID: "p_from_other_device")
+    let freed = Presentation.photoSlots(form.items[4], existingPhotoIDs: Set((1 ... 9).map { "p\($0)" }))
+    expectEqual(freed.remaining, 1, "the owner removing an unresolved link frees its place")
+    form = try NativeJobForms.addPhoto(form, itemID: "fi_5", photoID: "p10")
+    expectEqual(form.items[4].photoIds?.count, 10, "and the domain accepts the new photo")
 
     item.photoIds = (1 ... 10).map { "p\($0)" }
     let full = Presentation.photoSlots(item, existingPhotoIDs: Set((1 ... 10).map { "p\($0)" }))
@@ -783,6 +806,189 @@ run("presentation: photo slots") {
                 "Photo 2 of 3, Panel", "thumbnail label")
     expectEqual(Presentation.photoAccessibilityLabel(index: 0, count: 1, itemLabel: "Panel", isAvailable: false),
                 "Photo 1 of 1, Panel, waiting for download", "a photo without bytes says so")
+    expectEqual(Presentation.unresolvedPhotoAccessibilityLabel(index: 2, count: 3, itemLabel: "Panel"),
+                "Photo 3 of 3, Panel, not on this device", "an unresolved link says so")
+    expectEqual(Presentation.unresolvedPhotoTileText, "Not on this device", "the tile says it in text")
+    expect(Presentation.photoActionMessage(isResolved: false, editable: true).contains("still be syncing")
+           && Presentation.photoActionMessage(isResolved: false, editable: true).hasSuffix("frees its place."),
+           "an unresolved link explains both causes and what removing it does")
+    expect(!Presentation.photoActionMessage(isResolved: false, editable: false).contains("Removing"),
+           "a read-only form offers no removal")
+    expectEqual(Presentation.photoActionMessage(isResolved: true, editable: true),
+                "Removing it from this item keeps it in the job's Photos section.", "a resolved photo")
+    expectEqual(Presentation.photoActionMessage(isResolved: true, editable: false),
+                "This form is complete and read-only.", "a resolved photo on a completed form")
+}
+
+// MARK: - Saving typed text (review fix 2026-10-03)
+
+/// A stand-in for the store's text writes: applies the pure operation to
+/// `stored` and refuses as the store does (a completed form is read-only).
+final class FakeFormWriter {
+    var stored: Canonical.Form?
+    var refuseWith: NativeJobForms.FormError?
+    var writes: [String] = []
+
+    init(_ form: Canonical.Form?) { stored = form }
+
+    func write(_ key: Presentation.DraftKey, _ value: String) -> Result<Canonical.Form, NativeJobForms.FormError> {
+        writes.append("\(key.itemID)/\(key.field.rawValue)=\(value)")
+        if let refuseWith { return .failure(refuseWith) }
+        guard let form = stored else { return .failure(.notFound) }
+        guard !form.isCompleted else { return .failure(.readOnlyCompleted) }
+        do {
+            let next = key.field == .answer
+                ? try NativeJobForms.setText(form, itemID: key.itemID, value)
+                : try NativeJobForms.setNote(form, itemID: key.itemID, value)
+            stored = next
+            return .success(next)
+        } catch {
+            return .failure((error as? NativeJobForms.FormError) ?? .notSaved)
+        }
+    }
+
+    func commit(
+        _ drafts: [Presentation.DraftKey: String],
+        refusals: [Presentation.DraftKey: NativeJobForms.FormError] = [:],
+        only keys: [Presentation.DraftKey]? = nil
+    ) -> Presentation.DraftCommitOutcome {
+        Presentation.commitDrafts(drafts, refusals: refusals, only: keys, form: stored) { write($0, $1) }
+    }
+}
+
+let answer4 = Presentation.DraftKey(itemID: "fi_4", field: .answer)
+let note2 = Presentation.DraftKey(itemID: "fi_2", field: .note)
+let answer6 = Presentation.DraftKey(itemID: "fi_6", field: .answer)
+
+run("presentation: a typed draft is cleared only once saved") {
+    let writer = FakeFormWriter(sample())
+    let saved = writer.commit([answer6: "later", answer4: "41 psi", note2: "loose"])
+    expectEqual(writer.writes, ["fi_2/note=loose", "fi_4/answer=41 psi", "fi_6/answer=later"], "one write per changed draft, in form order")
+    expect(saved.isAllSaved && saved.refusals.isEmpty && saved.dropped.isEmpty && saved.newProblem == nil, "saved drafts are cleared")
+    expectEqual(writer.stored?.items[3].text, "41 psi", "the answer is stored")
+
+    writer.writes = []
+    let unchanged = writer.commit([answer4: "41 psi"])
+    expect(unchanged.isAllSaved && writer.writes.isEmpty, "a draft that matches what is stored is cleared without a write")
+
+    // Bug 4: another device completes the form while the owner types.
+    writer.stored?.completedAt = "2026-10-03T16:00:00.000Z"
+    let refused = writer.commit([answer4: "42 psi", note2: "tightened"])
+    expectEqual(refused.drafts, [answer4: "42 psi", note2: "tightened"], "refused drafts keep the typed text")
+    expectEqual(refused.refusals, [answer4: .readOnlyCompleted, note2: .readOnlyCompleted], "each with its reason")
+    expectEqual(refused.newProblem, .readOnlyCompleted, "the refusal is reported")
+    expect(!refused.isAllSaved, "not all saved")
+    expectEqual(writer.stored?.items[3].text, "41 psi", "nothing was written")
+
+    let again = writer.commit(refused.drafts, refusals: refused.refusals)
+    expectEqual(again.drafts, refused.drafts, "a retry that is refused again still keeps the text")
+    expectEqual(again.newProblem, nil, "the same refusal is not announced twice")
+    writer.refuseWith = .notSaved
+    let other = writer.commit(again.drafts, refusals: again.refusals)
+    expectEqual(other.newProblem, .notSaved, "a new reason is announced")
+    expectEqual(other.refusals[answer4], .notSaved, "and replaces the old one")
+    writer.refuseWith = nil
+
+    // Reopen, then the kept text saves.
+    writer.stored?.completedAt = nil
+    let reopened = writer.commit(other.drafts, refusals: other.refusals)
+    expect(reopened.isAllSaved && reopened.refusals.isEmpty && reopened.newProblem == nil, "after reopening, the kept text saves")
+    expectEqual(writer.stored?.items[3].text, "42 psi", "the typed answer is stored")
+    expectEqual(writer.stored?.items[1].note, "tightened", "the typed note is stored")
+}
+
+run("presentation: one field commits alone; gone items are dropped and reported") {
+    let writer = FakeFormWriter(sample())
+    writer.refuseWith = .jobNotFound
+    let first = writer.commit([answer4: "41 psi", answer6: "x"], only: [answer4])
+    expectEqual(writer.writes, ["fi_4/answer=41 psi"], "only the field that ended editing is written")
+    expectEqual(first.drafts, [answer4: "41 psi", answer6: "x"], "the other draft is untouched")
+    expectEqual(first.refusals, [answer4: .jobNotFound], "only the attempted field has a reason")
+    writer.refuseWith = nil
+    let second = writer.commit(first.drafts, refusals: first.refusals, only: [answer6])
+    expectEqual(second.drafts, [answer4: "41 psi"], "the saved field is cleared, the refused one kept")
+    expectEqual(second.refusals, [answer4: .jobNotFound], "a field not attempted keeps its reason")
+    expectEqual(second.newProblem, nil, "nothing new to say")
+
+    let gone = Presentation.DraftKey(itemID: "fi_99", field: .note)
+    let dropped = writer.commit([gone: "orphan", answer4: "41 psi"])
+    expectEqual(dropped.dropped, [gone], "a draft whose item is gone is dropped")
+    expect(dropped.isAllSaved && dropped.drafts[gone] == nil, "it is not kept, since nothing can take it")
+    expectEqual(dropped.newProblem, .itemNotFound("fi_99"), "and the owner is told")
+    expectEqual(Presentation.message(for: dropped.newProblem!), "That item is no longer on this form.", "in words")
+
+    let noForm = Presentation.commitDrafts([answer4: "x"], form: nil) { _, _ in .failure(.notSaved) }
+    expect(noForm.isAllSaved && noForm.dropped == [answer4] && noForm.newProblem == .notFound, "a form that is gone takes nothing")
+    let stale = Presentation.commitDrafts([:], refusals: [answer4: .notSaved], form: sample()) { _, _ in .failure(.notSaved) }
+    expect(stale.refusals.isEmpty, "a reason without a draft is dropped")
+}
+
+run("presentation: unsaved text notices") {
+    expectEqual(Presentation.unsavedFieldText(.readOnlyCompleted),
+                "Not saved. This form is complete. Reopen it to make changes.", "the field marker says why")
+    expectEqual(Presentation.unsavedTextTitle, "Text not saved", "notice title")
+    let one = Presentation.unsavedOnCloseMessage(count: 1, reason: .readOnlyCompleted)
+    expect(one.hasPrefix("1 answer or note isn't saved. This form is complete.") && one.contains("Close keeps the text"),
+           "Done with one unsaved field says what Close does")
+    expect(Presentation.unsavedOnCloseMessage(count: 3, reason: nil).hasPrefix("3 answers or notes aren't saved. Close"), "plural")
+    expectEqual(Presentation.firstRefusal([answer6: .notSaved, note2: .readOnlyCompleted], form: sample()), .readOnlyCompleted,
+                "the first refusal is in form order")
+    expectEqual(Presentation.firstRefusal([:], form: sample()), nil, "no refusals")
+
+    var form = sample()
+    form = try NativeJobForms.setText(form, itemID: "fi_4", "41 psi")
+    let held: [Presentation.DraftKey: String] = [
+        answer4: "42 psi", note2: "tightened", answer6: "", .init(itemID: "fi_99", field: .answer): "gone",
+    ]
+    let restoration = Presentation.draftRestoration(
+        drafts: held, refusals: [answer4: .readOnlyCompleted, note2: .readOnlyCompleted, answer6: .notSaved], form: form
+    )
+    expectEqual(restoration.drafts, [answer4: "42 psi", note2: "tightened"],
+                "held text comes back only where it still differs and its item exists")
+    expectEqual(restoration.refusals, [answer4: .readOnlyCompleted, note2: .readOnlyCompleted], "with its reasons")
+    expectEqual(restoration.message,
+                "2 answers or notes weren't saved when this form was closed. They're back in their fields, marked Not saved. This form is complete. Reopen it to make changes.",
+                "the restore notice")
+    let single = Presentation.draftRestoration(drafts: [note2: "x"], refusals: [:], form: form)
+    expectEqual(single.message, "1 answer or note wasn't saved when this form was closed. It's back in its field, marked Not saved.",
+                "singular, no reason")
+    let nothing = Presentation.draftRestoration(drafts: [answer4: "41 psi"], refusals: [:], form: form)
+    expect(nothing.drafts.isEmpty && nothing.message == nil, "text that now matches what is stored needs no notice")
+    expect(Presentation.draftRestoration(drafts: held, refusals: [:], form: nil).message == nil, "a form that is gone restores nothing")
+
+    expect(Presentation.HeldText().isEmpty, "nothing held")
+    expect(!Presentation.HeldText(drafts: [answer4: ""]).isEmpty && !Presentation.HeldText(title: "T").isEmpty, "drafts or a title")
+}
+
+run("presentation: the editor's title is cleared only once saved") {
+    var writes: [String] = []
+    func succeed(_ title: String) -> Result<Canonical.Form, NativeJobForms.FormError> { writes.append(title); return .success(sample()) }
+    func refuse(_ error: NativeJobForms.FormError) -> (String) -> Result<Canonical.Form, NativeJobForms.FormError> {
+        { writes.append($0); return .failure(error) }
+    }
+    expectEqual(Presentation.commitTitle(nil, refusal: nil, stored: "Sample", write: succeed),
+                .init(draft: nil, refusal: nil, newProblem: nil), "no draft, no write")
+    expectEqual(Presentation.commitTitle(" Sample ", refusal: nil, stored: "Sample", write: succeed),
+                .init(draft: nil, refusal: nil, newProblem: nil), "a title that matches once trimmed is cleared")
+    expect(writes.isEmpty, "without a write")
+    expectEqual(Presentation.commitTitle("Panel check", refusal: .notSaved, stored: "Sample", write: succeed),
+                .init(draft: nil, refusal: nil, newProblem: nil), "a saved title is cleared with its old reason")
+    expectEqual(writes, ["Panel check"], "one write")
+    let refused = Presentation.commitTitle("Panel check", refusal: nil, stored: "Sample", write: refuse(.readOnlyCompleted))
+    expectEqual(refused, .init(draft: "Panel check", refusal: .readOnlyCompleted, newProblem: .readOnlyCompleted),
+                "a refused title keeps the typed text and reports why")
+    expectEqual(Presentation.commitTitle("Panel check", refusal: .readOnlyCompleted, stored: "Sample", write: refuse(.readOnlyCompleted)).newProblem,
+                nil, "the same refusal is not announced twice")
+    expectEqual(Presentation.commitTitle("Panel check", refusal: nil, stored: nil, write: succeed).draft, nil,
+                "a form that is gone takes nothing")
+    expectEqual(Presentation.titleToHold("Panel check"), "Panel check", "a closing editor holds a typed title")
+    expectEqual(Presentation.titleToHold("   "), nil, "a blank title is never held: the stored title stays")
+    expectEqual(Presentation.titleToHold(nil), nil, "nothing typed")
+    expectEqual(Presentation.restoredTitle("Panel check", stored: "Sample"), "Panel check", "a held title comes back")
+    expectEqual(Presentation.restoredTitle("Panel check", stored: "Panel check"), nil, "unless the form already has it")
+    expectEqual(Presentation.restoredTitle("Panel check", stored: nil), nil, "or the form is gone")
+    expect(Presentation.restoredTitleMessage(reason: .readOnlyCompleted).hasSuffix("Reopen it to make changes."),
+           "the restore notice says why")
 }
 
 run("presentation: completion refusal messages") {
@@ -965,6 +1171,78 @@ run("pdf: photo resolution") {
     expectEqual(rows[0].photos, [.init(id: "p_first", isAvailable: true)], "a check item's photo")
     expectEqual(document.photoIDs, ["p_first", "p_here", "p_remote"], "every drawn photo, in document order")
     expect(NativeFormPDFDocument.photoUnavailableText == "Photo not available on this device", "placeholder text (spec §5)")
+}
+
+// MARK: - PDF photo downscaling (review fix 2026-10-03)
+
+struct ImageFixtureError: Error {}
+
+let imageFixtureDirectory = FileManager.default.temporaryDirectory
+    .appendingPathComponent("tradeready-job-forms-images-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+
+/// A JPEG of `width`×`height` stored pixels with an EXIF orientation, drawn
+/// with a gradient so it compresses like a photo rather than a flat fill.
+func writeJPEG(_ name: String, width: Int, height: Int, orientation: Int = 1) throws -> URL {
+    try FileManager.default.createDirectory(at: imageFixtureDirectory, withIntermediateDirectories: true)
+    guard let context = CGContext(
+        data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+    ) else { throw ImageFixtureError() }
+    for x in stride(from: 0, to: width, by: 8) {
+        let shade = CGFloat(x % 256) / 255
+        context.setFillColor(CGColor(red: shade, green: 1 - shade, blue: CGFloat((x * 7) % 256) / 255, alpha: 1))
+        context.fill(CGRect(x: x, y: 0, width: 8, height: height))
+    }
+    guard let image = context.makeImage() else { throw ImageFixtureError() }
+    let url = imageFixtureDirectory.appendingPathComponent(name)
+    guard let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.jpeg" as CFString, 1, nil) else {
+        throw ImageFixtureError()
+    }
+    let properties: [CFString: Any] = [
+        kCGImageDestinationLossyCompressionQuality: 0.95,
+        kCGImagePropertyOrientation: orientation,
+    ]
+    CGImageDestinationAddImage(destination, image, properties as CFDictionary)
+    guard CGImageDestinationFinalize(destination) else { throw ImageFixtureError() }
+    return url
+}
+
+run("pdf: photos are read from their files and downscaled one at a time") {
+    defer { try? FileManager.default.removeItem(at: imageFixtureDirectory) }
+    expectEqual(NativeFormPDFPhotoScaling.maxPixelSize, 320, "160 pt at 2x (spec §5)")
+    expectEqual(NativeFormPDFPhotoScaling.jpegQuality, 0.7, "the PDF's JPEG quality is unchanged")
+
+    let landscape = try writeJPEG("landscape.jpg", width: 3_000, height: 2_000)
+    guard let thumbnail = NativeFormPDFPhotoScaling.thumbnail(at: landscape) else {
+        expect(false, "a photo file downscales")
+        return
+    }
+    expectEqual([thumbnail.width, thumbnail.height], [320, 213], "the longest side is capped at 320 px, aspect kept")
+
+    // EXIF orientation 6: stored landscape, shown portrait.
+    let rotated = try writeJPEG("rotated.jpg", width: 3_000, height: 2_000, orientation: 6)
+    let upright = NativeFormPDFPhotoScaling.thumbnail(at: rotated)
+    expectEqual(upright.map { [$0.width, $0.height] }, [213, 320], "the photo's orientation is applied")
+
+    let small = try writeJPEG("small.jpg", width: 120, height: 90)
+    let unscaled = NativeFormPDFPhotoScaling.thumbnail(at: small)
+    expect(unscaled.map { max($0.width, $0.height) <= 320 } == true, "a small photo stays within the cap")
+
+    guard let jpeg = NativeFormPDFPhotoScaling.jpegData(thumbnail) else {
+        expect(false, "the thumbnail recompresses as JPEG")
+        return
+    }
+    expect(jpeg.starts(with: [0xFF, 0xD8, 0xFF]), "the recompressed photo is a JPEG")
+    let source = try Data(contentsOf: landscape)
+    expect(jpeg.count * 4 < source.count, "and far smaller than the full-size file (\(jpeg.count) vs \(source.count) bytes)")
+    let decoded = CGImageSourceCreateWithData(jpeg as CFData, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
+    expectEqual(decoded.map { [$0.width, $0.height] }, [320, 213], "it decodes at the downscaled size")
+
+    let missing = imageFixtureDirectory.appendingPathComponent("missing.jpg")
+    expect(NativeFormPDFPhotoScaling.thumbnail(at: missing) == nil, "a missing file draws the placeholder")
+    let text = imageFixtureDirectory.appendingPathComponent("not-an-image.jpg")
+    try Data("not an image".utf8).write(to: text)
+    expect(NativeFormPDFPhotoScaling.thumbnail(at: text) == nil, "a file that is not an image draws the placeholder")
 }
 
 run("pdf: filename") {

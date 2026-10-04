@@ -177,7 +177,7 @@ The committed data layer (`1352da0`, merged in `494bd87`) was re-run before any 
   A field stops at its cap (2,000 or 1,000 characters) instead of failing on save.
 - **Refused completion.** An alert lists every missing item with its typed reason (capped at 6 lines, "… and N more"). Each missing row is then marked "Still needed: …" in text.
 - **Completed form.** Every control is disabled and a read-only notice shows. Edit items is off. Share PDF, Save as template and Delete stay available.
-- **Photos per item.** The domain caps the stored `photoIds`, ids of deleted photos included. The screen shows only the photos that still resolve. Before a capture, the screen detaches just enough dangling ids that the room it shows is real (`danglingIDsToDetach`). The library picker never offers more photos than the room left.
+- **Photos per item.** The domain caps the stored `photoIds`, ids of deleted photos included. The screen shows only the photos that still resolve. Before a capture, the screen detaches just enough dangling ids that the room it shows is real (`danglingIDsToDetach`). The library picker never offers more photos than the room left. *(Superseded: the review fixes below remove the automatic detach.)*
 - **Item kind.** An item's kind is fixed once it is added: the edit sheet changes the label and flags only. New items are added at the end and can then be reordered. Deleting an item asks first, and the last item cannot be deleted.
 - **Templates.** Templates are archived, never deleted, from a swipe or from the editor, after a confirmation. Archiving pops the editor.
 - **Template location.** Template management lives in Settings as the spec says. The pricebook and trade templates live under Money.
@@ -203,3 +203,86 @@ The committed data layer (`1352da0`, merged in `494bd87`) was re-run before any 
   - The remaining failures are the known pre-existing ones only: `RootView.swift:234` `.borderedProminent`, `RootView` six tabs, `CoachView.swift:68` Done, and the `.keyboardShortcut` count.
 - **Release compile:** generic iOS, signing off: **BUILD SUCCEEDED**.
 - **Not run here:** device evidence (VoiceOver, AX5, camera, the share sheet and the rendered PDF on an iPhone) is deferred to Phase 12.
+
+### Review fixes (2026-10-03)
+
+The review of `1352da0` + `cdc2b29` raised one confirmed Phase 20 bug and two plausible ones. Each was re-verified against the tree before it was fixed.
+
+| Finding | Verdict | Fix |
+|---|---|---|
+| 4. Typed form text and the edited title are thrown away when a commit is refused | **Confirmed** (trace) | A draft is cleared only after its commit succeeds. A refused draft stays in its field, marked "Not saved", with a notice. Text a closing screen still can't save is held by the store and comes back when the form opens again. |
+| Plausible: sharing a PDF reads every photo's full bytes on the main thread | **Confirmed** (trace) | The render task reads and downscales each photo from its file, one at a time. |
+| Plausible: `danglingIDsToDetach` detaches links to photos that haven't synced yet | **Confirmed** (trace) | Nothing is detached automatically. Every stored link counts toward the 10, and a link with no photo record here shows as a "Not on this device" tile the owner can remove. |
+
+#### Bug 4: refused commits dropped typed text
+
+- **Re-verified.**
+  - `commitDraft` set `drafts[key] = nil` before calling `setFormItemText` or `setFormItemNote`, and `commitDrafts` then cleared every draft.
+  - `.onDisappear` ran the same path, so its notice went to a closing screen.
+  - `commitTitle` in the items editor cleared `titleDraft` before `renameForm`.
+  - Scenario: another device completes the form. The pull disables the field, so focus is lost and the commit runs. The store refuses with `.readOnlyCompleted`, and the text is gone. `.notSaved` and `.jobNotFound` behave the same way.
+- **Pure decision** (`N/Domain/NativeJobFormsPresentation.swift`, host-tested). It replaces `pendingCommits`:
+  - `draftCommitStep`: clear, write, or item gone.
+  - `commitOrder`.
+  - `commitDrafts(_:refusals:only:form:write:)`, which returns `DraftCommitOutcome`: the drafts still unsaved, each one's reason, the dropped drafts, and the one new problem to announce.
+  - `commitTitle`, `titleToHold` and `restoredTitle`.
+  - `draftRestoration`, `HeldText` and the notice texts.
+- **Fill screen** (`N/NativeJobFormsView.swift`):
+  - **Single-field commits.** End-edit, the debounce, Done, Mark complete, Share PDF, Save as template and Reopen all commit through the pure helper.
+  - **Refused text.** A refused draft keeps its text, and "Not saved. *reason*" shows under the field. The notice shows once for each field and reason, so a disabled field losing focus does not alert again.
+  - **Actions.**
+    - Mark complete waits until every typed text is saved.
+    - Share PDF and Save as template stop only for a new refusal, so a completed form's PDF can still be shared.
+    - A successful Reopen saves the kept text straight away.
+  - **Done.** With text still unsaved, Done asks: Keep editing, or Close.
+- **Closing the screen.**
+  - Closing covers Done › Close, a swipe, or the job detail going away.
+  - **Hold.** A last commit runs, then `store.holdFormDrafts` keeps whatever is still refused.
+  - **While held.** The job's form row shows "Unsaved text" as text with a symbol, and VoiceOver reads it.
+  - **Restore.** When the form opens again, the text goes back into its fields, still marked Not saved, with a notice.
+- **Items editor** (`N/NativeJobFormEditorView.swift`):
+  - The title is cleared only once it is saved. A refusal adds a "Not saved" line.
+  - On close, a refused title is held (`holdFormTitle`), and it is restored with a notice when the editor opens again.
+  - Settings' template rows show "Unsaved text" too.
+- **Store.**
+  - `N/AppStore.swift` gains `heldFormText`: published, memory only, keyed by form id, and cleared in `applyEmptySnapshot`, which runs at every account boundary.
+  - `N/NativeJobFormsStore.swift` adds `hasHeldFormText`, `holdFormDrafts`/`takeHeldFormDrafts` and `holdFormTitle`/`takeHeldFormTitle`.
+  - `native/run-appstore-sources-common.sh` now lists `Domain/NativeJobFormsPresentation.swift`.
+- **Why a holding area, not a dismiss block.**
+  - Neighbouring screens (the quote-option fields, Settings' business pages) commit on disappear and never block a swipe.
+  - The app has no "discard changes?" pattern.
+  - A sheet can close without a swipe (the job detail going away), and a block can't intercept that.
+
+#### PDF memory
+
+- **Re-verified.** `sharePDF` read each referenced photo with `jobPhotoBytes` on the main thread into one dictionary, which then went to the render task. The caps allow 100 items × 10 photos at up to 6 MiB each.
+- **Fix.**
+  - The screen now passes only file locations: `AppStore.jobPhotoFileURL(photoID:)`, which is nil when the bytes are not on this device.
+  - Inside the detached render task, `drawPhoto` reads each photo from its file, draws it, and releases it in an autorelease pool before the next one.
+  - The read uses `NativeFormPDFPhotoScaling`, which is ImageIO and CoreGraphics only and host-tested. It uses `CGImageSourceCreateWithURL` plus a thumbnail, so the full-size bitmap is never built.
+- **Same output as before.**
+  - The same thumbnail options: 320 px longest side and orientation applied.
+  - The same JPEG quality (0.7) and 2× scale, and the same fallback to the unrecompressed thumbnail.
+  - The same placeholder for a missing or unreadable file.
+
+#### Photo links
+
+- **Re-verified.**
+  - Each pull fetches `jobPhotos` before `forms`. A photo pushed by another device between those two fetches arrives as a link without its record.
+  - A failed `jobPhotos` fetch is isolated while `forms` still advances, which leaves the same gap.
+  - This device keeps no record of deletions: a pulled tombstone just removes the row, and a full pull has no tombstones. So "deleted" can't be told apart from "not synced yet".
+  - With 10 ids, a capture detached the unsynced link for good, and the next forms push removed it everywhere.
+- **Fix.**
+  - `danglingIDsToDetach` is removed, and nothing is detached automatically.
+  - `PhotoSlots.unresolvedIDs` replaces `danglingIDs`, and `remaining` is 10 minus every stored link, the same as the domain cap. The library picker and the camera never offer room the store will refuse.
+  - **Unresolved links.** A link with no photo record here shows as a "Not on this device" tile, counted in "n of 10 photos".
+    - Tapping it explains both causes.
+    - On an in-progress form it also offers "Remove from this item".
+  - The completion reason now reads "Its photo isn't on this device. Add another" instead of "was deleted".
+
+#### Decisions where the spec was silent
+
+- **A draft whose item (or form) is gone** is dropped, since nothing can take it. The notice says "That item is no longer on this form." while the screen is open, and Done shows that notice before closing.
+- **A blank title is not held**: it can never be saved and holds no typed text, so the stored title stays.
+- **Held text is memory only.** Quitting the app loses it, as with any unsaved text. The Done alert says "as long as TradeReady stays open".
+- **The PDF still leaves out links with no photo record here**, as built. The tile on screen is where the owner resolves them.

@@ -20,22 +20,30 @@ enum NativeJobFormsPresentation {
         /// "Completed" or "In progress": the badge is text, never color alone.
         let statusLabel: String
         let isCompleted: Bool
+        /// "Unsaved text" when the form's screen closed with text it could
+        /// not save (held by the store until the form opens again), else nil.
+        let unsavedLabel: String?
         /// VoiceOver reads the row as one element.
         let accessibilityLabel: String
 
         var id: String { formID }
     }
 
-    static func rowSummary(_ form: Canonical.Form) -> RowSummary {
+    static let unsavedTextLabel = "Unsaved text"
+
+    static func rowSummary(_ form: Canonical.Form, hasUnsavedText: Bool = false) -> RowSummary {
         let progress = NativeJobForms.progress(form)
         let status = statusLabel(form)
+        let unsaved = hasUnsavedText ? unsavedTextLabel : nil
         return RowSummary(
             formID: form.id,
             title: form.title,
             progressLabel: progress.label,
             statusLabel: status,
             isCompleted: form.isCompleted,
+            unsavedLabel: unsaved,
             accessibilityLabel: "\(form.title), \(progressText(progress)), \(status.lowercased())"
+                + (unsaved.map { ", \($0.lowercased())" } ?? "")
         )
     }
 
@@ -202,21 +210,219 @@ enum NativeJobFormsPresentation {
         text.count > field.limit ? String(text.prefix(field.limit)) : text
     }
 
-    /// The drafts that differ from the stored form, in form order. A draft for
-    /// an item that is gone is dropped.
-    static func pendingCommits(drafts: [DraftKey: String], form: Canonical.Form) -> [(key: DraftKey, value: String)] {
-        var result: [(key: DraftKey, value: String)] = []
-        for item in form.items {
+    // MARK: - Saving typed text (review fix 2026-10-03)
+    //
+    // A typed answer, note or title is cleared only once its write succeeds,
+    // or when it already matches what is stored. A refused write keeps it on
+    // screen, marked "Not saved", and the owner is told once per reason. Text
+    // a closing screen still could not save is held by the store
+    // (`AppStore.heldFormText`, memory only) and comes back, with a notice,
+    // the next time the form or its editor opens.
+
+    /// What committing one draft does, decided before any write.
+    enum DraftCommitStep: Equatable {
+        /// The draft matches what is stored: clear it, nothing to write.
+        case clear
+        /// Write this value. The draft is cleared only if the write succeeds.
+        case write(String)
+        /// The item (or the whole form) is gone: nothing can take this text.
+        case itemGone
+    }
+
+    static func draftCommitStep(_ key: DraftKey, draft: String, form: Canonical.Form?) -> DraftCommitStep {
+        guard let item = form?.items.first(where: { $0.id == key.itemID }) else { return .itemGone }
+        guard let value = textToCommit(draft: draft, stored: storedText(item, field: key.field)) else { return .clear }
+        return .write(value)
+    }
+
+    /// The drafts in form order (answer, then note), then any whose item is
+    /// gone, so commits and notices are deterministic.
+    static func commitOrder(drafts: [DraftKey: String], form: Canonical.Form?) -> [DraftKey] {
+        var order: [DraftKey] = []
+        var seen = Set<DraftKey>()
+        for item in form?.items ?? [] {
             for field in TextSlot.allCases {
                 let key = DraftKey(itemID: item.id, field: field)
-                guard let draft = drafts[key] else { continue }
-                let stored: String? = field == .answer ? item.text : item.note
-                if let value = textToCommit(draft: draft, stored: stored) {
-                    result.append((key, value))
+                if drafts[key] != nil, seen.insert(key).inserted { order.append(key) }
+            }
+        }
+        let rest = drafts.keys.filter { !seen.contains($0) }.sorted {
+            $0.itemID == $1.itemID ? $0.field.rawValue < $1.field.rawValue : $0.itemID < $1.itemID
+        }
+        return order + rest
+    }
+
+    /// What a batch of draft commits left behind.
+    struct DraftCommitOutcome: Equatable {
+        /// Every draft not cleared: the text still unsaved.
+        var drafts: [DraftKey: String]
+        /// Why each unsaved draft's last write was refused.
+        var refusals: [DraftKey: NativeJobForms.FormError]
+        /// Drafts dropped because their item (or the form) is gone.
+        var dropped: [DraftKey]
+        /// What to tell the owner: the first refusal not already shown for
+        /// that field (a new field, or a new reason), else a dropped draft's
+        /// reason. Nil when there is nothing new to say.
+        var newProblem: NativeJobForms.FormError?
+
+        var isAllSaved: Bool { drafts.isEmpty }
+    }
+
+    /// Commits `drafts` (only `keys`, when given) through `write`, one store
+    /// call per changed draft. A draft is cleared only when it matches what
+    /// is stored or its write succeeds; a refused write keeps it with its
+    /// reason. A draft whose item is gone is dropped and reported.
+    static func commitDrafts(
+        _ drafts: [DraftKey: String],
+        refusals: [DraftKey: NativeJobForms.FormError] = [:],
+        only keys: [DraftKey]? = nil,
+        form: Canonical.Form?,
+        write: (DraftKey, String) -> Result<Canonical.Form, NativeJobForms.FormError>
+    ) -> DraftCommitOutcome {
+        var remaining = drafts
+        var reasons = refusals.filter { drafts[$0.key] != nil }
+        var dropped: [DraftKey] = []
+        var newProblem: NativeJobForms.FormError?
+        for key in commitOrder(drafts: drafts, form: form) where keys?.contains(key) ?? true {
+            guard let draft = drafts[key] else { continue }
+            switch draftCommitStep(key, draft: draft, form: form) {
+            case .clear:
+                remaining[key] = nil
+                reasons[key] = nil
+            case .itemGone:
+                remaining[key] = nil
+                reasons[key] = nil
+                dropped.append(key)
+                newProblem = newProblem ?? (form == nil ? .notFound : .itemNotFound(key.itemID))
+            case let .write(value):
+                switch write(key, value) {
+                case .success:
+                    remaining[key] = nil
+                    reasons[key] = nil
+                case let .failure(error):
+                    if reasons[key] != error { newProblem = newProblem ?? error }
+                    reasons[key] = error
                 }
             }
         }
-        return result
+        return DraftCommitOutcome(drafts: remaining, refusals: reasons, dropped: dropped, newProblem: newProblem)
+    }
+
+    /// The first refusal in form order (what a notice about unsaved text says).
+    static func firstRefusal(
+        _ refusals: [DraftKey: NativeJobForms.FormError],
+        form: Canonical.Form?
+    ) -> NativeJobForms.FormError? {
+        commitOrder(drafts: refusals.mapValues { _ in "" }, form: form).lazy.compactMap { refusals[$0] }.first
+    }
+
+    static let unsavedTextTitle = "Text not saved"
+
+    /// Under a field whose text is not saved yet.
+    static func unsavedFieldText(_ error: NativeJobForms.FormError) -> String {
+        "Not saved. \(message(for: error))"
+    }
+
+    /// Done with text still unsaved: the alert offers Keep editing or Close.
+    static func unsavedOnCloseMessage(count: Int, reason: NativeJobForms.FormError?) -> String {
+        let what = count == 1 ? "1 answer or note isn't saved." : "\(count) answers or notes aren't saved."
+        let why = reason.map { " \(message(for: $0))" } ?? ""
+        return what + why + " Close keeps the text and puts it back when you next open this form, as long as TradeReady stays open."
+    }
+
+    /// Text a form screen closed without saving, held by the store (memory
+    /// only) by form id until the form, or its editor, opens again.
+    struct HeldText: Equatable {
+        /// The fill screen's answers and notes, and why each was refused.
+        var drafts: [DraftKey: String] = [:]
+        var refusals: [DraftKey: NativeJobForms.FormError] = [:]
+        /// The editor's title, and why it was refused.
+        var title: String?
+        var titleRefusal: NativeJobForms.FormError?
+
+        var isEmpty: Bool { drafts.isEmpty && title == nil }
+    }
+
+    /// What the fill screen puts back from held text: only drafts whose item
+    /// is still on the form and that still differ from what is stored, with
+    /// their reasons and the notice to show (nil when nothing comes back).
+    struct DraftRestoration: Equatable {
+        var drafts: [DraftKey: String]
+        var refusals: [DraftKey: NativeJobForms.FormError]
+        var message: String?
+    }
+
+    static func draftRestoration(
+        drafts held: [DraftKey: String],
+        refusals: [DraftKey: NativeJobForms.FormError],
+        form: Canonical.Form?
+    ) -> DraftRestoration {
+        let restored = held.filter {
+            if case .write = draftCommitStep($0.key, draft: $0.value, form: form) { return true }
+            return false
+        }
+        let reasons = refusals.filter { restored[$0.key] != nil }
+        guard !restored.isEmpty else { return DraftRestoration(drafts: [:], refusals: [:], message: nil) }
+        let what = restored.count == 1
+            ? "1 answer or note wasn't saved when this form was closed. It's back in its field"
+            : "\(restored.count) answers or notes weren't saved when this form was closed. They're back in their fields"
+        let why = firstRefusal(reasons, form: form).map { " \(message(for: $0))" } ?? ""
+        return DraftRestoration(drafts: restored, refusals: reasons, message: "\(what), marked Not saved.\(why)")
+    }
+
+    /// The editor's title, decided before any write: cleared when it matches
+    /// the stored title (trimmed) or the form is gone.
+    static func titleCommitStep(draft: String, stored: String?) -> DraftCommitStep {
+        guard let stored else { return .itemGone }
+        return draft.trimmingCharacters(in: .whitespacesAndNewlines) == stored ? .clear : .write(draft)
+    }
+
+    /// What one title commit left behind.
+    struct TitleCommitOutcome: Equatable {
+        /// The title still unsaved, or nil.
+        var draft: String?
+        var refusal: NativeJobForms.FormError?
+        /// A refusal not already shown, for the alert.
+        var newProblem: NativeJobForms.FormError?
+    }
+
+    static func commitTitle(
+        _ draft: String?,
+        refusal: NativeJobForms.FormError?,
+        stored: String?,
+        write: (String) -> Result<Canonical.Form, NativeJobForms.FormError>
+    ) -> TitleCommitOutcome {
+        guard let draft else { return TitleCommitOutcome(draft: nil, refusal: nil, newProblem: nil) }
+        switch titleCommitStep(draft: draft, stored: stored) {
+        case .clear, .itemGone:
+            return TitleCommitOutcome(draft: nil, refusal: nil, newProblem: nil)
+        case let .write(value):
+            switch write(value) {
+            case .success:
+                return TitleCommitOutcome(draft: nil, refusal: nil, newProblem: nil)
+            case let .failure(error):
+                return TitleCommitOutcome(draft: draft, refusal: error, newProblem: refusal == error ? nil : error)
+            }
+        }
+    }
+
+    /// The title a closing editor holds: a blank title can never be saved
+    /// and carries no typed text, so the stored title simply stays.
+    static func titleToHold(_ draft: String?) -> String? {
+        guard let draft, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return draft
+    }
+
+    /// The held title the editor puts back (nil when the form is gone or the
+    /// stored title already matches it).
+    static func restoredTitle(_ held: String?, stored: String?) -> String? {
+        guard let held, case .write = titleCommitStep(draft: held, stored: stored) else { return nil }
+        return held
+    }
+
+    static func restoredTitleMessage(reason: NativeJobForms.FormError?) -> String {
+        "Your new title wasn't saved when you left this screen. It's back in the title field."
+            + (reason.map { " \(message(for: $0))" } ?? "")
     }
 
     /// Whether the note field shows: an item with a note, or one the owner
@@ -228,46 +434,63 @@ enum NativeJobFormsPresentation {
     // MARK: - Photos
 
     /// An item's photo ids against the job's photos on this device.
+    ///
+    /// Review fix (2026-10-03): an id whose photo record is not on this
+    /// device may be a deleted photo or one that has not synced here yet
+    /// (photos and forms pull as separate tables, so a form can arrive
+    /// first). This device keeps no record of deletions and cannot tell the
+    /// two apart, so no such link is ever detached automatically: it shows
+    /// as a "Not on this device" tile the owner can remove, and it counts
+    /// toward the item's 10, exactly as the domain cap does.
     struct PhotoSlots: Equatable {
-        /// Ids that still resolve, in stored order (what the screen shows).
+        /// Ids that resolve to a job photo here, in stored order.
         let resolvedIDs: [String]
-        /// Ids of photos deleted from the job: kept in the row, never shown.
-        let danglingIDs: [String]
-        /// How many more photos the item shows room for (10 minus resolved).
+        /// Ids whose photo record is not on this device, in stored order.
+        let unresolvedIDs: [String]
+        /// How many more photos the item can take: 10 minus every stored id,
+        /// so it matches the domain cap.
         let remaining: Int
 
         var isFull: Bool { remaining == 0 }
-        var storedCount: Int { resolvedIDs.count + danglingIDs.count }
+        var storedCount: Int { resolvedIDs.count + unresolvedIDs.count }
     }
 
     static func photoSlots(_ item: Canonical.FormItem, existingPhotoIDs: Set<String>) -> PhotoSlots {
         let resolved = NativeJobForms.resolvedPhotoIDs(item, existingPhotoIDs: existingPhotoIDs)
         let resolvedSet = Set(resolved)
-        let dangling = (item.photoIds ?? []).filter { !resolvedSet.contains($0) }
+        let unresolved = (item.photoIds ?? []).filter { !resolvedSet.contains($0) }
         return PhotoSlots(
             resolvedIDs: resolved,
-            danglingIDs: dangling,
-            remaining: max(0, NativeJobForms.Limits.photosPerItemMaxCount - resolved.count)
+            unresolvedIDs: unresolved,
+            remaining: max(0, NativeJobForms.Limits.photosPerItemMaxCount - resolved.count - unresolved.count)
         )
     }
 
-    /// The domain caps the stored ids, deleted ones included. Before `adding`
-    /// new photos, these dangling ids are detached so the shown room is real.
-    static func danglingIDsToDetach(_ slots: PhotoSlots, adding count: Int) -> [String] {
-        let overflow = slots.storedCount + max(0, count) - NativeJobForms.Limits.photosPerItemMaxCount
-        guard overflow > 0 else { return [] }
-        return Array(slots.danglingIDs.prefix(overflow))
-    }
-
-    /// "2 of 10 photos".
+    /// "2 of 10 photos": every tile the item shows, unresolved ones included.
     static func photoCountLabel(_ slots: PhotoSlots) -> String {
-        "\(slots.resolvedIDs.count) of \(NativeJobForms.Limits.photosPerItemMaxCount) photos"
+        "\(slots.storedCount) of \(NativeJobForms.Limits.photosPerItemMaxCount) photos"
     }
 
     /// VoiceOver label of one thumbnail: "Photo 2 of 3, Data plate photo".
     static func photoAccessibilityLabel(index: Int, count: Int, itemLabel: String, isAvailable: Bool) -> String {
         let base = "Photo \(index + 1) of \(count), \(itemLabel)"
         return isAvailable ? base : base + ", waiting for download"
+    }
+
+    /// VoiceOver label of a linked photo whose record is not on this device.
+    static func unresolvedPhotoAccessibilityLabel(index: Int, count: Int, itemLabel: String) -> String {
+        "Photo \(index + 1) of \(count), \(itemLabel), not on this device"
+    }
+
+    static let unresolvedPhotoTileText = "Not on this device"
+
+    /// The photo actions' explanation.
+    static func photoActionMessage(isResolved: Bool, editable: Bool) -> String {
+        guard isResolved else {
+            let why = "This photo isn't on this device. It may still be syncing from another device, or it was deleted."
+            return editable ? why + " Removing it from this item frees its place." : why
+        }
+        return editable ? "Removing it from this item keeps it in the job's Photos section." : "This form is complete and read-only."
     }
 
     // MARK: - Completion

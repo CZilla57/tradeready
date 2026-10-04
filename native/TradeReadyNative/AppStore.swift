@@ -4226,6 +4226,15 @@ final class AppStore: ObservableObject {
         return try? Data(contentsOf: url, options: [.mappedIfSafe])
     }
 
+    /// Phase 20 review fix: the file of a job photo's bytes on this device, or
+    /// nil when they are not here. The form PDF reads it off the main thread.
+    func jobPhotoFileURL(photoID: String) -> URL? {
+        guard let url = try? NativeJobPhotoStorage.photoURL(root: repository.liveMediaDirectoryURL, photoID: photoID),
+              FileManager.default.fileExists(atPath: url.path)
+        else { return nil }
+        return url
+    }
+
     /// Captures already-normalized image bytes for a job: validates/converts to
     /// the JPEG `<= 6 MiB` transfer contract, mints a `p<digits>_<base36>` ID,
     /// atomically writes `<media-root>/job-photos/<id>.jpg` (local bytes win;
@@ -4405,6 +4414,11 @@ final class AppStore: ObservableObject {
 
     /// Every stored `forms` row: custom templates and job instances.
     var formRecords: [Canonical.Form] { snapshot.payload.forms ?? [] }
+
+    /// Phase 20 review fix: form text a closing screen could not save, by form
+    /// id, until the form opens again (`NativeJobFormsStore.swift`). Memory
+    /// only; cleared with the snapshot at an account boundary.
+    @Published var heldFormText: [String: NativeJobFormsPresentation.HeldText] = [:]
 
     /// Whether the canonical job is on this device. A deleted job's form
     /// instances stay stored but hidden (spec §8, no cascade).
@@ -7511,6 +7525,7 @@ final class AppStore: ObservableObject {
     }
 
     private func applyEmptySnapshot() {
+        heldFormText = [:]
         do { try apply(Canonical.Snapshot(payload: .init())) }
         catch { migrationMessage = "Could not initialize data: \(error.localizedDescription)" }
     }
