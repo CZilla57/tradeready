@@ -40,11 +40,11 @@
    "testSources": [
     {
      "path": "native/AdapterTests",
-     "sha256": "d4f2a237f75987bb6d7c9bba15c1dd2a59316667ccc871b379455319306a35a5"
+     "sha256": "41c9553141de0ef0266d7c458c444b40ead7d000fc617f6fdc06048d1255f838"
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "20d3d9415a4b62c1fb566e13a62e20fdf8ee21cc7d6f8de7d9a1c56a626c26e7"
+     "sha256": "9a8aaad883e0cae5e47306be7e60204659864452057993ae311bdbe291f1197a"
     }
    ],
    "fixtures": [
@@ -176,6 +176,17 @@
     {
      "path": "native/AuthenticatedIdentityTests",
      "sha256": "c655f049849f8b180c5f3796d7fdcea73723792a5dfcc8de3fa6a52a425bac92"
+    }
+   ],
+   "fixtures": []
+  },
+  "autopay": {
+   "script": "native/run-autopay-tests.sh",
+   "scriptSha256": "42fd673e60ec069ec4e06a1a88268e3dee407adac83294e4705ae71004443847",
+   "testSources": [
+    {
+     "path": "native/AutopayTests",
+     "sha256": "0adab5848fe82b6cd23279ef648f88ebba2c8b5c4262d4ad52e892033fd593d5"
     }
    ],
    "fixtures": []
@@ -321,7 +332,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "20d3d9415a4b62c1fb566e13a62e20fdf8ee21cc7d6f8de7d9a1c56a626c26e7"
+     "sha256": "9a8aaad883e0cae5e47306be7e60204659864452057993ae311bdbe291f1197a"
     }
    ],
    "fixtures": [
@@ -364,7 +375,7 @@
    "testSources": [
     {
      "path": "native/CanonicalTests",
-     "sha256": "20d3d9415a4b62c1fb566e13a62e20fdf8ee21cc7d6f8de7d9a1c56a626c26e7"
+     "sha256": "9a8aaad883e0cae5e47306be7e60204659864452057993ae311bdbe291f1197a"
     }
    ],
    "fixtures": [
@@ -499,7 +510,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "20d3d9415a4b62c1fb566e13a62e20fdf8ee21cc7d6f8de7d9a1c56a626c26e7"
+     "sha256": "9a8aaad883e0cae5e47306be7e60204659864452057993ae311bdbe291f1197a"
     }
    ],
    "fixtures": [
@@ -546,7 +557,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "20d3d9415a4b62c1fb566e13a62e20fdf8ee21cc7d6f8de7d9a1c56a626c26e7"
+     "sha256": "9a8aaad883e0cae5e47306be7e60204659864452057993ae311bdbe291f1197a"
     }
    ],
    "fixtures": [
@@ -589,7 +600,7 @@
    "testSources": [
     {
      "path": "native/ErrorRedactionTests",
-     "sha256": "3e3fc4091390b58e2135c3fb7db50dae0731e8ce585f256d5b4ef621100d57e5"
+     "sha256": "0802a3948ed4b2f61e504a51114d64a29a1ab5a3524da0b4e2104fef01a7c1b2"
     }
    ],
    "fixtures": []
@@ -604,7 +615,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "20d3d9415a4b62c1fb566e13a62e20fdf8ee21cc7d6f8de7d9a1c56a626c26e7"
+     "sha256": "9a8aaad883e0cae5e47306be7e60204659864452057993ae311bdbe291f1197a"
     }
    ],
    "fixtures": [
@@ -746,7 +757,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "20d3d9415a4b62c1fb566e13a62e20fdf8ee21cc7d6f8de7d9a1c56a626c26e7"
+     "sha256": "9a8aaad883e0cae5e47306be7e60204659864452057993ae311bdbe291f1197a"
     }
    ],
    "fixtures": [
@@ -947,7 +958,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "20d3d9415a4b62c1fb566e13a62e20fdf8ee21cc7d6f8de7d9a1c56a626c26e7"
+     "sha256": "9a8aaad883e0cae5e47306be7e60204659864452057993ae311bdbe291f1197a"
     }
    ],
    "fixtures": [
@@ -1016,7 +1027,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "20d3d9415a4b62c1fb566e13a62e20fdf8ee21cc7d6f8de7d9a1c56a626c26e7"
+     "sha256": "9a8aaad883e0cae5e47306be7e60204659864452057993ae311bdbe291f1197a"
     }
    ],
    "fixtures": [
@@ -1252,7 +1263,7 @@
    "testSources": [
     {
      "path": "native/PoorNetworkTests",
-     "sha256": "35cdf06cd92ce9f98b7fd8d7871cf96fbd9a5bf4a36d44dfe7db14976cac32de"
+     "sha256": "71347fcbaec88f9fa8ba35605eb89d54c189e3b3fb07b57e7c6a430f458d9d6c"
     }
    ],
    "fixtures": []
@@ -1350,7 +1361,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "20d3d9415a4b62c1fb566e13a62e20fdf8ee21cc7d6f8de7d9a1c56a626c26e7"
+     "sha256": "9a8aaad883e0cae5e47306be7e60204659864452057993ae311bdbe291f1197a"
     }
    ],
    "fixtures": [
@@ -1387,7 +1398,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "20d3d9415a4b62c1fb566e13a62e20fdf8ee21cc7d6f8de7d9a1c56a626c26e7"
+     "sha256": "9a8aaad883e0cae5e47306be7e60204659864452057993ae311bdbe291f1197a"
     }
    ],
    "fixtures": [
@@ -1419,7 +1430,7 @@
    "testSources": [
     {
      "path": "native/RecurringInvoiceTests",
-     "sha256": "a134b0fce81864aaba3726621ba84a9efb7cf1f57e0bfcddfd80ff26e4a42a64"
+     "sha256": "d86979c833a00250bc9d733188884ca1bb28159bc24abc51c6154341ce9a07a0"
     }
    ],
    "fixtures": []
@@ -1522,7 +1533,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "20d3d9415a4b62c1fb566e13a62e20fdf8ee21cc7d6f8de7d9a1c56a626c26e7"
+     "sha256": "9a8aaad883e0cae5e47306be7e60204659864452057993ae311bdbe291f1197a"
     }
    ],
    "fixtures": [
@@ -1580,7 +1591,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "20d3d9415a4b62c1fb566e13a62e20fdf8ee21cc7d6f8de7d9a1c56a626c26e7"
+     "sha256": "9a8aaad883e0cae5e47306be7e60204659864452057993ae311bdbe291f1197a"
     }
    ],
    "fixtures": [
@@ -1622,11 +1633,11 @@
    "testSources": [
     {
      "path": "native/StoreIntegrationTests",
-     "sha256": "d4cbe1276b4d75a7e64205169c704bd3a86ae07ea2df88ac0d3891d73c6f028b"
+     "sha256": "7d30d1db0d300d6e07e4542cd150eb9aced6e92742893c8b06d7a289718e5feb"
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "20d3d9415a4b62c1fb566e13a62e20fdf8ee21cc7d6f8de7d9a1c56a626c26e7"
+     "sha256": "9a8aaad883e0cae5e47306be7e60204659864452057993ae311bdbe291f1197a"
     }
    ],
    "fixtures": [
@@ -1706,7 +1717,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "20d3d9415a4b62c1fb566e13a62e20fdf8ee21cc7d6f8de7d9a1c56a626c26e7"
+     "sha256": "9a8aaad883e0cae5e47306be7e60204659864452057993ae311bdbe291f1197a"
     }
    ],
    "fixtures": [
@@ -1808,7 +1819,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "20d3d9415a4b62c1fb566e13a62e20fdf8ee21cc7d6f8de7d9a1c56a626c26e7"
+     "sha256": "9a8aaad883e0cae5e47306be7e60204659864452057993ae311bdbe291f1197a"
     }
    ],
    "fixtures": [
@@ -1877,7 +1888,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "20d3d9415a4b62c1fb566e13a62e20fdf8ee21cc7d6f8de7d9a1c56a626c26e7"
+     "sha256": "9a8aaad883e0cae5e47306be7e60204659864452057993ae311bdbe291f1197a"
     }
    ],
    "fixtures": [

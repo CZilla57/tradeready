@@ -256,3 +256,44 @@ describe("reminder-day clamping", () => {
     expect(out.map((i) => i.id)).toEqual(["i1"]);
   });
 });
+
+// Phase 24 (card-on-file spec §4.3): the live Worker copy also accepts
+// TradeReady's own pay page — our domain, ONLY the fixed /pay.html (or /pay)
+// path. The dormant Vercel copy is deliberately unchanged.
+describe("pay-page links (Worker copy only)", () => {
+  test.each([
+    "https://gettradereadyapp.com/pay.html?t=p.fake.sig",
+    "https://www.gettradereadyapp.com/pay.html?t=p.fake.sig",
+    "https://gettradereadyapp.com/pay?t=p.fake.sig",
+    "https://GETTRADEREADYAPP.COM/pay.html?m=m.fake.sig",
+  ])("accepts %s", (url) => {
+    expect(workers.isAllowedPaymentLink(url)).toBe(true);
+    const email = workers.buildReminderEmail({ invoice: linkInv(url), settings, today: TODAY });
+    expect(email.text).toContain(`pay securely here: ${url}`);
+  });
+
+  test.each([
+    ["another page on our domain", "https://gettradereadyapp.com/estimate.html?t=x"],
+    ["the home page", "https://gettradereadyapp.com/"],
+    ["a lookalike path", "https://gettradereadyapp.com/pay.html.evil?t=x"],
+    ["a nested path", "https://gettradereadyapp.com/x/pay.html"],
+    ["path case games", "https://gettradereadyapp.com/PAY.html"],
+    ["http", "http://gettradereadyapp.com/pay.html?t=x"],
+    ["a subdomain", "https://evil.gettradereadyapp.com/pay.html"],
+    ["credentials in the URL", "https://user:pw@gettradereadyapp.com/pay.html"],
+    ["a port", "https://gettradereadyapp.com:8443/pay.html"],
+    ["a fragment", "https://gettradereadyapp.com/pay.html#t=x"],
+    ["our domain as a suffix", "https://gettradereadyapp.com.evil.example/pay.html"],
+  ])("refuses %s", (_label, url) => {
+    expect(workers.isAllowedPaymentLink(url)).toBe(false);
+  });
+
+  test("the Vercel twin still refuses the pay page (not changed)", () => {
+    expect(isAllowedPaymentLink("https://gettradereadyapp.com/pay.html?t=x")).toBe(false);
+  });
+
+  test("the existing third-party hosts are unchanged in the Worker copy", () => {
+    expect(workers.isAllowedPaymentLink("https://buy.stripe.com/fake-link-001")).toBe(true);
+    expect(workers.isAllowedPaymentLink("https://squareup.com/pay/FAKE")).toBe(false);
+  });
+});

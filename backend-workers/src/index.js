@@ -19,7 +19,7 @@
 
 import { Hono } from 'hono';
 import { runReminders } from '../lib/sendReminders.js';
-import { runInvoiceEmails } from '../lib/sendInvoiceEmails.js';
+import { runQuarterHourly } from '../lib/cronQuarterHourly.js';
 
 import { aiChatHandler } from './routes/aiChat.js';
 import { pricebookSuggestHandler } from './routes/pricebookSuggest.js';
@@ -54,7 +54,12 @@ import { createConnectAccountHandler } from './routes/stripe/createConnectAccoun
 import { disconnectHandler } from './routes/stripe/disconnect.js';
 import { connectReturnHandler } from './routes/stripe/connectReturn.js';
 import { stripeWebhookHandler } from './routes/stripe/webhook.js';
-import { cronSendRemindersHandler, cronSendInvoiceEmailsHandler } from './routes/cron.js';
+import { cronSendRemindersHandler, cronSendInvoiceEmailsHandler, cronRunAutopayHandler } from './routes/cron.js';
+import { payViewHandler } from './routes/pay/view.js';
+import { payCheckoutHandler } from './routes/pay/checkout.js';
+import { payAutopayOffHandler } from './routes/pay/autopayOff.js';
+import { autopayStatusHandler } from './routes/autopay/status.js';
+import { autopayManageHandler } from './routes/autopay/manage.js';
 
 const app = new Hono();
 
@@ -99,9 +104,20 @@ app.all('/api/stripe/connect-return', connectReturnHandler);
 // nothing consumes the body before signature verification (see file header).
 app.all('/api/stripe/webhook', stripeWebhookHandler);
 
+// Phase 24 pay page (browser-facing, applyCors, signed tokens) and the
+// owner's autopay routes (JWT, appCors).
+app.all('/api/pay/view', payViewHandler);
+app.all('/api/pay/checkout', payCheckoutHandler);
+app.all('/api/pay/autopay-off', payAutopayOffHandler);
+app.all('/api/pay/:action', (c) => c.json({ error: 'Not found' }, 404));
+app.all('/api/autopay/status', autopayStatusHandler);
+app.all('/api/autopay/manage', autopayManageHandler);
+app.all('/api/autopay/:action', (c) => c.json({ error: 'Not found' }, 404));
+
 // Manual-run fallback; the production trigger is scheduled() below.
 app.all('/api/cron/send-reminders', cronSendRemindersHandler);
 app.all('/api/cron/send-invoice-emails', cronSendInvoiceEmailsHandler);
+app.all('/api/cron/run-autopay', cronRunAutopayHandler);
 
 // Anything else under this Worker: JSON 404 (Vercel served its own 404 page).
 app.notFound((c) => c.json({ error: 'Not found' }, 404));
@@ -114,13 +130,14 @@ export default {
   // over different log tables, harmless. Only Cloudflare's scheduler can
   // invoke this, so the CRON_SECRET bearer check lives solely on the manual
   // HTTP fallback routes.
+  //
+  // Phase 24: the */15 tick runs the autopay sweep FIRST, then the invoice
+  // emails with its hand-off (autopayHandled → 'superseded' instead of a
+  // second email; autopayByInvoice → the "charged automatically" line), in
+  // one waitUntil. An autopay failure never blocks the invoice emails.
   async scheduled(event, env, ctx) {
     if (event.cron === '*/15 * * * *') {
-      ctx.waitUntil(
-        runInvoiceEmails(env).catch((err) =>
-          console.error('[send-invoice-emails] scheduled run failed:', err.message)
-        )
-      );
+      ctx.waitUntil(runQuarterHourly(env));
       return;
     }
     ctx.waitUntil(

@@ -83,9 +83,9 @@ function assemble(over = {}) {
 }
 
 describe("assemblePortalView — whitelist boundary", () => {
-  test("top level has exactly the seven keys", () => {
+  test("top level has exactly the eight keys", () => {
     expect(Object.keys(assemble()).sort()).toEqual(
-      ["appointments", "businessName", "changeOrders", "customerName", "estimates", "invoices", "photos"]
+      ["appointments", "autopay", "businessName", "changeOrders", "customerName", "estimates", "invoices", "photos"]
     );
   });
 
@@ -321,5 +321,65 @@ describe("photos (Phase 12B — fail closed)", () => {
     const out = assemble({ photoSecret: undefined });
     expect(out.photos).toEqual([]);
     expect(out.invoices.length).toBeGreaterThan(0);
+  });
+});
+
+describe("automatic payments (Phase 24 §4.9)", () => {
+  const { verifyPayToken } = require("../backend-workers/lib/pay/payToken.js");
+  const OWNER = "11111111-2222-4333-8444-555555555555";
+  const PAY_SECRET = "y".repeat(40);
+  const plan = (id, data = {}) => ({ id, data: { customerId: "c1", customerName: "Pat", description: `Plan ${id}`, amount: 120, cadence: "monthly", isActive: true, autopayEnabled: true, ...data } });
+  const planRows = [
+    plan("ri_on"),
+    plan("ri_avail", { amount: 49.5, cadence: "quarterly" }),
+    plan("ri_paused", { isActive: false }),
+    plan("ri_off", { autopayEnabled: false }),
+    plan("ri_absent", { autopayEnabled: undefined }),
+    plan("ri_other", { customerId: "c2" }),
+  ];
+  const enrollmentRows = [
+    { id: "6f1c2a4e-1d2b-4c3d-8e9f-0a1b2c3d4e5f", recurring_invoice_id: "ri_on", customer_id: "c1", status: "active", card_brand: "visa", card_last4: "4242", max_amount_cents: 12000 },
+  ];
+  const withAutopay = (over = {}) => assemble({ userId: OWNER, planRows, enrollmentRows, paySecret: PAY_SECRET, payEnv: {}, stripeConnected: true, ...over });
+
+  test("only active, autopay-offering plans of THIS customer, with exact entry keys", () => {
+    const out = withAutopay().autopay;
+    expect(out.map((a) => a.description)).toEqual(["Plan ri_on", "Plan ri_avail"]);
+    for (const a of out)
+      expect(Object.keys(a).sort()).toEqual(["amount", "cadence", "card", "description", "manageUrl", "setupUrl", "status"]);
+  });
+
+  test("on: card label + manage link; available: a setup link bound to this customer", () => {
+    const [on, avail] = withAutopay().autopay;
+    expect(on).toMatchObject({ status: "on", card: "Visa ending 4242", setupUrl: null, amount: 120, cadence: "every month" });
+    const m = new URL(on.manageUrl);
+    expect(`${m.origin}${m.pathname}`).toBe("https://gettradereadyapp.com/pay.html");
+    expect(verifyPayToken(PAY_SECRET, m.searchParams.get("m"), { expectKind: "m" }).payload).toEqual({ v: 1, u: OWNER, e: enrollmentRows[0].id });
+    expect(avail).toMatchObject({ status: "available", card: null, manageUrl: null, amount: 49.5, cadence: "every 3 months" });
+    const sTok = new URL(avail.setupUrl).searchParams.get("s");
+    expect(verifyPayToken(PAY_SECRET, sTok, { expectKind: "s", nowSec: Math.floor(NOW_MS / 1000) }).payload).toEqual({
+      v: 1, u: OWNER, r: "ri_avail", c: "c1", x: Math.floor(NOW_MS / 1000) + 7 * 86400,
+    });
+  });
+
+  test("no pay-link secret or no Stripe connection → empty section, portal intact", () => {
+    expect(withAutopay({ paySecret: null }).autopay).toEqual([]);
+    expect(withAutopay({ stripeConnected: false }).autopay).toEqual([]);
+    expect(assemble().autopay).toEqual([]);
+    expect(withAutopay({ stripeConnected: false }).invoices.length).toBeGreaterThan(0);
+  });
+
+  test("another customer's enrollment never marks a plan on", () => {
+    const out = withAutopay({ enrollmentRows: [{ ...enrollmentRows[0], customer_id: "c2" }] }).autopay;
+    expect(out.find((a) => a.description === "Plan ri_on").status).toBe("available");
+  });
+
+  test("nothing sensitive crosses the wire from plans or enrollments", () => {
+    const flat = JSON.stringify(withAutopay().autopay);
+    expect(flat).not.toContain("c1\"");
+    expect(flat).not.toContain("Pat");
+    expect(flat).not.toContain("12000");
+    expect(flat).not.toContain("max_amount");
+    expect(flat).not.toContain("recurring_invoice_id");
   });
 });

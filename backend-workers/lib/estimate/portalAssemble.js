@@ -12,6 +12,10 @@ const { changeOrderStatus } = require('./changeOrderMath.js');
 const { photoSignature, PHOTO_URL_TTL_SEC } = require('../photoSign.js');
 const { hasSnapshotOptions, lowestTierTotal } = require('./quoteOptions.js');
 const { snapshotExpiry } = require('./estimateExpiry.js');
+const { isPlanOfferable, planCents } = require('../autopay/offer.js');
+const { cadencePhrase } = require('../autopay/consentText.js');
+const { cardLabel, centsToDollars } = require('../autopay/format.js');
+const { mintSetupToken, mintManageToken, payPageUrl } = require('../pay/payToken.js');
 
 const ESTIMATE_PAGE = 'https://gettradereadyapp.com/estimate.html';
 const CHANGE_PAGE = 'https://gettradereadyapp.com/change.html';
@@ -199,7 +203,48 @@ function buildPhotos(jobRows, photoRows, { userId, apiOrigin, photoSecret, nowMs
   return out;
 }
 
-function assemblePortalView({ businessName, customerRow, jobRows, invoiceRows, requestRows, photoRows, token, apiOrigin, nowMs, userId, photoSecret }) {
+// Phase 24 (spec §4.9): one entry per plan of this customer that offers
+// autopay (active, "Offer autopay" on). `on` carries the card label and a
+// manage link; `available` carries a 7-day setup link bound to this
+// customer. Links are minted per response and never persisted. Without the
+// pay-link secret or a Stripe connection the section is empty (fail closed:
+// a link the pay page would refuse is worse than none).
+function buildAutopay(planRows, enrollmentRows, { userId, customerId, paySecret, payEnv, stripeConnected, nowMs }) {
+  if (!paySecret || !stripeConnected) return [];
+  const activeByPlan = new Map();
+  for (const e of Array.isArray(enrollmentRows) ? enrollmentRows : []) {
+    if (e && e.status === 'active' && e.customer_id === customerId) activeByPlan.set(e.recurring_invoice_id, e);
+  }
+  const nowSec = Math.floor(nowMs / 1000);
+  const out = [];
+  for (const plan of Array.isArray(planRows) ? planRows : []) {
+    if (!isPlanOfferable(plan) || plan.data.customerId !== customerId) continue;
+    const active = activeByPlan.get(plan.id) || null;
+    let setupUrl = null;
+    let manageUrl = null;
+    try {
+      if (active) manageUrl = payPageUrl(payEnv, 'm', mintManageToken(paySecret, { userId, enrollmentId: active.id }));
+      else setupUrl = payPageUrl(payEnv, 's', mintSetupToken(paySecret, { userId, planId: plan.id, customerId, nowSec }));
+    } catch {
+      continue; // an id the token format refuses: skip the plan, never fail the portal
+    }
+    out.push({
+      description: cap(plan.data.description, 200),
+      amount: centsToDollars(planCents(plan)),
+      cadence: cadencePhrase(plan.data.cadence) || '',
+      status: active ? 'on' : 'available',
+      card: active ? cardLabel(active.card_brand, active.card_last4) : null,
+      setupUrl,
+      manageUrl,
+    });
+  }
+  return out;
+}
+
+function assemblePortalView({
+  businessName, customerRow, jobRows, invoiceRows, requestRows, photoRows, token, apiOrigin, nowMs, userId, photoSecret,
+  planRows = [], enrollmentRows = [], paySecret = null, payEnv = {}, stripeConnected = false,
+}) {
   return {
     businessName: cap(businessName, 120),
     customerName: cap(customerRow.data?.name, 120),
@@ -208,6 +253,7 @@ function assemblePortalView({ businessName, customerRow, jobRows, invoiceRows, r
     changeOrders: buildChangeOrders(jobRows),
     invoices: buildInvoices(invoiceRows),
     photos: buildPhotos(jobRows, photoRows, { userId, apiOrigin, photoSecret, nowMs }),
+    autopay: buildAutopay(planRows, enrollmentRows, { userId, customerId: customerRow.id, paySecret, payEnv, stripeConnected, nowMs }),
   };
 }
 
