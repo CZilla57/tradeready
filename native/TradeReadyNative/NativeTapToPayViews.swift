@@ -87,12 +87,15 @@ struct NativeTapToPaySheet: View {
                 Section { status }
                 if !flow.isFinished { Section { chargeButton } }
             }
+            .nativeContentColumn(.list)
             .navigationTitle("Tap to Pay on iPhone")
             .navigationBarTitleDisplayMode(.inline)
             .nativeKeyboardDoneBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(flow.isFinished ? "Done" : "Close") { dismiss() }.disabled(flow.phase == .collecting)
+                    Button(flow.isFinished ? "Done" : "Close") { dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                        .disabled(flow.phase == .collecting)
                 }
             }
         }

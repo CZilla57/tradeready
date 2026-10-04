@@ -469,6 +469,8 @@ let scrollRootInventory: [String: Int] = [
     "NativeAPIAccessView.swift|NativeAPIKeyCreateSheet|Form": 1,
     "NativeAPIAccessView.swift|NativeAPIKeyRevealSheet|Form": 1,
     "NativeAPIAccessView.swift|NativeAPIActivityView|List": 1,
+    // Phase 18: the Tap to Pay charge sheet.
+    "NativeTapToPayViews.swift|NativeTapToPaySheet|Form": 1,
     "NativeRecurringInvoicesView.swift|NativeRecurringInvoicesView|List": 1,
     "NativeRecurringInvoicesView.swift|NativeRecurringInvoiceEditor|Form": 1,
     "NativeRecurringJobsView.swift|NativeRecurringJobsView|List": 1,
