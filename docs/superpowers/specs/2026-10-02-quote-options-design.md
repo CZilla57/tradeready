@@ -163,8 +163,11 @@ Route changes:
 **6.3 Decision reconciler (closes the parity gap).** It runs after every successful pull. For each non-deleted job with `approval.decision`:
 - **Status:**
   - From `lead` or `estimate_sent`, an approval moves the job to `statusAfterEstimateDecision` (approved), and a decline moves it to declined.
+  - From `declined`, a later same-token approval moves it to approved (amended 2026-10-03, §12 "Review fixes", fix 2).
   - It never moves a job backwards, and it does nothing in any other status.
 - **Selection:** if the decision is approved, `approval.selection` exists, `quoteOptions` exists and `acceptance` is absent, it runs `applyAcceptance(source: link, consentedTotal: selection.total)`. If the tier id no longer exists on the job, it still sets `estimateTotal = selection.total` and records the acceptance. The pricing fields stay as they are, and the consented price wins.
+  - Amended 2026-10-03 (§12 "Review fixes", fix 1): the job's options are first rebuilt from the approved `snapshot.options`, even when the job has none, so the selection always applies.
+  - A single-price approval over never-sent draft options drops the drafts and takes the snapshot total.
 - It is idempotent and saves and queues an upsert only when something changed.
 - **Rebase graft:** when a pulled job and a pending local job share the same `approval.token` and the server copy has a `decision` the local copy lacks, the server's `approval` (and any longer `approvalHistory`) is grafted onto the local pending record before it is pushed. Server-only fields are never device-authored, so the graft is always safe, and it stops a queued local edit from erasing a customer's decision.
 
@@ -287,5 +290,64 @@ Deploys are the owner's. Nothing here is deployed or pushed.
 
 **Residuals found while building:**
 - If the owner records a choice on the phone while the customer approves a *different* option through the link before the phone has pulled, the first acceptance stays (M3). The owner's pick is kept and the customer's `approval.selection` is still preserved and shown in history. That is the narrow race the manual-approval path has always had. The picker refuses once the customer's approval is on the device.
-- A job approved through the link while it sat in `declined` (the page lets a customer approve after declining) keeps its `declined` status. The reconciler only moves `lead`/`estimate_sent` forward (`JobLifecycleRules.statusAfterEstimateDecision`), so the owner sees the decision in the estimate history and revises from there. This is unchanged from the pre-existing rule.
+- ~~A job approved through the link while it sat in `declined` keeps its `declined` status.~~ Superseded by review fix 2 below: it now moves to `approved`.
+
+### Review fixes (2026-10-03)
+
+Six defects a reviewer reproduced on `feat/quote-options` (HEAD `180801a`). Native only; the Worker and the pages are unchanged. Principle: the frozen approval snapshot plus the customer's `approval.selection` are the record of what was accepted. The customer's choice is never lost, the job never bills something other than what the customer accepted through the link, and no job is left pending or at a dead end.
+
+1. **Edits after sending no longer lose the customer's choice** (`Domain/NativeQuoteOptions.swift` `reconcileEstimateDecision`).
+   - **Options snapshot with a selection.** On a link approval, the reconciler first rebuilds the job's options from the approved snapshot with `optionsAsApproved`, whatever the job holds now. Options that were removed, restarted with new ids, or re-tiered all go through this path. Then it applies the selection once (a link acceptance at `selection.total`).
+     - The rebuilt tiers and add-ons are exactly what the customer saw: names, descriptions, frozen tier totals, and add-on amounts as `price`.
+     - Calculator fields and private add-on `cost` carry over by id when the job still has that tier or add-on.
+     - A tier the job no longer has takes the job's current pricing. This is the §6.3 missing-tier rule: the pricing stays and the consented total wins.
+     - Tiers and add-ons the customer never saw are dropped. The options are read-only from then on (M3).
+     - Decision: rebuild instead of matching, because the job can no longer offer anything else. The sheet, the accepted estimate and the add-on prices then all agree with the customer's page.
+   - **Single-price snapshot over never-sent draft options.** The customer approved that single price, so the reconciler drops the drafts (`quoteOptions = nil`) and sets the job total to the snapshot total. If a draft tier still prices exactly what was sent (same total and lines, recommended tier first), its calculator fields become the job's. Otherwise the job keeps its pricing, and the invoice bills the approved lines (fix 4).
+     - Decision: drop the drafts rather than archive them. They can never be sent or chosen once the estimate is approved, and leaving them would recreate the permanent "applied on the next sync" state.
+   - **Notice in the options sheet.** It warns that the customer's link still shows the estimate sent earlier until it is re-sent, and that an approval of that version is what the job uses. It shows when the link is live (no approval yet) and the options differ from the sent `snapshot.options`; removing or starting options counts as a difference. Edits are not blocked. State: `NativeQuoteOptionsState.linkShowsEarlierVersion`.
+   - The sheet no longer claims a pending choice for an options approval that arrived without a selection (`approvedWithoutChoice`, the §10 Vercel residual).
+2. **Decline, then approve on the same link → `approved`.**
+   - `JobLifecycleRules.statusAfterEstimateDecision` now also maps `declined` + approved to `approved`. The Worker allows this transition, and approved stays terminal. Because the reconciler uses the same rule for single-price and options estimates, both paths behave the same.
+   - The selection is applied as usual.
+   - A revised declined estimate cannot be resurrected:
+     - revision archives the approval (`approval = nil`, its link revoked);
+     - the reconciler reads only the job's current approval, never `approvalHistory`;
+     - the graft needs the same token.
+   - `JobsView`'s declined actions show "approved after declining" instead of a revise button that would fail.
+   - **Intentional RN difference:** RN's `applyEstimateDecision` leaves the job declined. Native is the shipping client.
+3. **The job editor no longer types over the recommended option's price** (`JobsView.swift` `JobEditor`, `UIModelAdapters.swift` `canonical(from: CanonicalUIEdit<Job…>)`).
+   - While options are undecided, the Edit sheet shows "Total (recommended option)" read-only, an "Edit prices in Options" button (a footer for a duplicate), and "Prices come from your good / better / best options."
+   - The adapter keeps the baseline's `estimateTotal`, `laborHours` and `laborRate` for every UI-model job save while `hasUndecidedQuoteOptions` holds. That covers the editor, a duplicate's template, status saves and a stale editor copy.
+   - Every other top-level pricing writer already keeps M1: the job calculator writes the recommended tier, option edits mirror it, and import and recurring jobs carry no options.
+4. **Link acceptances bill the frozen selection** (`CanonicalUIAdapters.linkApprovedEstimateLines`, `NativeQuoteOptions.approvedInvoiceQuote`, `JobInvoiceDomain` `JobInvoiceApprovedQuote`).
+   - **The approved lines.** They are the selected tier's frozen `snapshot.options` lines, then one line per `selection.addOns` at its frozen amount. A single-price approval contributes the snapshot's lines. They are in force while the approval is approved, the acceptance is a link one, and the job total still equals the approved total. Once the owner re-prices the job, the owner's pricing applies again.
+   - **The accepted estimate (review, PDF, messages)** shows the approved lines for a link acceptance.
+   - **The invoice** bills the approved lines when they add up to the approved total and the current pricing no longer derives them. Examples: a tier edited, deleted or removed after sending, or the single-price case in fix 1. When nothing drifted, the derived lines equal the approved ones, so today's invoice wording is kept.
+     - Tracked time replaces the approved labor line at the job's rate, and the total moves by the same delta.
+     - Change orders follow the approved lines.
+     - The lines always add up to the amount due.
+   - **Owner-recorded acceptances** have no customer snapshot and keep current pricing.
+   - **Other figures.** Deposits come from the invoice amount: `estimateTotal` + change orders, which is the consented total. Profitability revenue is `estimateTotal`. Add-on cost carries over by id.
+5. **Add-on Save is idempotent** (`NativeQuoteOptionsView.swift`, `NativeQuoteOptions.addAddOn`, `AppStore.addQuoteAddOn(jobID:draft:addOnID:)`).
+   - The editor mints the new add-on's id once per sheet, and `addAddOn` with an id that already exists rewrites that add-on instead of adding one.
+   - Save is also disabled while a save is in progress.
+6. **Line labels fit the Worker's 300-character cap.**
+   - `CanonicalUIAdapters.estimateDirectCostLabel` and the line derivation cap every label at 300 UTF-16 code units: 299 code units, cut on a character boundary, plus "…".
+   - The owner-named direct cost is the only uncapped source.
+   - The invoice uses the same capped label.
+   - Decision: cap rather than refuse in the editor, because the label is still meaningful, and only the snapshot and invoice copy are shortened. The cost record keeps the full text.
+
+Tests: every fix has a regression test, and each was confirmed to fail with its fix temporarily reverted.
+- `native/QuoteOptionsTests/main.swift`: "review fix 1…6".
+- `native/QuoteOptionsStoreTests/main.swift`: `testReviewCustomerChoiceSurvivesEditsAfterSending`, `testReviewDeclineThenApprove`, `testReviewOptionsOwnTheJobPrice`.
+- `native/AdapterTests/main.swift`: two "Phase 25 review" cases.
+- `native/InvoiceFromJobTests/main.swift`: approved-quote lines.
+- `native/BusinessRulesTests/main.swift`: declined → approved.
+
+Residuals:
+- A tier the customer chose but the job no longer has (removed after sending) keeps the job's current calculator fields. Profitability's labor-hour estimate then reflects that pricing. Revenue and the invoice are right.
+- A restored add-on whose record was removed loses its private cost.
+- An options approval with no selection (Vercel rollback, §10) still keeps the recommended tier's price, now with accurate copy.
+- A single-price job edited after sending, without options and without re-sending, still bills its edited total. This is pre-existing and unchanged.
 

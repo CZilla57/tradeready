@@ -9,6 +9,10 @@
 // write is conditional on the row version that was read, so a concurrent
 // device push and a customer decision can no longer silently overwrite each
 // other.
+//
+// Phase 32 (quote expiration): approving after the snapshot's valid-until
+// date (owner's zone, §2.4) is refused with 410 `estimate_expired` and a
+// self-contained message. Declining stays allowed; the approved lock wins.
 
 import { fetchJob, updateJobIfUnchanged, constantTimeEqual } from '../../../lib/estimateStore.js';
 import { createRateLimiter } from '../../../lib/guards.js';
@@ -19,6 +23,7 @@ import {
   resolveSelection,
   snapshotDigest,
 } from '../../../lib/estimate/quoteOptions.js';
+import { expiredMessage, snapshotExpiry } from '../../../lib/estimate/estimateExpiry.js';
 import { clientIp, jsonBody } from '../../appCors.js';
 
 const allow = createRateLimiter({ limit: 10 });
@@ -57,6 +62,9 @@ export async function estimateRespondHandler(c) {
   if (c.req.method === 'OPTIONS') return c.body(null, 200);
   if (c.req.method !== 'POST') return c.json({ error: 'Method not allowed' }, 405);
 
+  // One clock read per request: consentAt and the expiry check agree, and
+  // tests stub Date.now.
+  const nowMs = Date.now();
   const ip = clientIp(c);
   if (!allow(ip)) return c.json({ error: 'Too many requests.' }, 429);
 
@@ -68,7 +76,7 @@ export async function estimateRespondHandler(c) {
   }
 
   const meta = {
-    consentAt: new Date().toISOString(),
+    consentAt: new Date(nowMs).toISOString(),
     ip,
     userAgent: String(c.req.header('user-agent') || '').slice(0, 300),
   };
@@ -92,6 +100,16 @@ export async function estimateRespondHandler(c) {
     if (withOptions || sentDigest != null) {
       if (sentDigest !== snapshotDigest(existing.snapshot)) {
         return c.json({ error: STALE_SNAPSHOT_ERROR }, 409);
+      }
+    }
+
+    // After the digest (a stale page reloads first, then sees the expired
+    // view) and before selection (an expired option estimate is 410, not
+    // "Please choose an option."). An approved estimate keeps its lock.
+    if (decision === 'approved' && existing.decision !== 'approved') {
+      const { validUntil, expired } = snapshotExpiry(existing.snapshot, nowMs);
+      if (expired) {
+        return c.json({ error: expiredMessage(existing.snapshot, validUntil), code: 'estimate_expired', validUntil }, 410);
       }
     }
 

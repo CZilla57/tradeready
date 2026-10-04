@@ -288,6 +288,71 @@ extension AppStore {
 
     // `deleteForm(id:)` is in AppStore.swift: it sets the shared deletion undo.
 
+    // MARK: - Unsaved text (review fix 2026-10-03)
+    //
+    // A form screen that closes with text it could not save (a refused
+    // commit) hands it here instead of dropping it. The fill screen and the
+    // items editor take it back when they next open the form, and the job's
+    // form row says "Unsaved text" meanwhile. Memory only: cleared with the
+    // snapshot at an account boundary (`applyEmptySnapshot`).
+
+    /// Whether a form's screen closed with text it could not save.
+    func hasHeldFormText(formID: String) -> Bool {
+        heldFormText[formID]?.isEmpty == false
+    }
+
+    /// Holds the fill screen's unsaved answers and notes for `formID`,
+    /// replacing what was held for them. Empty `drafts` releases them.
+    func holdFormDrafts(
+        _ drafts: [NativeJobFormsPresentation.DraftKey: String],
+        refusals: [NativeJobFormsPresentation.DraftKey: NativeJobForms.FormError],
+        formID: String
+    ) {
+        var held = heldFormText[formID] ?? .init()
+        held.drafts = drafts
+        held.refusals = refusals.filter { drafts[$0.key] != nil }
+        setHeldFormText(held, formID: formID)
+    }
+
+    /// Takes back (and releases) the answers and notes held for `formID`.
+    func takeHeldFormDrafts(formID: String) -> (
+        drafts: [NativeJobFormsPresentation.DraftKey: String],
+        refusals: [NativeJobFormsPresentation.DraftKey: NativeJobForms.FormError]
+    )? {
+        guard var held = heldFormText[formID], !held.drafts.isEmpty else { return nil }
+        let taken = (held.drafts, held.refusals)
+        held.drafts = [:]
+        held.refusals = [:]
+        setHeldFormText(held, formID: formID)
+        return taken
+    }
+
+    /// Holds the items editor's unsaved title for `formID`; nil releases it.
+    func holdFormTitle(_ title: String?, refusal: NativeJobForms.FormError?, formID: String) {
+        var held = heldFormText[formID] ?? .init()
+        held.title = title
+        held.titleRefusal = title == nil ? nil : refusal
+        setHeldFormText(held, formID: formID)
+    }
+
+    /// Takes back (and releases) the title held for `formID`.
+    func takeHeldFormTitle(formID: String) -> (title: String, refusal: NativeJobForms.FormError?)? {
+        guard var held = heldFormText[formID], let title = held.title else { return nil }
+        let refusal = held.titleRefusal
+        held.title = nil
+        held.titleRefusal = nil
+        setHeldFormText(held, formID: formID)
+        return (title, refusal)
+    }
+
+    /// Publishes only a real change, so closing a screen with nothing held
+    /// redraws nothing.
+    private func setHeldFormText(_ held: NativeJobFormsPresentation.HeldText, formID: String) {
+        let next = held.isEmpty ? nil : held
+        guard heldFormText[formID] != next else { return }
+        heldFormText[formID] = next
+    }
+
     // MARK: - Private
 
     /// The ids of the photos of the form's job on this device.

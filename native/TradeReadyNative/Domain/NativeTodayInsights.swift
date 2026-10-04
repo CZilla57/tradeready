@@ -14,7 +14,7 @@ import Foundation
 /// All local-frame date/month math is pure string/component arithmetic
 /// (`NativeSchedule.shiftDate`, `monthsBetween`, `shiftMonth`) — never
 /// `Date`-parsing a bare `YYYY-MM-DD` (FA-039).
-public enum NativeInsightKind: String, Equatable, Hashable, Codable {
+public enum NativeInsightKind: String, Equatable, Hashable, Codable, CaseIterable {
     case laborOverrun = "labor_overrun"
     case lowMarginEstimate = "low_margin_estimate"
     case uninvoicedComplete = "uninvoiced_complete"
@@ -25,6 +25,10 @@ public enum NativeInsightKind: String, Equatable, Hashable, Codable {
     /// Phase 21 (spec §4): one piece of equipment's warranty ends soon.
     case warrantyExpiring = "warranty_expiring"
     case expenseAnomaly = "expense_anomaly"
+    /// Phase 32: a sent estimate reaches its valid-until date within 3 days.
+    case quoteExpiring = "quote_expiring"
+    /// Phase 32: a sent estimate passed its valid-until date in the last 14 days.
+    case quoteExpired = "quote_expired"
 }
 
 /// Mirrors `InsightTarget` — the routing contract 10.04 maps onto
@@ -121,7 +125,10 @@ public enum NativeTodayInsights {
 
     // MARK: - Entry point
 
-    /// Concatenates all nine selectors, in the documented priority order.
+    /// Concatenates all eleven selectors, in the documented priority order.
+    /// Phase 32 (spec 2026-10-03 §6.8): `quote_expiring` runs right after
+    /// `due_soon`; `quote_expired` after the schedule rules and before
+    /// `maintenance_due`.
     /// Absent inputs suppress their rules instead of guessing:
     /// `customers`/`recurringJobs`/`expenses` default to empty arrays.
     public static func select(
@@ -139,7 +146,9 @@ public enum NativeTodayInsights {
         out.append(contentsOf: selectLowMarginEstimates(jobs: jobs, targetMarginPercent: targetMarginPercent))
         out.append(contentsOf: selectUninvoicedComplete(jobs: jobs))
         out.append(contentsOf: selectDueSoon(invoices: invoices, now: now))
+        out.append(contentsOf: selectQuoteExpiring(jobs: jobs, now: now))
         out.append(contentsOf: selectScheduleInsights(jobs: jobs, now: now, schedule: schedule))
+        out.append(contentsOf: selectQuoteExpired(jobs: jobs, now: now))
         // Long-horizon, so it rides last — it must never crowd out today's-money
         // rows given the card's top-3 cap.
         out.append(contentsOf: selectMaintenanceDue(jobs: jobs, customers: customers, recurringJobs: recurringJobs, now: now))
@@ -387,6 +396,121 @@ public enum NativeTodayInsights {
             ))
         }
         return out
+    }
+
+    // MARK: - Phase 32. quote_expiring, quote_expired
+
+    /// Non-archived, unanswered `estimate_sent` jobs with a real valid-until
+    /// date, paired with their `NativeQuoteExpiry` state on the local `today`
+    /// (`NativeCashBasis.ymd`, FA-039 safe).
+    private static func quoteExpiryStates(jobs: [Canonical.Job], now: Date) -> [(job: Canonical.Job, state: NativeQuoteExpiry.State)] {
+        let today = NativeCashBasis.ymd(now)
+        return jobs.compactMap { job in
+            guard !isArchived(job.archivedAt),
+                  job.approval?.decision == nil,
+                  let state = NativeQuoteExpiry.state(job: job, today: today)
+            else { return nil }
+            return (job, state)
+        }
+    }
+
+    /// "from $X" (the lowest tier) for undecided quote options, otherwise
+    /// the job's quoted total.
+    static func quoteAmountLabel(_ job: Canonical.Job) -> String {
+        if let options = job.quoteOptions, options.acceptance == nil,
+           let lowest = options.tiers.map(\.estimateTotal).min() {
+            return "from \(formatQuote(double(lowest)))"
+        }
+        return formatQuote(double(job.estimateTotal))
+    }
+
+    /// The send stamp as "Oct 3, 2026", or `nil` when absent. The local
+    /// `estimateSentAt` is used as is; a link-only `approval.sentAt` is a UTC
+    /// instant, so it is read as the local calendar day it fell on (its UTC
+    /// date prefix can be a day ahead west of UTC, FA-039).
+    private static func sentLabel(_ job: Canonical.Job) -> String? {
+        guard let raw = job.estimateSentAt ?? job.approval?.sentAt,
+              let sent = NativeCashBasis.parseLocalDate(raw)
+        else { return nil }
+        let day = NativeCashBasis.ymd(sent)
+        guard NativeQuoteExpiry.addDays(day, 0) != nil else { return nil }
+        return NativeQuoteExpiry.displayDate(day, style: .medium)
+    }
+
+    static func selectQuoteExpiring(jobs: [Canonical.Job], now: Date) -> [NativeTodayInsight] {
+        let expiring: [(job: Canonical.Job, validUntil: String, daysLeft: Int)] = quoteExpiryStates(jobs: jobs, now: now)
+            .compactMap { entry in
+                guard case let .open(validUntil, daysLeft) = entry.state,
+                      daysLeft >= 0, daysLeft <= NativeQuoteExpiry.expiringSoonDays
+                else { return nil }
+                return (entry.job, validUntil, daysLeft)
+            }
+        if expiring.isEmpty { return [] }
+        if expiring.count == 1 {
+            let (job, validUntil, daysLeft) = expiring[0]
+            let phrase = NativeQuoteExpiry.relativePhrase(daysLeft: daysLeft)
+            let amount = quoteAmountLabel(job)
+            let date = NativeQuoteExpiry.displayDate(validUntil, style: .medium)
+            let sent = sentLabel(job).map { " on \($0)" } ?? ""
+            return [NativeTodayInsight(
+                kind: .quoteExpiring,
+                id: "quote_expiring:\(job.id):\(validUntil)",
+                title: "Estimate for \(job.customerName) expires \(phrase)",
+                detail: "\(job.title) · \(amount)",
+                target: .job(jobId: job.id),
+                reason: "You sent '\(job.title)'\(sent) and it's valid until \(date). After that the customer " +
+                    "can't approve it online. Follow up now or extend it.",
+                coachPrompt: "My estimate for '\(job.title)' (\(amount)) to \(job.customerName) expires \(phrase) " +
+                    "and they haven't answered. What's a good follow-up, and should I extend it?"
+            )]
+        }
+        return [NativeTodayInsight(
+            kind: .quoteExpiring,
+            id: "quote_expiring:all",
+            title: "\(expiring.count) estimates expire within \(NativeQuoteExpiry.expiringSoonDays) days",
+            target: .jobs,
+            reason: "\(expiring.count) sent estimates reach their valid-until dates within " +
+                "\(NativeQuoteExpiry.expiringSoonDays) days. After that customers can't approve them online. " +
+                "Follow up now or extend them."
+        )]
+    }
+
+    static func selectQuoteExpired(jobs: [Canonical.Job], now: Date) -> [NativeTodayInsight] {
+        let expired: [(job: Canonical.Job, validUntil: String)] = quoteExpiryStates(jobs: jobs, now: now)
+            .compactMap { entry in
+                guard case let .expired(validUntil, daysAgo) = entry.state,
+                      daysAgo >= 1, daysAgo <= NativeQuoteExpiry.expiredLookbackDays
+                else { return nil }
+                return (entry.job, validUntil)
+            }
+        if expired.isEmpty { return [] }
+        if expired.count == 1 {
+            let (job, validUntil) = expired[0]
+            return [NativeTodayInsight(
+                kind: .quoteExpired,
+                id: "quote_expired:\(job.id):\(validUntil)",
+                title: "Estimate for \(job.customerName) expired \(NativeQuoteExpiry.displayDate(validUntil, style: .short))",
+                detail: "\(job.title) · \(quoteAmountLabel(job))",
+                target: .job(jobId: job.id),
+                reason: "'\(job.title)' passed its valid-until date (\(NativeQuoteExpiry.displayDate(validUntil, style: .medium))) " +
+                    "without a response, so the customer can no longer approve it online. Extend it, send an " +
+                    "updated estimate, or let it go. Dismissing hides this until the date changes."
+            )]
+        }
+        // The aggregate is dismiss-only too, so its id carries the newest
+        // date in the set: a dismissal hides this batch, and the next
+        // estimate to expire (a later date) brings the row back. A constant
+        // "quote_expired:all" would hide every future batch for good.
+        let newest = expired.map(\.validUntil).max() ?? ""
+        return [NativeTodayInsight(
+            kind: .quoteExpired,
+            id: "quote_expired:all:\(newest)",
+            title: "\(expired.count) estimates expired in the last 2 weeks",
+            target: .jobs,
+            reason: "\(expired.count) sent estimates passed their valid-until dates in the last 2 weeks without " +
+                "a response, so customers can no longer approve them online. Extend them, send updated " +
+                "estimates, or let them go."
+        )]
     }
 
     // MARK: - 7. maintenance_due

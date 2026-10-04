@@ -109,6 +109,8 @@ async function notifyOwner(env, { userId, settingsData, request }) {
 const UPDATE_TITLES = {
   request_reschedule: 'Reschedule requested',
   cancel: 'Booking cancelled',
+  // Phase 32: a customer asked for an updated version of an expired estimate.
+  quote_update: 'Updated estimate requested',
 };
 
 /**
@@ -124,9 +126,12 @@ async function notifyOwnerUpdate(env, { userId, settingsData, request, event, no
   try {
     const to = await fetchOwnerEmail(env, userId);
     if (to && env.RESEND_API_KEY) {
+      // A quote-update row's details name the estimate (and carry the note),
+      // so an owner with several open estimates knows which one.
+      const details = event === 'quote_update' && typeof request.details === 'string' ? request.details : '';
       const lines = [
         `${title} — ${request.name}${when ? ` (${when})` : ''}.`,
-        ...(note ? [``, `Their note:`, note] : []),
+        ...(details ? [``, details] : note ? [``, `Their note:`, note] : []),
         ``,
         `Open TradeReady to respond.`,
       ];
@@ -156,7 +161,8 @@ async function notifyOwnerUpdate(env, { userId, settingsData, request, event, no
           to: token,
           title,
           body: `${request.name}${when ? ` — ${when}` : ''}`,
-          data: { type: 'booking_update', jobId: request.convertedJobId },
+          // Booking rows carry convertedJobId; estimate/portal rows carry jobRef.
+          data: { type: 'booking_update', jobId: request.convertedJobId || request.jobRef },
         }),
       });
       if (!r.ok) throw new Error(`Expo push ${r.status}: ${await r.text()}`);

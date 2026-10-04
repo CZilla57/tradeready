@@ -171,6 +171,76 @@ private func optionsDraftTests() throws {
            "Phase 25: options email without a link has no single-estimate total or approve sentence")
 }
 
+private func dated(_ snapshot: Canonical.EstimateApprovalSnapshot, _ validUntil: String = "2026-11-02") -> Canonical.EstimateApprovalSnapshot {
+    var copy = snapshot
+    copy.validUntil = validUntil
+    copy.validUntilTimeZone = "America/Phoenix"
+    return copy
+}
+
+/// Phase 32 (spec 2026-10-03 §6.6): a dated snapshot adds one sentence to
+/// each channel, single and options; undated copy is unchanged (asserted
+/// byte for byte by the Phase 25 regressions above and below).
+private func validityDraftTests() throws {
+    let link = URL(string: "https://example.test/estimate?j=job-options&t=token")!
+    let single = review(snapshot: dated(try approvalSnapshot()), jobDescription: "")
+    expect(NativeEstimateMessageDrafting.prepare(review: single, channel: .text).body
+               == "Hi Pat Lee, Rector Plumbing here. Estimate for \"Panel upgrade\": "
+               + "Labor (2 hrs @ $100/hr): $200 Permit: $50 Total: $325. Valid until Nov 2. Reply YES to approve or call 555-0100.",
+           "Phase 32: single text names the short date before the call to action")
+    expect(NativeEstimateMessageDrafting.prepare(review: single, channel: .text, approvalLink: link).body
+               .hasSuffix("Total: $325. Valid until Nov 2. View & approve: \(link.absoluteString)"),
+           "Phase 32: single text with a link keeps the date before the link")
+    expect(NativeEstimateMessageDrafting.prepare(review: single, channel: .email).body == """
+        Hi Pat Lee,
+
+        Thank you for reaching out. Here's your estimate for Panel upgrade:
+
+          Labor (2 hrs @ $100/hr)  $200
+          Permit  $50
+          Overhead & operating costs  $75
+          ────────────────────────────────────
+          TOTAL ESTIMATE  $325
+
+        This estimate is valid until November 2, 2026.
+
+        To approve this estimate, simply reply to this email or give me a call.
+        I can typically schedule work within a few business days of approval.
+
+        Best regards,
+        Chad Rector
+        Rector Plumbing
+        555-0100
+        """,
+           "Phase 32: single email names the long date after the total")
+
+    let options = review(snapshot: dated(try optionsSnapshot(), "2027-01-01"))
+    expect(NativeEstimateMessageDrafting.prepare(review: options, channel: .text).body
+               == "Hi Pat Lee, Rector Plumbing here. Options for \"Water heater\": "
+               + "Repair: $450. Standard unit: $1,800 (recommended). High-efficiency unit: $2,600. "
+               + "Add-on Haul-away: +$150. Valid until Jan 1. Reply with the option you'd like or call 555-0100.",
+           "Phase 32: options text names the short date before the call to action (Jan 1 never shifts)")
+    let optionsEmail = NativeEstimateMessageDrafting.prepare(review: options, channel: .email).body
+    expect(optionsEmail.contains("""
+          OPTION TOTAL  $2,600
+
+        This estimate is valid until January 1, 2027.
+
+        Optional add-ons (added to the option you choose):
+        """),
+           "Phase 32: options email names the long date after the last option total")
+    expect(optionsEmail.components(separatedBy: "valid until").count == 2,
+           "Phase 32: the options email states the date once")
+
+    let undatedSingle = review(snapshot: try approvalSnapshot())
+    for channel in NativeEstimateMessageChannel.allCases {
+        let body = NativeEstimateMessageDrafting.prepare(review: undatedSingle, channel: channel).body
+        expect(!body.contains("alid until"), "Phase 32: undated \(channel.rawValue) copy has no validity sentence")
+        let optionsBody = NativeEstimateMessageDrafting.prepare(review: review(snapshot: try optionsSnapshot()), channel: channel).body
+        expect(!optionsBody.contains("alid until"), "Phase 32: undated options \(channel.rawValue) copy has no validity sentence")
+    }
+}
+
 @main
 enum EstimateMessageDraftTests {
     static func main() throws {
@@ -264,6 +334,7 @@ enum EstimateMessageDraftTests {
                "Phase 25: single-estimate email is unchanged")
 
         try optionsDraftTests()
+        try validityDraftTests()
 
         if failures == 0 {
             print("PASS: native estimate message drafting tests")

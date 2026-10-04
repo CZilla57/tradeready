@@ -135,7 +135,8 @@ enum NativeJobForms {
         case noText
         /// A photo-required item has no photo.
         case noPhoto
-        /// A photo-required item's photos were all deleted from the job.
+        /// A photo-required item's photos are all missing from this device
+        /// (deleted, or not synced here yet: this device cannot tell which).
         case photoUnavailable
 
         var message: String {
@@ -144,7 +145,7 @@ enum NativeJobForms {
             case .noResult: "Needs Pass, Fail or N/A"
             case .noText: "Needs an answer"
             case .noPhoto: "Needs a photo"
-            case .photoUnavailable: "Its photo was deleted. Add another"
+            case .photoUnavailable: "Its photo isn't on this device. Add another"
             }
         }
     }

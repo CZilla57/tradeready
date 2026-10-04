@@ -382,6 +382,9 @@ struct BusinessSettings: Codable, Hashable {
     var googleReviewLink = ""
     var reviewRequestDelayHours = 3
     var reviewRequestTemplate = "Hi {customerName}, thanks for choosing {businessName}! If you were happy with the work, we'd really appreciate a Google review: {googleReviewLink}"
+    /// Phase 32: days a new estimate stays valid after it is sent (0…365;
+    /// 0 = estimates don't expire). Canonical absent reads as 30.
+    var estimateValidityDays = 30
     var appearance: Appearance = .system
 
     init(
@@ -436,6 +439,7 @@ struct BusinessSettings: Codable, Hashable {
         googleReviewLink = try c.decodeIfPresent(String.self, forKey: .googleReviewLink) ?? googleReviewLink
         reviewRequestDelayHours = try c.decodeIfPresent(Int.self, forKey: .reviewRequestDelayHours) ?? reviewRequestDelayHours
         reviewRequestTemplate = try c.decodeIfPresent(String.self, forKey: .reviewRequestTemplate) ?? reviewRequestTemplate
+        estimateValidityDays = try c.decodeIfPresent(Int.self, forKey: .estimateValidityDays) ?? estimateValidityDays
         appearance = try c.decodeIfPresent(Appearance.self, forKey: .appearance) ?? appearance
         paymentProvider = try c.decodeIfPresent(String.self, forKey: .paymentProvider) ?? paymentProvider
         paymentProviderKey = try c.decodeIfPresent(String.self, forKey: .paymentProviderKey) ?? paymentProviderKey

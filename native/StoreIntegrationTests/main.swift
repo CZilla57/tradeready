@@ -1739,8 +1739,18 @@ struct StoreIntegrationTests {
             expect(reopened.completedAt == nil && reopened.items == completed.items, "forms: reopening keeps the answers")
             expect(queueStore.reopenForm(id: formID) == .failure(.notCompleted), "forms: reopening twice is refused")
 
+            // Review fix (2026-10-03): the form PDF reads each photo from its
+            // file inside the render task instead of holding every photo's bytes.
+            let photoFile = queueStore.jobPhotoFileURL(photoID: photo.id)
+            expect(photoFile.flatMap { try? Data(contentsOf: $0) } == queueStore.jobPhotoBytes(photoID: photo.id)
+                   && photoFile != nil,
+                   "forms: a photo's file holds the same bytes the screen shows")
+            expect(queueStore.jobPhotoFileURL(photoID: "p1_missing") == nil && queueStore.jobPhotoFileURL(photoID: "../x") == nil,
+                   "forms: a photo with no bytes here, or an invalid id, has no file")
+
             // A deleted photo leaves a dangling id that no longer satisfies the item.
             expect(queueStore.deleteJobPhoto(photoID: photo.id), "forms: the job photo deletes")
+            expect(queueStore.jobPhotoFileURL(photoID: photo.id) == nil, "forms: a deleted photo's file is gone")
             expect(queueStore.form(id: formID)?.items[1].photoIds == [photo.id], "forms: the item keeps the dangling id")
             expect(queueStore.formItemPhotos(formID: formID, itemID: "fi_2").isEmpty, "forms: a dangling id resolves to nothing")
             expect(queueStore.formMissingItems(queueStore.form(id: formID)!).map(\.reasons) == [[.photoUnavailable]],
@@ -4293,6 +4303,38 @@ struct StoreIntegrationTests {
                    "10.12 gate ordering: zero visible insights suppresses the card even when otherwise eligible")
             expect(NativeInsightsCardPolicy.isVisible(setupComplete: true, hero: nil, insights: five),
                    "10.12 gate ordering: setup complete + no hero + insights present shows the card")
+
+            // Phase 32 (spec 2026-10-03 §6.8): quote_expired is dismiss-only
+            // (its id carries the date, so an extension re-arms it);
+            // quote_expiring resolves on its own and has no mute affordance.
+            expect(NativeInsightsCardPolicy.isMuteable(.quoteExpired) && NativeInsightsCardPolicy.snoozeDays(for: .quoteExpired) == nil,
+                   "Phase 32 quote_expired is dismiss-only")
+            expect(!NativeInsightsCardPolicy.isMuteable(.quoteExpiring), "Phase 32 quote_expiring is not muteable")
+            expect(NativeInsightsCardPolicy.symbolName(for: .quoteExpiring) == "hourglass"
+                   && NativeInsightsCardPolicy.symbolName(for: .quoteExpired) == "hourglass.bottomhalf.filled",
+                   "Phase 32 quote kinds use the hourglass symbols")
+            let expired = insight1012(.quoteExpired, id: "quote_expired:j9:2026-09-01")
+            let expiring = insight1012(.quoteExpiring, id: "quote_expiring:j8:2026-09-25")
+            let dismissed = [NativeInsightMutes.makeMute(id: expired.id, now: now)]
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [expiring, expired], mutes: dismissed, now: now).map(\.id) == [expiring.id],
+                   "Phase 32 a dismissed quote_expired row stays hidden")
+            let reArmed = insight1012(.quoteExpired, id: "quote_expired:j9:2026-09-20")
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [reArmed], mutes: dismissed, now: now).map(\.id) == [reArmed.id],
+                   "Phase 32 an extended-then-expired estimate (new date, new id) shows again")
+            // The dismiss-only aggregate carries its newest date, so
+            // dismissing one batch never hides the next one for good.
+            let batch = insight1012(.quoteExpired, id: "quote_expired:all:2026-09-01")
+            let batchDismissed = [NativeInsightMutes.makeMute(id: batch.id, now: now)]
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [batch], mutes: batchDismissed, now: now).isEmpty,
+                   "Phase 32 a dismissed quote_expired aggregate stays hidden")
+            let nextBatch = insight1012(.quoteExpired, id: "quote_expired:all:2026-09-20")
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [nextBatch], mutes: batchDismissed, now: now).map(\.id) == [nextBatch.id],
+                   "Phase 32 the next quote_expired aggregate shows despite the earlier dismissal")
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [expired, expiring], mutes: nil, now: now).map(\.id) == [expiring.id],
+                   "Phase 32 fail-closed hides quote_expired but keeps the self-resolving quote_expiring")
+            expect(NativeInsightsCardPolicy.muteControlsAvailable(for: .quoteExpired, mutes: [])
+                   && !NativeInsightsCardPolicy.muteControlsAvailable(for: .quoteExpiring, mutes: []),
+                   "Phase 32 only quote_expired offers mute controls")
         }
 
         // --- Every checklist destination (pure `NativeSetupChecklist.route`).
@@ -4735,6 +4777,40 @@ struct StoreIntegrationTests {
                    "10.12 fix1 I7a: the relaunched, re-activated store reads back a real (non-nil) checklist state")
             expect(relaunched.setupChecklistState?.isDone(.rate) == false,
                    "10.12 fix1 I7a: the on-disk setup-checklist store was actually removed by applyCompletedSignOutState, not just the in-memory copy")
+        }
+
+        // --- Phase 20 review fix (2026-10-03): form text a closing screen could
+        // not save is held in memory by form id, taken back once by the screen
+        // that owns it, and scrubbed at an account boundary.
+        do {
+            let (store, _) = try seed08Store(settings: settings08(), tag: "forms-held-text")
+            seed08Owner(store, binding: hexBinding("bind-forms-held"))
+            let heldFormID = "fm1759420800000_held"
+            let answer = NativeJobFormsPresentation.DraftKey(itemID: "fi_12", field: .answer)
+            expect(!store.hasHeldFormText(formID: heldFormID) && store.takeHeldFormDrafts(formID: heldFormID) == nil
+                   && store.takeHeldFormTitle(formID: heldFormID) == nil,
+                   "forms held text: nothing is held at first")
+            store.holdFormDrafts([answer: "Three breakers"], refusals: [answer: .readOnlyCompleted], formID: heldFormID)
+            store.holdFormTitle("Panel check", refusal: .notSaved, formID: heldFormID)
+            expect(store.hasHeldFormText(formID: heldFormID), "forms held text: the form's row can say it has unsaved text")
+            let drafts = store.takeHeldFormDrafts(formID: heldFormID)
+            expect(drafts?.drafts == [answer: "Three breakers"] && drafts?.refusals == [answer: .readOnlyCompleted],
+                   "forms held text: the fill screen takes back its text with the reasons")
+            expect(store.takeHeldFormDrafts(formID: heldFormID) == nil && store.hasHeldFormText(formID: heldFormID),
+                   "forms held text: taken once; the editor's title is still held")
+            let title = store.takeHeldFormTitle(formID: heldFormID)
+            expect(title?.title == "Panel check" && title?.refusal == .notSaved && store.heldFormText.isEmpty,
+                   "forms held text: the editor takes back its title, and nothing is left")
+            store.holdFormDrafts([answer: "x"], refusals: [answer: .notSaved], formID: heldFormID)
+            store.holdFormDrafts([:], refusals: [answer: .notSaved], formID: heldFormID)
+            expect(store.heldFormText.isEmpty, "forms held text: a screen that closes with everything saved releases what was held")
+            store.holdFormTitle(nil, refusal: .notSaved, formID: heldFormID)
+            expect(store.heldFormText.isEmpty, "forms held text: no title, nothing held")
+            store.holdFormDrafts([answer: "Kept"], refusals: [:], formID: heldFormID)
+            store.holdFormTitle("Kept title", refusal: nil, formID: heldFormID)
+            store.testApplyCompletedSignOutState()
+            expect(store.heldFormText.isEmpty && !store.hasHeldFormText(formID: heldFormID),
+                   "forms held text: an account boundary scrubs held text")
         }
 
         // --- I7(b): apply a mute, cross a boundary, relaunch/reactivate, and
