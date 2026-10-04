@@ -56,6 +56,9 @@ func testNormalize() {
     expectEqual(T.normalize("  ## gate code "), "gate code", "normalize: repeated leading # and spaces")
     expectEqual(T.normalize("AC, heat pump"), "AC heat pump", "normalize: a comma becomes a space")
     expectEqual(T.normalize("AC;heat"), "AC heat", "normalize: a semicolon becomes a space")
+    expectEqual(T.normalize("AC|heat"), "AC heat", "normalize: a pipe (the third import separator) becomes a space")
+    expectEqual(T.normalize("|#a || b|"), "a b", "normalize: leading, doubled and trailing separators collapse")
+    expectEqual(T.normalize("|;,"), nil, "normalize: separators only is nil")
     expectEqual(T.normalize("Spring\u{0007} AC"), "Spring AC", "normalize: control characters are stripped")
     expectEqual(T.normalize("Line\none"), "Line one", "normalize: a newline separates words")
     expectEqual(T.normalize("Gate    code"), "Gate code", "normalize: whitespace collapses")
@@ -297,6 +300,34 @@ func testAccountingColumns() {
     expectEqual(Array(mapping.suffix(2)), ["tags", "marketingOptOut"], "export: the headers are import synonyms")
 }
 
+// MARK: - Separators round-trip through export and import
+
+func testSeparatorRoundTrip() {
+    let stored = NativeCustomerTags.normalizeList(["a|b", "x;y", "p,q", "plain"])
+    expectEqual(stored, ["a b", "p q", "plain", "x y"], "round trip: |, ; and , become spaces in the stored form")
+    for label in stored ?? [] {
+        expectEqual(NativeCustomerTags.split(label), [label], "round trip: \"\(label)\" survives import's split intact")
+    }
+    let csv = NativeAccountingPackage.buildCustomersCsv([customer("a", "Ana", tags: stored)])
+    let line = csv.components(separatedBy: "\r\n").filter { !$0.isEmpty }[1]
+    let cells = line.components(separatedBy: ",")
+    expectEqual(cells[cells.count - 2], "a b; p q; plain; x y", "round trip: export joins the stored tags with \"; \" unquoted")
+    let imported = NativeImportEngine.buildCustomerImport(
+        rows: [["Ana", cells[cells.count - 2]]], mapping: ["name", "tags"], existing: [], batchID: "imp_rt",
+        environment: environment()
+    )
+    expectEqual(imported.records.first?.tags, stored, "round trip: importing the exported cell gives back the same tags")
+    // A matched import of the exported cell is no change.
+    let again = NativeImportEngine.upsertCustomer(
+        imported.records, name: "Ana", tags: NativeCustomerTags.split(cells[cells.count - 2]),
+        createdAt: "2026-04-01", newID: { "x" }
+    )
+    expect(!again.changed, "round trip: re-importing the export changes nothing")
+    // A raw cell with all three separators splits into the same labels.
+    expectEqual(NativeCustomerTags.split("a b|x y;p q,plain"), ["a b", "x y", "p q", "plain"],
+                "round trip: a mixed-separator cell")
+}
+
 testNormalize()
 testNormalizeList()
 testVocabulary()
@@ -306,6 +337,7 @@ testListFilter()
 testImportMapping()
 testImportEngine()
 testAccountingColumns()
+testSeparatorRoundTrip()
 
 if failures == 0 {
     print("PASS: customer tags tests (\(checks) checks)")
