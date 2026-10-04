@@ -54,6 +54,8 @@ sh "$ROOT_DIR/native/run-quote-options-tests.sh"
 sh "$ROOT_DIR/native/run-quote-options-store-tests.sh"
 # Phase 27: lead source tracking (normalizer, capture rules, report, coach block).
 sh "$ROOT_DIR/native/run-lead-source-tests.sh"
+# Phase 23: Settings > API access (key-management transport, view model, source guards).
+sh "$ROOT_DIR/native/run-api-access-tests.sh"
 # Phase 32: quote expiration dates (pure policy + shared expiry vectors with the Worker).
 sh "$ROOT_DIR/native/run-quote-expiry-tests.sh"
 sh "$ROOT_DIR/native/run-quote-expiry-store-tests.sh"

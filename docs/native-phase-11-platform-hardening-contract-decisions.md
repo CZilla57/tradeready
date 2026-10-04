@@ -1277,6 +1277,8 @@ Types below: `bool`, `number`, `string`, `string[]`, a literal (`true`), or an e
 | `booking_request_opened` | `{}` | `App.tsx:466` | — |
 | `booking_update_opened` | `{}` | `App.tsx:476` | — |
 | `widget_deep_link_opened` | `type: job\|onmyway` | `App.tsx:503` | — |
+| `api_key_created` | `scopeCount: number` | — (native-only: Roadmap Phase 23, `docs/superpowers/specs/2026-10-03-open-api-design.md` §9) | `N/NativeAPIAccessStore.swift` |
+| `api_key_revoked` | `scopeCount: number` | — (native-only: Roadmap Phase 23, same spec §9) | `N/NativeAPIAccessStore.swift` |
 
 Enum definitions:
 - `TradeId` = plumbing, electrical, hvac, carpenter, bricklayer, plasterer, landscaping,
@@ -1291,6 +1293,9 @@ Enum definitions:
   (`utils/todayInsights.ts:28`), plus the native-only quote_expiring and quote_expired
   (Roadmap Phase 32, `docs/superpowers/specs/2026-10-03-quote-expiration-design.md`
   §6.8). The two kinds are an additive enum change only, so `catalogVersion` stays 1.
+- `api_key_created` and `api_key_revoked` (Roadmap Phase 23, native-only) carry the
+  scope count only, never a key, its name, prefix or id. Two new events are an
+  additive change, so `catalogVersion` stays 1.
 
 Autocapture adds `$screen` (§9.3) and the SDK's `Application …` lifecycle events
 (installed, updated, opened, backgrounded; exact names are set by the pinned SDK).
@@ -1311,6 +1316,8 @@ JSON. Each event maps to a list of allowed property-shape variants.
   },
   "events": {
     "ai_chat_sent": [{"source": "insight_prefill|organic", "provider": "anthropic|groq|backend"}],
+    "api_key_created": [{"scopeCount": "number"}],
+    "api_key_revoked": [{"scopeCount": "number"}],
     "appointment_confirm_opened": [{}],
     "appointment_confirm_sent": [{}],
     "booking_request_opened": [{}],

@@ -173,7 +173,8 @@ struct AnalyticsTransportTests {
             return
         }
         expectEqual(catalog.catalogVersion, 1, "catalog: version 1")
-        expectEqual(catalog.events.count, 52, "catalog: 52 events")
+        // 54: Phase 23 adds api_key_created and api_key_revoked.
+        expectEqual(catalog.events.count, 54, "catalog: 54 events")
         expectEqual(catalog.events["invoice_created"]?.count, 3, "catalog: invoice_created has three variants")
         expectEqual(catalog.events["job_created"]?.first?["duplicated"],
                     .init(type: .trueLiteral, isOptional: true), "catalog: `duplicated?: true` is an optional literal")

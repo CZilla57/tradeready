@@ -13322,6 +13322,19 @@ extension AppStore {
         emitAnalytics(.setupChecklistTaskOpened(task))
     }
 
+    // MARK: - Phase 23 (open-API spec §9): the seams `N/NativeAPIAccessStore.swift` uses
+
+    /// The verified owner Settings › API access acts for; nil when signed out.
+    var apiAccessOwnerKey: String? {
+        guard hasExactSignedInWorkspace, let subject = authenticatedUserSubject, let binding = verifiedAccountBinding,
+              !subject.isEmpty, !binding.isEmpty else { return nil }
+        return "\(subject)|\(binding)"
+    }
+    func apiAccessRefreshedSession(excluding used: Data) async -> Data? { await scheduleBookingRefreshedSession(excluding: used) }
+    /// Scope count only: never a key, its name, prefix or id.
+    func trackAPIKeyCreated(scopeCount: Int) { emitAnalytics(.apiKeyCreated(scopeCount: scopeCount)) }
+    func trackAPIKeyRevoked(scopeCount: Int) { emitAnalytics(.apiKeyRevoked(scopeCount: scopeCount)) }
+
     // MARK: - Analytics emission and identity (task 11.08, contract §9.3–§9.5)
     //
     // Every event is built by a `NativeAnalyticsEvent` constructor and sent

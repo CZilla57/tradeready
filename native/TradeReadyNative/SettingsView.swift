@@ -5,6 +5,7 @@ enum SettingsDestination: Hashable {
     case business, schedule, pricing, numbering, importData
     case payments, booking, appearance, ai, notifications, reviews
     case sync, subscription, account
+    case apiAccess  // Phase 23: only reachable through `apiAccessRows` (flag off = no row)
 }
 
 extension SettingsDestination {
@@ -58,7 +59,7 @@ struct SettingsView: View {
                         (.ai, "sparkles", "AI Assistant", "Coach preferences and data access"),
                         (.notifications, "bell.badge.fill", "Notifications", "Invoices, appointments, and follow-ups"),
                         (.reviews, "star.fill", "Review requests", store.settings.reviewRequestEnabled ? "Automatic requests are on" : "Google review link and message")
-                    ])
+                    ] + SettingsDestination.apiAccessRows)
                     settingsGroup("SUBSCRIPTION & SUPPORT", rows: [
                         (.sync, "icloud.fill", "Cloud sync", syncSubtitle),
                         (.subscription, "diamond.fill", "Subscription", "Plan, billing, and restore purchases"),
@@ -143,6 +144,7 @@ struct SettingsView: View {
         case .ai: AISettings()
         case .notifications: NotificationSettings()
         case .reviews: ReviewSettings()
+        case .apiAccess: NativeAPIAccessView()
         case .sync: SyncSettings()
         case .subscription: SubscriptionSettings()
         case .account: AccountSettings()

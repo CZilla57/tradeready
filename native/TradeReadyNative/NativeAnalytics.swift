@@ -103,6 +103,8 @@ enum NativeAnalyticsCatalogFixture {
   },
   "events": {
     "ai_chat_sent": [{"source": "insight_prefill|organic", "provider": "anthropic|groq|backend"}],
+    "api_key_created": [{"scopeCount": "number"}],
+    "api_key_revoked": [{"scopeCount": "number"}],
     "appointment_confirm_opened": [{}],
     "appointment_confirm_sent": [{}],
     "booking_request_opened": [{}],
