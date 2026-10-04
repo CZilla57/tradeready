@@ -865,6 +865,12 @@ private let analyticsExclusions: [String: String] = [
     "booking_request_opened": "G1: no native remote-push surface; \(cutoverOwner)",
     "booking_update_opened": "G1: no native remote-push surface; \(cutoverOwner)",
 ]
+/// Native-only catalog events with no RN `track(` site, each with its source.
+/// Roadmap Phase 23 (open-API spec §9) adds the two API-key events.
+private let nativeOnlyEvents: [String: String] = [
+    "api_key_created": "Roadmap Phase 23 open API (native-only)",
+    "api_key_revoked": "Roadmap Phase 23 open API (native-only)",
+]
 
 /// Distinct event names from RN `track(` call sites (literal or a two-literal ternary).
 private func rnTrackedEvents(root: URL) -> (events: Set<String>, sites: Int, unparsed: [String]) {
@@ -987,12 +993,15 @@ private func testAnalyticsCatalog(root: URL, sources: [SourceFile]) {
         expect(false, "Q4 the §9.5 catalog loads"); return
     }
     let catalogEvents = Set(catalog.events.keys)
-    expectEqual(catalogEvents.count, 52, "Q4 the §9.5 catalog holds 52 events")
+    // 54: Phase 23 adds api_key_created and api_key_revoked (native-only).
+    expectEqual(catalogEvents.count, 54, "Q4 the §9.5 catalog holds 54 events")
 
     // RN call sites == catalog.
     let rn = rnTrackedEvents(root: root)
     expectEqual(rn.unparsed, [], "Q4 every RN track( site has a literal (or two-literal ternary) event name")
-    expectEqual(rn.events, catalogEvents, "Q4 RN track( events equal the native catalog")
+    expect(Set(nativeOnlyEvents.keys).isSubset(of: catalogEvents), "Q4 every native-only event is in the catalog")
+    expectEqual(rn.events, catalogEvents.subtracting(nativeOnlyEvents.keys),
+                "Q4 RN track( events equal the native catalog, less the native-only events")
     expect(rn.sites >= 70, "Q4 RN track( sites scanned (\(rn.sites))")
 
     // Native emissions.
@@ -1036,7 +1045,7 @@ private func testAnalyticsCatalog(root: URL, sources: [SourceFile]) {
     let unwired = catalogEvents.subtracting(reachable)
     expectEqual(unwired, Set(analyticsExclusions.keys),
                 "Q4 every catalog event without a reachable native emission is a named exclusion")
-    expectEqual(reachable.count, 50, "Q4 50 of 52 catalog events are wired natively")
+    expectEqual(reachable.count, 52, "Q4 52 of 54 catalog events are wired natively")
     expectEqual(unreachable, [:], "Q4 every native emission site is reachable (12.00b.3 wired tax_settings_saved)")
     expect(reachable.contains("tax_settings_saved"), "Q4 tax_settings_saved is wired natively (12.00b.3, G2)")
     expect(live.contains("commitTaxSettings"),
