@@ -15,7 +15,15 @@
 // additive against concurrent writers. DEPLOY ORDERING: server-side appends
 // must not run before that trigger is applied (spec §9 step 1).
 //
-// Returns { outcome, invoice, userId } where outcome is one of
+// A DELETED invoice (review fix 2026-10-04, spec §13.7): money that arrives
+// for it (a pay-page session completed after the owner deleted it, a legacy
+// link, an autopay create that had already reached Stripe) is still booked,
+// so the ledger matches Stripe, but the row stays deleted (the upsert used
+// to write deleted:false and silently resurrect it, reopening it to the
+// reminder and autopay sweeps). The owner is alerted instead (email + push,
+// fire-and-forget), and the result carries invoiceDeleted: true.
+//
+// Returns { outcome, invoice, userId, invoiceDeleted } where outcome is one of
 //   'appended'       — the entry was written (send receipts only on this)
 //   'duplicate'      — an entry with this ledger id already exists
 //   'not_found'      — the invoice hasn't synced yet (retries won't help)
@@ -25,6 +33,7 @@
 
 const { amountPaid, isFullyPaid, materializeLegacyLedger } = require('../paymentMath.js');
 const { verifyConnectedAccountOwnership } = require('./webhookOwnership.js');
+const { alertOwner } = require('../ownerAlert.js');
 
 // Optional keys a caller may add to the ledger entry. Anything else is
 // dropped, so a caller can never smuggle `voidedAt` or another amount in.
@@ -37,7 +46,7 @@ async function recordStripePayment(env, { invoiceId, connectedAccountId, ledgerI
   };
 
   const fetchRes = await fetch(
-    `${env.SUPABASE_URL}/rest/v1/invoices?id=eq.${encodeURIComponent(invoiceId)}&select=user_id,data`,
+    `${env.SUPABASE_URL}/rest/v1/invoices?id=eq.${encodeURIComponent(invoiceId)}&select=user_id,data,deleted`,
     { headers: supabaseHeaders }
   );
 
@@ -54,6 +63,7 @@ async function recordStripePayment(env, { invoiceId, connectedAccountId, ledgerI
   }
 
   const { user_id, data } = rows[0];
+  const invoiceDeleted = rows[0].deleted === true;
 
   // Ownership check: the invoice id a Stripe object carries may name an
   // invoice the paying connected account does NOT own (legacy links stamp
@@ -146,7 +156,7 @@ async function recordStripePayment(env, { invoiceId, connectedAccountId, ledgerI
       user_id,
       data: nextData,
       updated_at: new Date().toISOString(),
-      deleted: false,
+      deleted: invoiceDeleted,
     }),
   });
 
@@ -154,7 +164,39 @@ async function recordStripePayment(env, { invoiceId, connectedAccountId, ledgerI
     throw new Error(`Supabase upsert ${upsertRes.status}: ${await upsertRes.text()}`);
   }
 
-  return { outcome: 'appended', invoice: { ...nextData, id: invoiceId }, userId: user_id };
+  if (invoiceDeleted) await alertPaymentOnDeletedInvoice(env, { userId: user_id, invoiceId, data, payment });
+  return { outcome: 'appended', invoice: { ...nextData, id: invoiceId }, userId: user_id, invoiceDeleted };
+}
+
+// Fire-and-forget: never throws (alertOwner swallows its own failures).
+async function alertPaymentOnDeletedInvoice(env, { userId, invoiceId, data, payment }) {
+  console.warn(`[stripe/record-payment] invoice ${invoiceId} is deleted; ${payment.id} booked on it and the owner alerted`);
+  try {
+    const settingsRes = await fetch(
+      `${env.SUPABASE_URL}/rest/v1/settings?user_id=eq.${encodeURIComponent(userId)}&select=data`,
+      { headers: { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, apikey: env.SUPABASE_SERVICE_ROLE_KEY } }
+    );
+    const settingsRows = settingsRes.ok ? await settingsRes.json() : [];
+    const settings = (settingsRows[0] && settingsRows[0].data) || {};
+    const number = String((data && data.number) || invoiceId).replace(/\s+/g, ' ').trim().slice(0, 60);
+    const amount = `$${Number(payment.amount).toFixed(2)}`;
+    await alertOwner(env, {
+      userId,
+      settings,
+      alert: {
+        subject: `Payment received for deleted invoice ${number}`,
+        text:
+          `A Stripe payment of ${amount} (${payment.id.replace(/^stripe_/, '')}) arrived for invoice ${number}, which was deleted in TradeReady. ` +
+          'It has been recorded on the deleted invoice so nothing is lost, but the invoice stays deleted and will not appear in the app. ' +
+          'If the payment was not owed, refund it in Stripe; if the invoice should not have been deleted, recreate it and record the payment.',
+        pushTitle: 'Payment for a deleted invoice',
+        pushBody: `Invoice ${number}: ${amount}`,
+      },
+      data: { invoiceId },
+    });
+  } catch (err) {
+    console.error(`[stripe/record-payment] deleted-invoice alert for ${invoiceId} failed:`, err.message);
+  }
 }
 
 module.exports = { recordStripePayment, EXTRA_KEYS };

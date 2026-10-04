@@ -232,3 +232,19 @@ describe('webhook — receipts and legacy links', () => {
     assert.equal(stripe.callsTo('paymentLinks.update').length, 0);
   });
 });
+
+describe('webhook — money for a deleted invoice (review fix, spec §13.7)', () => {
+  test('is booked on the invoice, which stays deleted, and the owner is alerted', async () => {
+    w = W.world({ invoices: [W.invoiceRow({}, { deleted: true })] });
+    const { res } = await deliver(paymentEvent({ metadata: { invoiceId: 'inv1', tr_kind: 'invoice' } }));
+    assert.deepEqual([res.status, res.body], [200, { received: true }]);
+    const row = w.db.rows('invoices')[0];
+    assert.equal(row.deleted, true, 'not resurrected');
+    assert.deepEqual(row.data.payments.map((p) => [p.id, p.amount]), [['stripe_cs_1', 120]]);
+    const [alert] = mailTo(OWNER_EMAIL);
+    assert.ok(alert, 'owner alerted');
+    assert.match(alert.subject, /deleted invoice INV-0042/);
+    assert.match(alert.text, /\$120\.00/);
+    assert.equal(w.pushes.length, 1);
+  });
+});

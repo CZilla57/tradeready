@@ -12,24 +12,45 @@
 //      duplicate.
 //   Every terminal status write is conditional on status=claimed, and only
 //   the run that flips it sends mail, so receipts and alerts go out once.
-// Mutual exclusion with the pay page: after claiming, the sweep expires any
-// OPEN Checkout Session for the invoice before charging; if one already
-// completed, the customer just paid on the pay page, so the claim is released
-// and nothing is charged. The pay page does the mirror image (it re-checks
-// for a claim after creating its session). Each side writes its marker, then
-// looks for the other's, so a customer can't pay twice in the window.
+//
+// The pre-charge gate (review fix 2026-10-04, spec §13.7). Immediately
+// before ANY paymentIntents.create — first attempt or replay — processClaim:
+//   a. expires every OPEN Checkout Session for the invoice (a refused expire
+//      means it just completed), THEN lists the account's COMPLETE sessions
+//      (both read to the end; a list that can't be finished is an unknown,
+//      never "clear"). Open first: a session that completes in between is
+//      still seen as complete.
+//   b. re-reads the invoice, the enrollment, the plan and the Stripe account
+//      from the database and judges them with liveVerdict: a deleted or paid
+//      invoice, a revoked/changed enrollment, a lost plan/toggle/account, a
+//      balance that differs from the claimed amount, a completed pay-page
+//      session not yet in the ledger, or a time outside the window → stand
+//      down, nothing is charged.
+//   c. stamps charge_sent_at on the still-`claimed` row, then sends the
+//      create. No stamp → no create.
+// Standing down: a claim with no charge_sent_at is released (deleted; the
+// DELETE itself requires charge_sent_at is null), and a later sweep
+// re-selects the invoice at its live balance if it is still due. A claim
+// whose create MAY have reached Stripe is never released: the sweep lists
+// the customer's PaymentIntents for this claim and acts on what it finds;
+// with none found it settles `failed`/`unknown` and tells the owner, so no
+// later claim can charge on top of a create Stripe did receive.
+// A check that fails before the create (network, Stripe 5xx, Supabase)
+// releases a never-sent claim, so the pay page isn't blocked as `in_flight`
+// by a claim no run is working on.
 // Off-session amounts are capped at the authorized ceiling AND the live
-// balance (the selector), and are never retried after a decline: the
-// customer gets a pay link and the owner an alert. An UNKNOWN outcome
-// (network, Stripe 5xx/429) leaves the claim `claimed`; a later sweep
-// re-reads it idempotently, and after 6 h (well inside Stripe's 24 h key
-// window) lists the customer's PaymentIntents instead.
+// balance, and are never retried after a decline: the customer gets a pay
+// link and the owner an alert. An UNKNOWN create outcome (network, Stripe
+// 5xx/429) leaves the stamped claim `claimed`; a later sweep replays it
+// through the same gate (same key, same amount, only if the live balance
+// still equals it), and after 6 h (well inside Stripe's 24 h key window)
+// lists the customer's PaymentIntents instead.
 
 const { makeStripe, isUnknownOutcome } = require('../stripe/client.js');
 const { recordStripePayment } = require('../stripe/recordPayment.js');
-const { balanceDue } = require('../paymentMath.js');
+const { balanceDue, amountPaid, PAID_EPSILON } = require('../paymentMath.js');
 const store = require('./store.js');
-const { selectInvoicesToCharge, selectHousekeeping, planKey } = require('./selectInvoicesToCharge.js');
+const { selectInvoicesToCharge, selectHousekeeping, liveVerdict, planGoneFor, planKey, WINDOW_DAYS } = require('./selectInvoicesToCharge.js');
 const { revokeEnrollment } = require('./revoke.js');
 const { isHardFailure, normalizeFailureReason } = require('./reasons.js');
 const { buildReceiptEmail, buildChargeFailedEmail, ownerChargeProblemAlert } = require('./emails.js');
@@ -40,6 +61,16 @@ const { mintInvoicePayToken, mintManageToken, payPageUrl, ID_RE } = require('../
 const UNKNOWN_LIST_AFTER_MS = 6 * 60 * 60 * 1000;
 // A claim younger than this belongs to a run that may still be working on it.
 const RESUME_AFTER_MS = 5 * 60 * 1000;
+// Open sessions live at most 41 min (pay page) or 24 h (legacy Payment
+// Link sessions). A completed session's webhook can lag by up to Stripe's
+// 3-day retry schedule; 8 days covers that plus the whole 7-day window.
+const OPEN_SESSION_LOOKBACK_SEC = 86400;
+const COMPLETE_SESSION_LOOKBACK_SEC = 8 * 86400;
+const SESSION_LIST_MAX_PAGES = 20;
+const DAY_MS = 86_400_000;
+// Stand-down reasons after which a found-but-failed PaymentIntent gets no
+// customer pay-link email: there is nothing left to pay.
+const QUIET_REASONS = new Set(['invoice_gone', 'paid']);
 
 const enc = encodeURIComponent;
 const chargeKey = (invoiceId) => `tr-autopay:${invoiceId}:1`;
@@ -159,6 +190,25 @@ async function onSucceeded(ctx, { claim, enrollment, invoice, pi, card }) {
       },
       data: { invoiceId: invoice.id },
     });
+  } else if (booked.outcome === 'appended' && !booked.invoiceDeleted && booked.invoice && amountPaid(booked.invoice) > Number(booked.invoice.amount) + PAID_EPSILON) {
+    // Only reachable when a create that may have reached Stripe is
+    // reconciled after the invoice was paid another way: the charge already
+    // happened, so it is booked (the ledger must match Stripe) and the owner
+    // decides whether to refund. (recordStripePayment alerts for a deleted
+    // invoice itself.)
+    const number = String(invoice.number || invoice.id);
+    const over = amountPaid(booked.invoice) - Number(booked.invoice.amount);
+    await alertOwner(env, {
+      userId: enrollment.user_id,
+      settings: settingsByUser.get(enrollment.user_id) || {},
+      alert: {
+        subject: `Autopay overpaid invoice ${number}`,
+        text: `An automatic payment of ${((pi.amount_received || pi.amount || claim.amount_cents) / 100).toFixed(2)} USD for invoice ${number} (${pi.id}) went through on Stripe after the invoice was paid another way. Invoice ${number} has now received ${over.toFixed(2)} USD more than the balance. If that wasn't owed, refund it in Stripe and record the refund in TradeReady.`,
+        pushTitle: 'Autopay overpaid an invoice',
+        pushBody: `Invoice ${number}: ${over.toFixed(2)} USD over`,
+      },
+      data: { invoiceId: invoice.id },
+    });
   }
   const to = await store.resolveAutopayRecipient(env, enrollment, invoice.email);
   const after = booked.invoice || invoice;
@@ -181,7 +231,7 @@ async function onSucceeded(ctx, { claim, enrollment, invoice, pi, card }) {
   if (sent) await markClaimBestEffort(env, claim.id, { customer_notified_at: new Date().toISOString() });
 }
 
-async function onFailed(ctx, { claim, enrollment, invoice, failure, stripe }) {
+async function onFailed(ctx, { claim, enrollment, invoice, failure, stripe, quiet = false }) {
   const { env, result } = ctx;
   const flipped = await settleClaim(env, claim, {
     status: 'failed',
@@ -210,7 +260,7 @@ async function onFailed(ctx, { claim, enrollment, invoice, failure, stripe }) {
     }
   }
   const reason = normalizeFailureReason({ status: 'failed', failure_code: failure.code, decline_code: failure.decline_code });
-  await notifyProblem(ctx, { claim, enrollment, invoice, reason, cardRemoved: hard });
+  await notifyProblem(ctx, { claim, enrollment, invoice, reason, cardRemoved: hard, emailCustomer: !quiet });
 }
 
 function failureFromError(err) {
@@ -252,105 +302,211 @@ async function handleIntent(ctx, item, pi, card) {
   ctx.result.unknown++;
 }
 
-// Expire every open Checkout Session for this invoice on the owner's account
-// (last 24 h). → 'clear', or 'completed' when an expire is refused because
-// the session already completed (the customer paid on the pay page). Throws
-// on an unknown outcome (the caller leaves the claim for a later sweep).
-async function expireInvoiceSessions(stripe, accountId, invoiceId, nowSec) {
+// Every session matching `params` on the owner's account, read to the end.
+// Throws on a Stripe error and when the list can't be finished within
+// SESSION_LIST_MAX_PAGES: a partial list is never treated as complete.
+async function listAllSessions(stripe, accountId, params) {
+  const out = [];
   let startingAfter;
-  for (let page = 0; page < 10; page++) {
+  for (let page = 0; page < SESSION_LIST_MAX_PAGES; page++) {
     const list = await stripe.checkout.sessions.list(
-      { status: 'open', created: { gte: nowSec - 86400 }, limit: 100, ...(startingAfter ? { starting_after: startingAfter } : {}) },
+      { ...params, limit: 100, ...(startingAfter ? { starting_after: startingAfter } : {}) },
       { stripeAccount: accountId }
     );
     const data = (list && list.data) || [];
-    for (const s of data) {
-      if (!s || !s.metadata || s.metadata.invoiceId !== invoiceId) continue;
-      try {
-        await stripe.checkout.sessions.expire(s.id, {}, { stripeAccount: accountId });
-      } catch (err) {
-        if (isUnknownOutcome(err)) throw err;
-        return 'completed';
-      }
-    }
-    if (!list || !list.has_more || !data.length) return 'clear';
+    out.push(...data);
+    if (!list || !list.has_more || !data.length) return out;
     startingAfter = data[data.length - 1].id;
+  }
+  throw new Error(`checkout session list (${params.status}) longer than ${SESSION_LIST_MAX_PAGES} pages`);
+}
+
+// Expire every open Checkout Session for this invoice on the owner's account
+// (last 24 h). → 'clear', or 'completed' when an expire is refused because
+// the session already completed (the customer paid on the pay page). Throws
+// on an unknown outcome (the caller stands down without charging).
+async function expireOpenSessions(stripe, accountId, invoiceId, nowSec) {
+  const open = await listAllSessions(stripe, accountId, { status: 'open', created: { gte: nowSec - OPEN_SESSION_LOOKBACK_SEC } });
+  for (const s of open) {
+    if (!s || !s.metadata || s.metadata.invoiceId !== invoiceId) continue;
+    try {
+      await stripe.checkout.sessions.expire(s.id, {}, { stripeAccount: accountId });
+    } catch (err) {
+      if (isUnknownOutcome(err)) throw err;
+      return 'completed';
+    }
   }
   return 'clear';
 }
 
-// The autopay PaymentIntent for this claim, if Stripe has one (no charge is
-// ever created here). Throws on a list failure.
-async function findAutopayIntent(stripe, claim, enrollment) {
-  const createdSec = Math.floor(Date.parse(claim.created_at) / 1000);
-  const list = await stripe.paymentIntents.list(
-    { customer: enrollment.stripe_customer_id, created: { gte: createdSec - 3600 }, limit: 100 },
-    { stripeAccount: enrollment.stripe_account_id }
-  );
-  return ((list && list.data) || []).find((p) => p && p.metadata && p.metadata.invoiceId === claim.invoice_id && p.metadata.source === 'autopay') || null;
+// This invoice's COMPLETE Checkout Sessions (last 8 days). liveVerdict
+// stands down while one of them has no stripe_<session id> ledger entry yet
+// (paid on the pay page, webhook not landed). Throws like listAllSessions.
+async function completedInvoiceSessions(stripe, accountId, invoiceId, nowSec) {
+  const done = await listAllSessions(stripe, accountId, { status: 'complete', created: { gte: nowSec - COMPLETE_SESSION_LOOKBACK_SEC } });
+  return done.filter((s) => s && s.status === 'complete' && s.metadata && s.metadata.invoiceId === invoiceId);
 }
 
-// Steps 2–6 for one claimed invoice. `isReplay`: a previous run may already
-// have sent the create.
-async function processClaim(ctx, item, { isReplay = false } = {}) {
-  const { env, stripe, result } = ctx;
-  const { claim, enrollment, invoice } = item;
-  const stripeAccount = enrollment.stripe_account_id;
-
-  // Mutual exclusion with the pay page (see the file header).
-  let guard;
-  try {
-    guard = await expireInvoiceSessions(stripe, stripeAccount, invoice.id, Math.floor(ctx.now.getTime() / 1000));
-  } catch (err) {
-    console.warn(`[autopay] session check for ${invoice.id} failed: ${err.message}`);
-    result.unknown++;
-    return;
+// The autopay PaymentIntent for this claim, if Stripe has one (no charge is
+// ever created here), matched on the metadata every autopay create carries.
+// Read to the end; throws on a list failure or a list too long to finish.
+async function findAutopayIntent(stripe, claim, enrollment) {
+  const createdSec = Math.floor(Date.parse(claim.created_at) / 1000);
+  let startingAfter;
+  for (let page = 0; page < SESSION_LIST_MAX_PAGES; page++) {
+    const list = await stripe.paymentIntents.list(
+      { customer: enrollment.stripe_customer_id, created: { gte: createdSec - 3600 }, limit: 100, ...(startingAfter ? { starting_after: startingAfter } : {}) },
+      { stripeAccount: enrollment.stripe_account_id }
+    );
+    const data = (list && list.data) || [];
+    const found = data.find((p) => p && p.metadata && p.metadata.invoiceId === claim.invoice_id && p.metadata.source === 'autopay');
+    if (found) return found;
+    if (!list || !list.has_more || !data.length) return null;
+    startingAfter = data[data.length - 1].id;
   }
-  if (guard === 'completed') {
-    if (isReplay) {
-      let found = null;
-      try {
-        found = await findAutopayIntent(stripe, claim, enrollment);
-      } catch (err) {
-        result.unknown++;
-        return;
-      }
-      if (found) return handleIntent(ctx, { ...item, stripe }, found, { brand: enrollment.card_brand, last4: enrollment.card_last4 });
-    }
-    // The customer is paying (or just paid) on the pay page: no autopay
-    // attempt happened, so release the claim. If a balance remains, a later
-    // sweep may charge it inside the window.
-    await store.deleteClaim(env, claim.id);
+  throw new Error(`payment intent list for claim ${claim.id} longer than ${SESSION_LIST_MAX_PAGES} pages`);
+}
+
+// The rows the gate judges, read fresh from the database (throws on a
+// Supabase error).
+async function loadLive(env, claim, enrollment) {
+  const [invoiceRow, liveEnrollment, plan, accountId] = await Promise.all([
+    store.fetchInvoiceForUser(env, claim.user_id, claim.invoice_id),
+    store.fetchEnrollmentById(env, claim.user_id, claim.enrollment_id),
+    store.fetchPlanForUser(env, claim.user_id, enrollment.recurring_invoice_id),
+    store.fetchStripeAccountId(env, claim.user_id),
+  ]);
+  return { invoiceRow, enrollment: liveEnrollment, plan, accountId };
+}
+
+const cardOf = (enrollment) => ({ brand: enrollment.card_brand, last4: enrollment.card_last4 });
+
+// Release a claim no create was sent for (no attempt happened, so no row
+// stays; §13.1). The DELETE is conditional on charge_sent_at is null.
+async function releaseClaim(ctx, claim) {
+  try {
+    await store.deleteClaim(ctx.env, claim.id);
+  } catch (err) {
+    // The claim stays; the next sweep resumes it through the same gate.
+    console.error(`[autopay] release of claim ${claim.id} failed:`, err.message);
+  }
+}
+
+// A check before the create could not finish: nothing was charged in this
+// run. A never-sent claim is released (so the pay page isn't held
+// `in_flight`); a stamped one waits for a later sweep.
+async function checkFailed(ctx, item, what, err) {
+  console.warn(`[autopay] ${what} for ${item.claim.invoice_id} failed: ${err && err.message}`);
+  ctx.result.unknown++;
+  if (!item.claim.charge_sent_at) await releaseClaim(ctx, item.claim);
+}
+
+// Don't charge. `item.chargedWith` is the enrollment a previous create (if
+// any) was sent with.
+async function standDown(ctx, item, reason) {
+  const { env, stripe, result } = ctx;
+  const { claim } = item;
+  if (!claim.charge_sent_at) {
+    await releaseClaim(ctx, claim);
     result.yielded++;
     return;
   }
+  // A create may have reached Stripe: never release (a new claim for this
+  // invoice could then charge on top of it). Ask Stripe what happened.
+  let found = null;
+  try {
+    found = await findAutopayIntent(stripe, claim, item.chargedWith);
+  } catch (err) {
+    console.warn(`[autopay] reconcile list for claim ${claim.id} failed: ${err.message}`);
+    result.unknown++;
+    return;
+  }
+  if (found) return handleIntent(ctx, { ...item, stripe, quiet: QUIET_REASONS.has(reason) }, found, cardOf(item.chargedWith));
+  const flipped = await settleClaim(env, claim, {
+    status: 'failed',
+    failure_code: 'unknown',
+    failure_message: `not replayed (${reason}); no PaymentIntent found for the claim`,
+  });
+  if (!flipped) return;
+  result.failed++;
+  await notifyProblem(ctx, { claim, enrollment: item.enrollment, invoice: item.invoice, reason: 'unknown', emailCustomer: false });
+}
+
+// The card on file is gone (missing, detached or moved to another Customer).
+async function cardMissing(ctx, item) {
+  const { env, stripe, result } = ctx;
+  const { claim, enrollment, invoice } = item;
+  const flipped = await settleClaim(env, claim, { status: 'failed', failure_code: 'payment_method_missing', failure_message: 'saved card missing or detached' });
+  if (!flipped) return;
+  result.failed++;
+  try {
+    const { changed } = await revokeEnrollment(env, { enrollment, by: 'system', reason: 'payment_method_missing', stripe, from: ['active'], detach: false });
+    if (changed) result.revoked++;
+  } catch (err) {
+    console.error(`[autopay] revoke after missing card failed (${enrollment.id}):`, err.message);
+  }
+  await notifyProblem(ctx, { claim, enrollment, invoice, reason: 'payment_method_missing', cardRemoved: true });
+}
+
+// Steps 2–6 for one claimed invoice, first attempt or replay (a claim with
+// charge_sent_at: a previous run may already have sent the create). Every
+// path to paymentIntents.create runs the gate in the file header.
+async function processClaim(ctx, item) {
+  const { env, stripe, result, now } = ctx;
+  const { claim } = item;
+  const chargedWith = item.enrollment;
+  const stripeAccount = chargedWith.stripe_account_id;
+  const nowSec = Math.floor(now.getTime() / 1000);
+  const base = { ...item, chargedWith };
+
+  // a. Mutual exclusion with the pay page: open sessions first, then complete.
+  let completedSessions;
+  try {
+    if ((await expireOpenSessions(stripe, stripeAccount, claim.invoice_id, nowSec)) === 'completed') {
+      return standDown(ctx, base, 'pay_page_pending');
+    }
+    completedSessions = await completedInvoiceSessions(stripe, stripeAccount, claim.invoice_id, nowSec);
+  } catch (err) {
+    return checkFailed(ctx, base, 'session check', err);
+  }
 
   // Refresh the card (account updater) and prove it's still attached.
-  let pm;
+  let pm = null;
   try {
-    pm = await stripe.paymentMethods.retrieve(enrollment.payment_method_id, {}, { stripeAccount });
+    if (chargedWith.payment_method_id) pm = await stripe.paymentMethods.retrieve(chargedWith.payment_method_id, {}, { stripeAccount });
   } catch (err) {
-    if (isUnknownOutcome(err)) {
-      result.unknown++;
-      return;
-    }
+    if (isUnknownOutcome(err)) return checkFailed(ctx, base, 'card check', err);
     pm = null;
   }
   const pmCustomer = pm && (typeof pm.customer === 'object' && pm.customer ? pm.customer.id : pm.customer);
-  if (!pm || !pm.card || pmCustomer !== enrollment.stripe_customer_id) {
-    const flipped = await settleClaim(env, claim, { status: 'failed', failure_code: 'payment_method_missing', failure_message: 'saved card missing or detached' });
-    if (!flipped) return;
-    result.failed++;
-    try {
-      const { changed } = await revokeEnrollment(env, { enrollment, by: 'system', reason: 'payment_method_missing', stripe, from: ['active'], detach: false });
-      if (changed) result.revoked++;
-    } catch (err) {
-      console.error(`[autopay] revoke after missing card failed (${enrollment.id}):`, err.message);
+  const cardOk = !!(pm && pm.card && pmCustomer === chargedWith.stripe_customer_id);
+
+  // b. The live re-read, judged as late as possible before the create.
+  let live;
+  try {
+    live = await loadLive(env, claim, chargedWith);
+  } catch (err) {
+    return checkFailed(ctx, base, 'live re-read', err);
+  }
+  const verdict = liveVerdict({ claim, snapshot: chargedWith, live, completedSessions, now });
+  const current = { ...base, invoice: verdict.invoice || item.invoice, enrollment: verdict.enrollment || chargedWith };
+  if (!verdict.charge) return standDown(ctx, current, verdict.reason);
+
+  if (!cardOk) {
+    if (claim.charge_sent_at) {
+      // A previous create may have gone through before the card vanished.
+      let found = null;
+      try {
+        found = await findAutopayIntent(stripe, claim, chargedWith);
+      } catch (err) {
+        return checkFailed(ctx, current, 'reconcile list', err);
+      }
+      if (found) return handleIntent(ctx, { ...current, stripe }, found, cardOf(chargedWith));
     }
-    await notifyProblem(ctx, { claim, enrollment, invoice, reason: 'payment_method_missing', cardRemoved: true });
-    return;
+    return cardMissing(ctx, current);
   }
   const card = pm.card;
+  const enrollment = current.enrollment;
   if (card.last4 !== enrollment.card_last4 || card.exp_month !== enrollment.card_exp_month || card.exp_year !== enrollment.card_exp_year || card.brand !== enrollment.card_brand) {
     try {
       await store.updateEnrollments(env, `id=eq.${enc(enrollment.id)}`, {
@@ -364,20 +520,33 @@ async function processClaim(ctx, item, { isReplay = false } = {}) {
     }
   }
 
+  // c. Stamp, then charge. No stamp on a still-claimed row → no create.
+  let marked;
+  try {
+    marked = await store.markChargeSent(env, claim, { now });
+  } catch (err) {
+    console.warn(`[autopay] charge stamp for ${claim.invoice_id} failed: ${err.message}`);
+    result.unknown++;
+    return;
+  }
+  if (!marked) return; // another run settled or released it meanwhile
+  const invoice = current.invoice;
+  const charging = { ...current, claim: marked };
+
   let pi;
   try {
     const number = String(invoice.number || '').replace(/\s+/g, ' ').trim().slice(0, 60);
     pi = await stripe.paymentIntents.create(
       {
-        amount: claim.amount_cents,
+        amount: marked.amount_cents,
         currency: 'usd',
-        customer: enrollment.stripe_customer_id,
-        payment_method: enrollment.payment_method_id,
+        customer: chargedWith.stripe_customer_id,
+        payment_method: chargedWith.payment_method_id,
         off_session: true,
         confirm: true,
         payment_method_types: ['card'],
         description: number ? `Invoice ${number}` : 'Invoice payment',
-        metadata: { invoiceId: invoice.id, source: 'autopay', tr_enrollment: enrollment.id },
+        metadata: { invoiceId: invoice.id, source: 'autopay', tr_enrollment: chargedWith.id },
       },
       { stripeAccount, idempotencyKey: chargeKey(invoice.id) }
     );
@@ -387,14 +556,14 @@ async function processClaim(ctx, item, { isReplay = false } = {}) {
       result.unknown++;
       return;
     }
-    return onFailed(ctx, { ...item, failure: failureFromError(err), stripe });
+    return onFailed(ctx, { ...charging, failure: failureFromError(err), stripe });
   }
-  return handleIntent(ctx, { ...item, stripe }, pi, card);
+  return handleIntent(ctx, { ...charging, stripe }, pi, card);
 }
 
-// Resolve a claim that never settled by listing the customer's
+// Resolve a stamped claim that never settled by listing the customer's
 // PaymentIntents (no new charge is ever created here).
-async function resolveByList(ctx, item, { ageMs }) {
+async function resolveByList(ctx, item) {
   const { env, stripe, result } = ctx;
   const { claim, enrollment, invoice } = item;
   let found = null;
@@ -405,14 +574,7 @@ async function resolveByList(ctx, item, { ageMs }) {
     result.unknown++;
     return;
   }
-  if (found) {
-    const card = { brand: enrollment.card_brand, last4: enrollment.card_last4 };
-    return handleIntent(ctx, { ...item, stripe }, found, card);
-  }
-  if (ageMs < UNKNOWN_LIST_AFTER_MS && enrollment.status === 'active') {
-    result.unknown++;
-    return;
-  }
+  if (found) return handleIntent(ctx, { ...item, stripe }, found, cardOf(enrollment));
   const flipped = await settleClaim(env, claim, { status: 'failed', failure_code: 'unknown', failure_message: 'outcome never confirmed by Stripe' });
   if (!flipped) return;
   result.failed++;
@@ -425,22 +587,21 @@ async function resumeClaim(ctx, item, { nowMs }) {
   const { claim, enrollment } = item;
   const ageMs = nowMs - Date.parse(claim.created_at);
   if (!(ageMs >= RESUME_AFTER_MS)) return;
-  if (ageMs >= UNKNOWN_LIST_AFTER_MS) return resolveByList(ctx, item, { ageMs });
   if (claim.payment_intent_id) {
     try {
       const pi = await stripe.paymentIntents.retrieve(claim.payment_intent_id, {}, { stripeAccount: enrollment.stripe_account_id });
-      return handleIntent(ctx, { ...item, stripe }, pi, { brand: enrollment.card_brand, last4: enrollment.card_last4 });
+      return handleIntent(ctx, { ...item, stripe }, pi, cardOf(enrollment));
     } catch (err) {
       console.warn(`[autopay] retrieve ${claim.payment_intent_id} failed: ${err.message}`);
       result.unknown++;
       return;
     }
   }
-  // No PI id yet. Replaying the create (same key, same stored amount) is an
-  // idempotent re-read — but only while the authorization still stands;
-  // otherwise just look for an existing charge.
-  if (item.stillEligible) return processClaim(ctx, item, { isReplay: true });
-  return resolveByList(ctx, item, { ageMs });
+  if (claim.charge_sent_at && ageMs >= UNKNOWN_LIST_AFTER_MS) return resolveByList(ctx, item);
+  // Never sent: a fresh, fully gated attempt (or a release). Stamped: the
+  // create is replayed (same key, same amount) only if the live state still
+  // matches the claim; otherwise standDown reconciles with Stripe.
+  return processClaim(ctx, item);
 }
 
 async function housekeep(ctx, { liveEnrollments, plansByKey, now }) {
@@ -451,7 +612,23 @@ async function housekeep(ctx, { liveEnrollments, plansByKey, now }) {
     now,
     planIdOk: (id) => ID_RE.test(String(id)),
   });
+  const revokedNow = new Set();
   for (const e of revokePlanGone) {
+    // Confirm with a targeted read before revoking: a bulk read that came
+    // back short must never look like "plan missing". A failed read skips
+    // the revoke (fail closed); the next sweep looks again.
+    let plan;
+    try {
+      plan = await store.fetchPlanForUser(env, e.user_id, e.recurring_invoice_id);
+    } catch (err) {
+      console.error(`[autopay] housekeeping: plan ${e.recurring_invoice_id} re-read failed, not revoking ${e.id}:`, err.message);
+      continue;
+    }
+    if (!planGoneFor(e, plan)) {
+      plansByKey.set(planKey(e.user_id, e.recurring_invoice_id), plan);
+      continue;
+    }
+    revokedNow.add(e.id);
     try {
       const { changed } = await revokeEnrollment(env, { enrollment: e, by: 'system', reason: 'plan_removed', stripe, from: ['active'] });
       if (changed) result.revoked++;
@@ -467,7 +644,13 @@ async function housekeep(ctx, { liveEnrollments, plansByKey, now }) {
       console.error(`[autopay] expire pending ${e.id} failed:`, err.message);
     }
   }
-  return new Set(revokePlanGone.map((e) => e.id));
+  return revokedNow;
+}
+
+// The earliest due date the sweep can still act on: a window closes 7 days
+// after its due date (one spare day for the 14:00 UTC start).
+function dueFromFor(now) {
+  return new Date(now.getTime() - (WINDOW_DAYS + 1) * DAY_MS).toISOString().slice(0, 10);
 }
 
 async function runAutopayCharges(env, { stripeFactory = makeStripe, now = new Date() } = {}) {
@@ -480,9 +663,12 @@ async function runAutopayCharges(env, { stripeFactory = makeStripe, now = new Da
     return result;
   }
 
+  // Every sweep-wide read is paginated to the end (store.sbGetAll) and
+  // throws on any error, which aborts the run before anything is charged or
+  // revoked.
   const [liveEnrollments, claimedRows] = await Promise.all([
     store.fetchLiveEnrollments(env),
-    store.sbGet(env, 'autopay_charges?status=eq.claimed&select=*'),
+    store.fetchClaimedCharges(env),
   ]);
   if (!liveEnrollments.length && !claimedRows.length) return result;
 
@@ -490,8 +676,7 @@ async function runAutopayCharges(env, { stripeFactory = makeStripe, now = new Da
   const enrollmentById = new Map(liveEnrollments.map((e) => [e.id, e]));
   const missingIds = [...new Set(claimedRows.map((c) => c.enrollment_id).filter((id) => !enrollmentById.has(id)))];
   if (missingIds.length) {
-    const list = store.inList(missingIds, /^[0-9a-fA-F-]{36}$/);
-    if (list) for (const e of await store.sbGet(env, `autopay_enrollments?id=in.${list}&select=*`)) enrollmentById.set(e.id, e);
+    for (const e of await store.fetchEnrollmentsByIds(env, missingIds)) enrollmentById.set(e.id, e);
   }
 
   const allEnrollments = [...enrollmentById.values()];
@@ -501,7 +686,7 @@ async function runAutopayCharges(env, { stripeFactory = makeStripe, now = new Da
     store.fetchStripeAccountsForUsers(env, userIds),
     store.fetchSettingsForUsers(env, userIds),
     store.fetchPlansByIds(env, userIds, planIds),
-    store.fetchPlanInvoices(env, userIds, planIds),
+    store.fetchPlanInvoices(env, userIds, planIds, { dueFrom: dueFromFor(now) }),
     store.fetchChargesForUsers(env, userIds),
   ]);
   const plansByKey = new Map(planRows.map((p) => [planKey(p.user_id, p.id), p]));
@@ -524,20 +709,15 @@ async function runAutopayCharges(env, { stripeFactory = makeStripe, now = new Da
   });
   result.deferred = selection.deferred;
 
-  // 3. Resume claims earlier runs left open.
+  // 3. Resume claims earlier runs left open. Eligibility is NOT judged from
+  // this run's snapshot: processClaim re-reads everything right before any
+  // create or replay.
   for (const claim of claimedRows) {
     const enrollment = enrollmentById.get(claim.enrollment_id);
     const invoice = invoiceByKey.get(`${claim.user_id}|${claim.invoice_id}`) || { id: claim.invoice_id };
     if (!enrollment) continue;
-    const plan = plansByKey.get(planKey(enrollment.user_id, enrollment.recurring_invoice_id));
-    const stillEligible =
-      enrollment.status === 'active' &&
-      !revokedNow.has(enrollment.id) &&
-      accountsByUser.get(enrollment.user_id) === enrollment.stripe_account_id &&
-      !!plan && !plan.deleted && plan.data && plan.data.autopayEnabled === true && plan.data.customerId === enrollment.customer_id &&
-      !!enrollment.payment_method_id;
     try {
-      await resumeClaim(ctx, { claim, enrollment, invoice, stillEligible }, { nowMs: now.getTime() });
+      await resumeClaim(ctx, { claim, enrollment, invoice }, { nowMs: now.getTime() });
     } catch (err) {
       console.error(`[autopay] resume claim ${claim.id} failed:`, err.message);
     }
@@ -605,7 +785,7 @@ async function autopayReminderExclusions(env, { now = new Date() } = {}) {
     const [accountsByUser, planRows, invoiceRows, charges] = await Promise.all([
       store.fetchStripeAccountsForUsers(env, userIds),
       store.fetchPlansByIds(env, userIds, planIds),
-      store.fetchPlanInvoices(env, userIds, planIds),
+      store.fetchPlanInvoices(env, userIds, planIds, { dueFrom: dueFromFor(now) }),
       store.fetchChargesForUsers(env, userIds),
     ]);
     const plansByKey = new Map(planRows.map((p) => [planKey(p.user_id, p.id), p]));

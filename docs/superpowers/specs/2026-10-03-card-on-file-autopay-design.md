@@ -262,6 +262,7 @@ create table if not exists public.autopay_charges (
   amount_cents       integer not null,
   status             text not null check (status in ('claimed','succeeded','failed','skipped')),
   payment_intent_id  text,
+  charge_sent_at     timestamptz,             -- added 2026-10-04 (§13.7): stamped right before the create
   failure_code       text, decline_code text, failure_message text,
   customer_notified_at timestamptz, owner_notified_at timestamptz,
   created_at         timestamptz not null default now(),
@@ -269,6 +270,8 @@ create table if not exists public.autopay_charges (
   unique (user_id, invoice_id, attempt)
 );
 -- RLS: enable on both; "read own …" select policies using (auth.uid() = user_id). No write policies.
+-- Grants (added 2026-10-04, §13.7): client roles get no table grants; `authenticated` reads
+-- autopay_charges and every autopay_enrollments column except consent_ip / consent_user_agent.
 ```
 
 - **One automatic attempt per invoice, ever.** v1 only writes `attempt = 1`. The column exists so a later owner-triggered retry is additive.
@@ -775,7 +778,9 @@ Both routes live on the Worker origin (`BuildEnvironment.endpoint("/api/autopay/
 ### 13.3 Decisions where the spec was silent (or conflicted)
 
 1. **Activation day.** The §4.6 table says `due >= activated_at`, but the approved authorization (§2.3) covers invoices that "come due after today". The sweep uses `due > activation date (UTC)`, the safe reading of the approved text. An invoice due on the consent day is paid through the normal link.
-2. **Pay page ↔ sweep mutual exclusion (closes a double charge the spec missed).** A customer could be on Checkout when the autopay window opens. After claiming, the sweep expires any open Checkout Session for the invoice before charging. If one already completed, it charges nothing and deletes its claim (no attempt happened, counted as `yielded`). Mirror image: after creating its session, checkout re-reads the invoice's claims; a new `claimed`/`succeeded` claim withdraws the session (409 `in_flight`/`maybe_paid`). Each side writes its marker, then checks for the other's, so at least one sees the other.
+2. **Pay page ↔ sweep mutual exclusion (closes a double charge the spec missed; corrected 2026-10-04, §13.7).** A customer could be on Checkout when the autopay window opens. After claiming, the sweep expires every open Checkout Session for the invoice, **then** lists the account's `complete` sessions (both lists read to the end). If an expire is refused (the session just completed), or a complete session for the invoice has no `stripe_<session id>` ledger entry yet, it charges nothing and releases its claim (no attempt happened, counted as `yielded`); a later sweep re-evaluates. Mirror image: after creating its session, checkout re-reads the invoice's claims; a new `claimed`/`succeeded` claim withdraws the session (409 `in_flight`/`maybe_paid`).
+   - **Correction.** This item used to end "Each side writes its marker, then checks for the other's, so at least one sees the other." That was false. The pay page's marker is an *open* session; once it completes it drops out of an `open`-only list, and the webhook that books it can land seconds or (on Stripe retries) days later. A payment completed just before the claim was invisible to the sweep, whose invoice snapshot was also unpaid, so autopay charged the full balance and the webhook booked the session too (review P1-2).
+   - **Why it now holds.** A session created before the claim is seen by the sweep: open (expired, or refused because it completed), or complete (listed after the open list, so a session that completes in between is still caught; yielded to until booked). A session created after the claim sees the claim on checkout's re-read. Limits: Stripe list consistency, and the 8-day lookback for complete sessions (Stripe stops retrying a webhook after 3 days).
 3. **Deposit links can't be paid twice.** A partial ask carries the mint-time balance `b` in the `p` token (added only when `a < balance`). Once the live balance drops below `b` (the deposit or any payment landed), the link asks for the live balance, not a second deposit. Unsynced-at-mint tokens have no `b` and keep plain `min(a, balance)`.
 4. **Setup tokens bind the plan's customer** (`c` in the `s` payload), so a plan reassigned within the 7 days can't be set up by its previous customer.
 5. **Another owner's invoice id** in a `p` token → 404 `invalid` (an id-existence lookup), distinct from "not synced yet" (409 `not_ready`).
@@ -787,7 +792,7 @@ Both routes live on the Worker origin (`BuildEnvironment.endpoint("/api/autopay/
 11. **Receipts** go only to pay-page sessions (`tr_kind: 'invoice'`) and only on `appended`. Legacy Payment Link sessions get none (Stripe's own flow). Legacy links are deactivated on any outcome except `ownership_skip`.
 12. **Recipients**: the Checkout email, else the invoice email, else the TradeReady customer record. An implausible address means no mail, and the owner alert then says the customer was not emailed.
 13. **Shared cards** are detached only when no other active enrollment of the owner uses them. On replacement, the old card is detached after the new row is active.
-14. **Unknown outcomes.** A claim is resumed only after 5 min (another run may still hold it). The create is replayed with the stored amount and the same key only while the authorization still stands; otherwise the sweep only lists. After 6 h it lists the customer's PIs; if none is found, the claim is `failed`/`unknown` and the owner (not the customer) is alerted. A ledger-write failure after a successful charge keeps the claim `claimed` with the PI id, and the next sweep re-reads by id and retries the append. If the ledger refuses outright (`not_found`/`ownership_skip`), the claim is `succeeded` and the owner is told to record the payment.
+14. **Unknown outcomes.** *(Replay rules superseded 2026-10-04 by §13.7: every replay passes the live re-read, and a claim whose create may have been sent is never released.)* A claim is resumed only after 5 min (another run may still hold it). The create is replayed with the stored amount and the same key only while the authorization still stands; otherwise the sweep only lists. After 6 h it lists the customer's PIs; if none is found, the claim is `failed`/`unknown` and the owner (not the customer) is alerted. A ledger-write failure after a successful charge keeps the claim `claimed` with the PI id, and the next sweep re-reads by id and retries the append. If the ledger refuses outright (`not_found`/`ownership_skip`), the claim is `succeeded` and the owner is told to record the payment.
 15. **Non-card Stripe errors** (e.g. `amount_too_small`) are `failed`/`processing_error`, never a hard decline.
 16. **Paused plans** (`isActive: false`) still charge their existing invoices; the §4.6 table gates only on `autopayEnabled`. Offers and portal setup require an active plan.
 17. **Owner status** sends only enrollments that were ever activated, so pending and abandoned rows never appear. Timestamps are normalized to `toISOString()`.
@@ -828,3 +833,35 @@ The repo has `feat/quote-options` checked out, and everything below is uncommitt
 8. **Stripe test-mode smoke** (§8 list), plus: (a) open a pay link in two tabs and pay one → the other's session is expired; (b) pay a 50% deposit link, then reopen it → it asks for the remaining balance, not a second deposit; (c) a manage link from the first "autopay on" email still works after "Use a different card".
 9. Optional: `GET /api/cron/run-autopay` with `Authorization: Bearer $CRON_SECRET` runs one sweep on demand and returns its counts.
 
+### 13.7 Review fixes: re-read before every charge, paginated sweep reads (2026-10-04)
+
+An independent review of the sweep found two double-charge paths and a truncation hazard; all three were reproduced against the repo's own fakes before the fix. Branch `fix/autopay-sweep`.
+
+**Findings**
+- **P1-1. A resumed claim charged an invoice that was paid, part-paid or deleted meanwhile.** Resume eligibility checked the enrollment, account and plan from the run's snapshot, never the invoice; a missing invoice fell back to `{id}`, and the replay sent the stored `claim.amount_cents`. If the session list or card retrieve failed after the claim (nothing sent), the pay page answered `in_flight` for up to 6 h; the customer paid cash, and the resume charged the full original amount ("paid 240 of 120"). For a deleted invoice, `recordStripePayment` wrote `deleted: false` and resurrected it.
+- **P1-2. Pay-page payment completed but not yet booked, then autopay charged too** (§13.3.2 correction above). The same stale snapshot let a customer's autopay turn-off mid-sweep through whenever the card stayed attached (a card shared with another plan is never detached).
+- **P2. Sweep reads were unpaginated.** Past PostgREST's max-rows cap (1000 by default), due invoices were silently skipped. A truncated plan read made housekeeping treat plans as missing, revoke active enrollments and detach cards.
+- **Consent IP / UA exposure.** The owner-read RLS policy let any owner read `consent_ip` / `consent_user_agent` over PostgREST, which §4.8 says are never sent to the owner.
+
+**The fix**
+- **One gated path** (`W/lib/autopay/runAutopayCharges.js` `processClaim`) for first attempts and replays: (a) expire open sessions, then list complete ones; (b) re-read the invoice (deleted included), the enrollment, the plan and the Stripe account, and judge them with the pure `liveVerdict` (`W/lib/autopay/selectInvoicesToCharge.js`); (c) stamp `charge_sent_at` on the still-`claimed` row, then create. No stamp, no create.
+- **Stand down** (no charge) when the invoice is deleted or paid; the enrollment is revoked, replaced, has a different card or Customer, or lost its account, plan, toggle or ceiling; the live balance differs from the claimed amount; a complete session is not in the ledger yet; or the time is outside the window.
+  - **Balance changed.** The spec is silent. The claim is released and a later sweep re-selects the invoice at the live balance; the create never carries a stale amount, and never more than the live balance.
+- **Release vs reconcile.** A claim with no `charge_sent_at` is released: deleted, and the DELETE itself requires `charge_sent_at is null`. A stamped claim (a create may have reached Stripe) is never released. The sweep lists the customer's PaymentIntents for the claim's metadata and acts on what it finds; with none found it settles `failed`/`unknown` and alerts the owner. So no later claim can charge on top of a create that Stripe did receive. The idempotency key (`tr-autopay:<invoiceId>:1`) and the replay of identical parameters are unchanged.
+- **Check failures.** A check that fails before the create (Stripe or Supabase) now releases a never-sent claim immediately, instead of holding the pay page at `in_flight` for up to 6 h.
+- **Money for a deleted invoice** (spec silent). `recordStripePayment` still books it, so the ledger matches Stripe, but keeps the row deleted (no longer reopened to reminders and autopay). It alerts the owner by email and push ("Payment received for deleted invoice …") and returns `invoiceDeleted: true`. This applies to the webhook and the sweep alike.
+- **Overpayment.** A reconciled autopay charge that lands after the invoice was paid another way is booked, and the owner is told to refund if it wasn't owed.
+- **Reads.** `W/lib/autopay/store.js` `sbGetAll` paginates by keyset on a unique column, reads until an empty page (so any max-rows setting is safe), chunks id lists (100 per request), and throws on any error or past 200 pages. The run aborts before charging or revoking. Plan invoices are scoped to due dates from 8 days back.
+- **Housekeeping.** Each "plan gone" candidate is confirmed by a targeted read of that plan before a revoke. A failed confirmation skips the revoke (fail closed), and a plan the bulk read missed is used for the run.
+- **Grants.** `20261003_autopay.sql` revokes the client roles' default table grants and grants `authenticated` a column list on `autopay_enrollments` without `consent_ip` / `consent_user_agent`, plus `select` on `autopay_charges`. The owner-read policies stay as §3.1. No client reads these tables today (the owner routes use the service role). Verify CHECK 10 and CHECK 11 cover the grants and the new column.
+- **Counters.** `yielded` now counts every release (pay page first, or the invoice or enrollment changed).
+
+**Unchanged on purpose:** activation is not retried (§4.5); one attempt per invoice; no retry after a decline.
+
+**Owner decisions (open)**
+1. **Deleted invoice that receives money.** It stays deleted, with the payment booked on it and the owner alerted; the payment is not visible in the app. The alternative is to resurrect it with the alert, which makes it visible again but reopens it to reminders and autopay if a balance remains.
+2. **Released claims leave no row**, so the owner status route (§13.1) shows nothing for an invoice that was paid or changed before autopay charged it, the same as the pay-page case.
+
+**Tests** (each new case was run against the pre-fix code and failed there, except the booked-deposit regression guard): `W/tests/autopaySweep.test.cjs` covers resume after paid, part-paid and deleted (both via a failed pre-charge check and via a claim left by a dead run); a stamped claim with no PaymentIntent (never released, `failed`/`unknown`); a stamped claim whose PaymentIntent did succeed after a cash payment (booked once, overpayment alert) or a delete (booked, still deleted); a turn-off mid-sweep with a shared card; a completed but unbooked session; an already-booked deposit session; an unfinishable session list; a max-rows cap of 2 over 3 plans; a truncated plan read; and a failed confirmation read. `W/tests/autopaySelect.test.cjs` covers every `liveVerdict` reason. `W/tests/stripeWebhookAutopay.test.cjs` covers a webhook for a deleted invoice. Existing tests whose seeded claims predate the stamp now carry `charge_sent_at`, and "unknown session check" now expects a release.
+
+**Results:** `cd backend-workers && npm test`: 418/418 pass. The migration was applied twice to a throwaway local PostgreSQL 16 (temp cluster, `supabase/verify/local/bootstrap.sql`), then the verify script: ALL CHECKS PASSED, 0 rows left. An `authenticated` session is refused `consent_ip` and `select *`; re-granting `consent_ip` fails CHECK 10.

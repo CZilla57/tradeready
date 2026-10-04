@@ -307,7 +307,7 @@ describe('autopay sweep — unknown outcomes', () => {
   });
 
   test('after 6 h: list the customer’s PaymentIntents — found → booked', async () => {
-    const claim = { id: 'c0000000-0000-4000-8000-000000000001', user_id: USER, invoice_id: 'inv1', enrollment_id: null, attempt: 1, amount_cents: 12000, status: 'claimed', created_at: new Date(OPEN.getTime() - 7 * 3600e3).toISOString() };
+    const claim = { id: 'c0000000-0000-4000-8000-000000000001', user_id: USER, invoice_id: 'inv1', enrollment_id: null, attempt: 1, amount_cents: 12000, status: 'claimed', created_at: new Date(OPEN.getTime() - 7 * 3600e3).toISOString(), charge_sent_at: new Date(OPEN.getTime() - 7 * 3600e3).toISOString() };
     const e = W.enrollmentRow();
     claim.enrollment_id = e.id;
     w = W.world({ enrollments: [e], charges: [claim] });
@@ -324,7 +324,7 @@ describe('autopay sweep — unknown outcomes', () => {
 
   test('after 6 h with no PaymentIntent: failed (unknown), owner told to check Stripe, customer not emailed', async () => {
     const e = W.enrollmentRow();
-    const claim = { id: 'c0000000-0000-4000-8000-000000000002', user_id: USER, invoice_id: 'inv1', enrollment_id: e.id, attempt: 1, amount_cents: 12000, status: 'claimed', created_at: new Date(OPEN.getTime() - 7 * 3600e3).toISOString() };
+    const claim = { id: 'c0000000-0000-4000-8000-000000000002', user_id: USER, invoice_id: 'inv1', enrollment_id: e.id, attempt: 1, amount_cents: 12000, status: 'claimed', created_at: new Date(OPEN.getTime() - 7 * 3600e3).toISOString(), charge_sent_at: new Date(OPEN.getTime() - 7 * 3600e3).toISOString() };
     w = W.world({ enrollments: [e], charges: [claim] });
     await sweep(stripeWith({ 'paymentIntents.list': async () => ({ data: [] }) }));
     assert.deepEqual([charge().status, charge().failure_code], ['failed', 'unknown']);
@@ -333,13 +333,26 @@ describe('autopay sweep — unknown outcomes', () => {
   });
 
   test('a claim whose authorization was turned off meanwhile is never replayed as a new charge', async () => {
-    const e = W.enrollmentRow({ status: 'revoked', revoked_by: 'customer' });
-    const claim = { id: 'c0000000-0000-4000-8000-000000000003', user_id: USER, invoice_id: 'inv1', enrollment_id: e.id, attempt: 1, amount_cents: 12000, status: 'claimed', created_at: new Date(OPEN.getTime() - 30 * 60e3).toISOString() };
-    w = W.world({ enrollments: [e], charges: [claim] });
-    const stripe = stripeWith({ 'paymentIntents.list': async () => ({ data: [] }) });
-    await sweep(stripe);
-    assert.equal(stripe.callsTo('paymentIntents.create').length, 0);
-    assert.equal(charge().failure_code, 'unknown');
+    for (const sent of [true, false]) {
+      const e = W.enrollmentRow({ status: 'revoked', revoked_by: 'customer' });
+      const at = new Date(OPEN.getTime() - 30 * 60e3).toISOString();
+      const claim = { id: 'c0000000-0000-4000-8000-000000000003', user_id: USER, invoice_id: 'inv1', enrollment_id: e.id, attempt: 1, amount_cents: 12000, status: 'claimed', created_at: at, charge_sent_at: sent ? at : null };
+      w = W.world({ enrollments: [e], charges: [claim] });
+      const stripe = stripeWith({ 'paymentIntents.list': async () => ({ data: [] }) });
+      await sweep(stripe);
+      assert.equal(stripe.callsTo('paymentIntents.create').length, 0);
+      if (sent) {
+        // A create may have reached Stripe: reconciled, never released.
+        assert.equal(stripe.callsTo('paymentIntents.list').length, 1);
+        assert.equal(charge().failure_code, 'unknown');
+      } else {
+        // Nothing was ever sent: released without asking Stripe.
+        assert.equal(stripe.callsTo('paymentIntents.list').length, 0);
+        assert.equal(w.db.rows('autopay_charges').length, 0);
+      }
+      w.restore();
+      w = null;
+    }
   });
 });
 
@@ -431,12 +444,277 @@ describe('autopay sweep — mutual exclusion with the pay page', () => {
     assert.equal(w.emails.length + w.pushes.length, 0);
   });
 
-  test('an unknown session check leaves the claim for a later sweep, uncharged', async () => {
+  test('an unknown session check charges nothing and releases the never-sent claim (the pay page is not held in_flight)', async () => {
     w = W.world({ enrollments: [W.enrollmentRow()] });
     const stripe = stripeWith({ 'checkout.sessions.list': async () => { throw connectionError(); } });
     const r = await sweep(stripe);
     assert.equal(r.unknown, 1);
     assert.equal(stripe.callsTo('paymentIntents.create').length, 0);
+    assert.equal(w.db.rows('autopay_charges').length, 0);
+  });
+});
+
+// --- Review fixes (2026-10-04): live re-read before every charge, pay-page
+// payments not yet booked, and paginated sweep reads. Every case below fails
+// on the pre-fix sweep (see spec §13.7).
+
+const LATER = (min) => new Date(OPEN.getTime() + min * 60e3);
+const creates = (stripe) => stripe.callsTo('paymentIntents.create').map((c) => c.args[0].amount);
+const invoiceRowNow = () => w.db.rows('invoices')[0];
+
+function claimRow(e, over = {}) {
+  return {
+    id: 'c0000000-0000-4000-8000-0000000000f1', user_id: USER, invoice_id: 'inv1', enrollment_id: e.id, attempt: 1,
+    amount_cents: 12000, status: 'claimed', payment_intent_id: null, charge_sent_at: null,
+    created_at: new Date(OPEN.getTime() - 30 * 60e3).toISOString(), updated_at: new Date(OPEN.getTime() - 30 * 60e3).toISOString(),
+    ...over,
+  };
+}
+
+// The owner records 70 of 120 in cash, records the full 120, or deletes it.
+function changeInvoice(mode) {
+  const row = invoiceRowNow();
+  if (mode === 'deleted') row.deleted = true;
+  else if (mode === 'paid') row.data = { ...row.data, paid: true, payments: [{ id: 'p_cash', amount: 120, date: '2026-11-01', method: 'cash' }] };
+  else row.data = { ...row.data, payments: [{ id: 'p_cash', amount: 70, date: '2026-11-01', method: 'cash' }] };
+}
+
+// Wraps the fake Supabase: `transform(url, rows)` may rewrite a GET's rows
+// (truncation, a dropped row) or throw to answer 500.
+function wrapSupabaseGets(transform) {
+  const inner = global.fetch;
+  global.fetch = async (input, init = {}) => {
+    const url = new URL(String(input));
+    const isGet = url.origin === ENV.SUPABASE_URL && url.pathname.startsWith('/rest/v1/') && (init.method || 'GET') === 'GET';
+    if (!isGet) return inner(input, init);
+    let rows;
+    try {
+      rows = transform(url, null, 'before');
+    } catch (err) {
+      return new Response(JSON.stringify({ message: err.message }), { status: 500 });
+    }
+    const res = await inner(input, init);
+    if (!res.ok) return res;
+    rows = transform(url, await res.json(), 'after');
+    return new Response(JSON.stringify(rows), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  const restore = w.restore;
+  w.restore = () => { global.fetch = inner; restore(); };
+}
+
+describe('autopay sweep — the invoice is re-read before every charge (review P1-1)', () => {
+  for (const mode of ['paid', 'part-paid', 'deleted']) {
+    test(`a failed pre-charge check, then the invoice is ${mode}: never charged the stale amount`, async () => {
+      w = W.world({ enrollments: [W.enrollmentRow()] });
+      let first = true;
+      const stripe = stripeWith({
+        'checkout.sessions.list': async () => { if (first) { first = false; throw connectionError(); } return { data: [], has_more: false }; },
+        'paymentIntents.list': async () => ({ data: [] }),
+      });
+      const r1 = await sweep(stripe);
+      assert.equal(r1.unknown, 1);
+      assert.deepEqual(creates(stripe), []);
+      changeInvoice(mode);
+      await sweep(stripe, LATER(15));
+      await sweep(stripe, LATER(30));
+      if (mode === 'part-paid') {
+        assert.deepEqual(creates(stripe), [5000], 'only ever the live balance');
+        assert.equal(invoiceData().paid, true);
+        assert.deepEqual(invoiceData().payments.map((p) => p.amount), [70, 50]);
+        assert.deepEqual(customerMail().map((m) => m.subject), ['Automatic payment receipt – Invoice INV-0042']);
+      } else {
+        assert.equal(w.emails.length + w.pushes.length, 0, 'silent');
+        assert.deepEqual(creates(stripe), []);
+        assert.equal(w.db.rows('autopay_charges').length, 0, 'released: no attempt happened');
+        if (mode === 'deleted') assert.equal(invoiceRowNow().deleted, true, 'never resurrected');
+        else assert.deepEqual(invoiceData().payments.map((p) => p.id), ['p_cash']);
+      }
+    });
+
+    test(`a claim left by a run that died before charging, invoice ${mode} meanwhile: released, never replayed`, async () => {
+      const e = W.enrollmentRow();
+      w = W.world({ enrollments: [e], charges: [claimRow(e)] });
+      changeInvoice(mode);
+      const stripe = stripeWith();
+      await sweep(stripe);
+      assert.deepEqual(creates(stripe), []);
+      assert.equal(stripe.callsTo('paymentIntents.list').length, 0, 'no create was ever sent, so nothing to reconcile');
+      assert.equal(w.db.rows('autopay_charges').length, 0);
+      if (mode === 'deleted') assert.equal(invoiceRowNow().deleted, true);
+      await sweep(stripe, LATER(15));
+      assert.deepEqual(creates(stripe), mode === 'part-paid' ? [5000] : []);
+    });
+  }
+
+  test('a create that may have reached Stripe is never released: reconciled, then failed (unknown) with the owner told', async () => {
+    w = W.world({ enrollments: [W.enrollmentRow()] });
+    let first = true;
+    const stripe = stripeWith({
+      'paymentIntents.create': async (params) => {
+        if (first) { first = false; throw connectionError(); }
+        return { id: 'pi_2', status: 'succeeded', amount: params.amount, amount_received: params.amount };
+      },
+      'paymentIntents.list': async () => ({ data: [] }),
+    });
+    await sweep(stripe);
     assert.equal(charge().status, 'claimed');
+    changeInvoice('part-paid');
+    await sweep(stripe, LATER(15));
+    assert.deepEqual(creates(stripe), [12000], 'the stale 120 is never replayed onto a 50 balance');
+    assert.ok(charge().charge_sent_at, 'the claim records that a create may have been sent');
+    assert.equal(stripe.callsTo('paymentIntents.list').length, 1, 'reconciled with Stripe before standing down');
+    assert.deepEqual([charge().status, charge().failure_code], ['failed', 'unknown']);
+    assert.equal(customerMail().length, 0);
+    assert.match(ownerMail()[0].subject, /^Check Stripe/);
+    await sweep(stripe, LATER(30));
+    assert.deepEqual(creates(stripe), [12000], 'no new claim, no second charge');
+    assert.equal(w.db.rows('autopay_charges').length, 1);
+  });
+
+  test('a create that did reach Stripe, invoice paid in cash meanwhile: the charge is booked (not repeated) and the owner warned', async () => {
+    w = W.world({ enrollments: [W.enrollmentRow()] });
+    let first = true;
+    const stripe = stripeWith({
+      'paymentIntents.create': async () => { if (first) { first = false; throw connectionError(); } throw new Error('must not replay'); },
+      'paymentIntents.list': async () => ({ data: [{ id: 'pi_1', status: 'succeeded', amount: 12000, amount_received: 12000, metadata: { invoiceId: 'inv1', source: 'autopay' } }] }),
+    });
+    await sweep(stripe);
+    changeInvoice('paid');
+    await sweep(stripe, LATER(15));
+    assert.equal(stripe.callsTo('paymentIntents.create').length, 1);
+    assert.deepEqual([charge().status, charge().payment_intent_id], ['succeeded', 'pi_1']);
+    assert.deepEqual(invoiceData().payments.map((p) => p.id), ['p_cash', 'stripe_pi_1']);
+    assert.ok(ownerMail().some((m) => /more than the balance/i.test(m.text)), 'owner told about the overpayment');
+  });
+
+  test('a create that did reach Stripe, invoice deleted meanwhile: booked on the deleted invoice, which stays deleted, owner warned', async () => {
+    w = W.world({ enrollments: [W.enrollmentRow()] });
+    let first = true;
+    const stripe = stripeWith({
+      'paymentIntents.create': async () => { if (first) { first = false; throw connectionError(); } throw new Error('must not replay'); },
+      'paymentIntents.list': async () => ({ data: [{ id: 'pi_1', status: 'succeeded', amount: 12000, amount_received: 12000, metadata: { invoiceId: 'inv1', source: 'autopay' } }] }),
+    });
+    await sweep(stripe);
+    changeInvoice('deleted');
+    await sweep(stripe, LATER(15));
+    assert.equal(stripe.callsTo('paymentIntents.create').length, 1);
+    assert.equal(invoiceRowNow().deleted, true, 'never resurrected');
+    assert.deepEqual(invoiceData().payments.map((p) => p.id), ['stripe_pi_1'], 'the money is still on record');
+    assert.ok(ownerMail().some((m) => /deleted/i.test(m.subject + m.text)), 'owner told a payment landed on a deleted invoice');
+  });
+
+  test('the customer turns autopay off mid-sweep (shared card, so it stays attached): nothing is charged', async () => {
+    const e1 = W.enrollmentRow();
+    const e2 = W.enrollmentRow({ recurring_invoice_id: 'ri2' });
+    w = W.world({ enrollments: [e1, e2], plans: [W.planRow(), W.planRow({ id: 'ri2' }, { id: 'ri2' })] });
+    const stripe = stripeWith({
+      'checkout.sessions.list': async () => {
+        // After the sweep's snapshot and claim: the customer's autopay-off.
+        const row = w.db.rows('autopay_enrollments').find((x) => x.id === e1.id);
+        Object.assign(row, { status: 'revoked', revoked_by: 'customer', revoke_reason: 'customer_turned_off' });
+        return { data: [], has_more: false };
+      },
+    });
+    const r = await sweep(stripe);
+    assert.deepEqual(creates(stripe), []);
+    assert.equal(stripe.callsTo('paymentMethods.detach').length, 0, 'the shared card is still attached on Stripe');
+    assert.equal(w.db.rows('autopay_charges').length, 0, 'released');
+    assert.equal(r.yielded, 1);
+  });
+});
+
+describe('autopay sweep — pay-page payment completed but not yet booked (review P1-2)', () => {
+  const completed = (over = {}) => ({ id: 'cs_paid', status: 'complete', payment_status: 'paid', amount_total: 12000, metadata: { invoiceId: 'inv1', tr_kind: 'invoice' }, ...over });
+
+  test('a completed session whose webhook has not landed yet → no charge, claim released, a later sweep re-evaluates', async () => {
+    w = W.world({ enrollments: [W.enrollmentRow()] });
+    const stripe = stripeWith({
+      'checkout.sessions.list': async (params) => ({ data: params.status === 'complete' ? [completed()] : [], has_more: false }),
+    });
+    const r = await sweep(stripe);
+    assert.equal(r.yielded, 1);
+    assert.deepEqual(creates(stripe), []);
+    assert.equal(w.db.rows('autopay_charges').length, 0);
+    assert.equal(w.emails.length + w.pushes.length, 0);
+
+    // Still unbooked 15 min later: still no charge.
+    await sweep(stripe, LATER(15));
+    assert.deepEqual(creates(stripe), []);
+
+    // The webhook books it: the invoice is paid and never charged.
+    const row = invoiceRowNow();
+    row.data = { ...row.data, paid: true, payments: [{ id: 'stripe_cs_paid', amount: 120, date: '2026-11-01', method: 'stripe', stripeSessionId: 'cs_paid' }] };
+    await sweep(stripe, LATER(30));
+    assert.deepEqual(creates(stripe), []);
+  });
+
+  test('a completed session that is already booked (a deposit) does not block charging the rest', async () => {
+    w = W.world({ enrollments: [W.enrollmentRow()], invoices: [W.invoiceRow({ payments: [{ id: 'stripe_cs_dep', amount: 70, date: '2026-10-20', method: 'stripe' }] })] });
+    const stripe = stripeWith({
+      'checkout.sessions.list': async (params) => ({ data: params.status === 'complete' ? [completed({ id: 'cs_dep', amount_total: 7000 })] : [], has_more: false }),
+    });
+    await sweep(stripe);
+    assert.deepEqual(creates(stripe), [5000]);
+  });
+
+  test('a session list that cannot be read to the end never counts as clear', async () => {
+    w = W.world({ enrollments: [W.enrollmentRow()] });
+    let n = 0;
+    const stripe = stripeWith({
+      'checkout.sessions.list': async () => ({ data: [{ id: `cs_${++n}`, status: 'open', metadata: { invoiceId: 'other' } }], has_more: true }),
+    });
+    const r = await sweep(stripe);
+    assert.deepEqual(creates(stripe), []);
+    assert.equal(r.unknown, 1);
+  });
+});
+
+describe('autopay sweep — reads are paginated and housekeeping fails closed (review P2)', () => {
+  function threePlans() {
+    const plans = ['ri1', 'ri2', 'ri3'].map((id) => W.planRow({ id }, { id }));
+    const enrollments = plans.map((p) => W.enrollmentRow({ recurring_invoice_id: p.id }));
+    const invoices = ['1', '2', '3'].map((n) => W.invoiceRow({ number: `INV-${n}`, recurringInvoiceId: `ri${n}` }, { id: `inv${n}` }));
+    return { plans, enrollments, invoices };
+  }
+  const piPerInvoice = () => stripeWith({
+    'paymentIntents.create': async (params) => ({ id: `pi_${params.metadata.invoiceId}`, status: 'succeeded', amount: params.amount, amount_received: params.amount }),
+  });
+
+  test('a server row cap smaller than the data (max-rows) skips no due invoice and revokes nothing', async () => {
+    w = W.world(threePlans());
+    wrapSupabaseGets((url, rows, phase) => (phase === 'after' ? rows.slice(0, 2) : null));
+    const stripe = piPerInvoice();
+    const r = await sweep(stripe);
+    assert.deepEqual(stripe.callsTo('paymentIntents.create').map((c) => c.args[0].metadata.invoiceId).sort(), ['inv1', 'inv2', 'inv3']);
+    assert.equal(r.revoked, 0);
+    assert.deepEqual(w.db.rows('autopay_enrollments').map((e) => e.status), ['active', 'active', 'active']);
+    assert.equal(stripe.callsTo('paymentMethods.detach').length, 0);
+  });
+
+  test('a plan missing from a truncated bulk read is confirmed before any revoke', async () => {
+    w = W.world(threePlans());
+    wrapSupabaseGets((url, rows, phase) => {
+      if (phase === 'before' || url.pathname !== '/rest/v1/recurringInvoices' || url.searchParams.get('id') === 'eq.ri2') return rows;
+      return rows.filter((p) => p.id !== 'ri2');
+    });
+    const stripe = piPerInvoice();
+    const r = await sweep(stripe);
+    assert.equal(r.revoked, 0);
+    assert.deepEqual(w.db.rows('autopay_enrollments').map((e) => e.status), ['active', 'active', 'active']);
+    assert.equal(stripe.callsTo('paymentMethods.detach').length, 0);
+  });
+
+  test('a failed confirmation read fails closed: housekeeping skips, nothing is revoked', async () => {
+    w = W.world(threePlans());
+    wrapSupabaseGets((url, rows, phase) => {
+      if (url.pathname !== '/rest/v1/recurringInvoices') return rows;
+      if (url.searchParams.get('id') === 'eq.ri2') throw new Error('boom');
+      return phase === 'after' ? rows.filter((p) => p.id !== 'ri2') : rows;
+    });
+    const stripe = piPerInvoice();
+    const r = await sweep(stripe);
+    assert.equal(r.revoked, 0);
+    assert.equal(w.db.rows('autopay_enrollments').find((e) => e.recurring_invoice_id === 'ri2').status, 'active');
+    assert.equal(stripe.callsTo('paymentMethods.detach').length, 0);
   });
 });
