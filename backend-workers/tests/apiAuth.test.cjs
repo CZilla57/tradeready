@@ -258,6 +258,53 @@ describe('failed-auth load guard (§6)', () => {
   });
 });
 
+describe('per-key-hash memory guards (§6)', () => {
+  const H1 = 'a'.repeat(64);
+  const H2 = 'b'.repeat(64);
+
+  test('unknown hash: shed from the 5th unknown answer until the window ends; per hash', () => {
+    const g = createAuthFailureGuard({ unknownLimit: 5, windowMs: 60_000 });
+    const t0 = 5_000_000;
+    assert.equal(g.keyShed(H1, t0), null);
+    for (let i = 0; i < 4; i++) g.unknownKey(H1, t0 + i);
+    assert.equal(g.keyShed(H1, t0 + 10), null, 'four unknown answers: still goes to the RPC');
+    g.unknownKey(H1, t0 + 20);
+    assert.deepEqual(g.keyShed(H1, t0 + 30), { error: 'invalid_key' });
+    assert.equal(g.keyShed(H2, t0 + 30), null, 'another hash is unaffected');
+    assert.equal(g.keyShed(H1, t0 + 60_000), null, 'the window ends and the hash is looked up again');
+  });
+
+  test('rate-limited hash: shed until the reported reset, with the stored rate headers', () => {
+    const g = createAuthFailureGuard();
+    const t0 = 9_000_000;
+    const rate = { limit: 60, remaining: 0, reset: 123 };
+    g.rateLimitedKey(H1, { retryAfter: 17, rate }, t0);
+    assert.deepEqual(g.keyShed(H1, t0 + 5_000), { error: 'rate_limited', retryAfter: 12, rate });
+    assert.equal(g.keyShed(H2, t0 + 5_000), null);
+    assert.equal(g.keyShed(H1, t0 + 17_000), null, 'reset reached');
+    g.rateLimitedKey(H2, { rate: null }, t0);
+    assert.equal(g.keyShed(H2, t0 + 59_000).error, 'rate_limited', 'no reset reported: a short fixed window');
+    assert.equal(g.keyShed(H2, t0 + 60_000), null);
+  });
+
+  test('only sha256 hex is accepted as a guard key, so a presented key is never remembered', () => {
+    const g = createAuthFailureGuard();
+    const raw = `trk_${'Z'.repeat(43)}`;
+    g.unknownKey(raw, 1);
+    g.rateLimitedKey(raw, { retryAfter: 30 }, 1);
+    assert.deepEqual(g.sizes(), { ips: 0, blocked: 0, unknownKeys: 0, limitedKeys: 0 });
+  });
+
+  test('the IP failure window restarts after it elapses (failures do not accumulate across windows)', () => {
+    const g = createAuthFailureGuard({ limit: 3, windowMs: 1000 });
+    g.fail('ip', 0); g.fail('ip', 100);
+    g.fail('ip', 2000); g.fail('ip', 2100);
+    assert.equal(g.blockedFor('ip', 2200), 0);
+    g.fail('ip', 2200);
+    assert.ok(g.blockedFor('ip', 2300) > 0);
+  });
+});
+
 describe('OpenAPI document (§8)', () => {
   test('is OpenAPI 3.1 on the workers.dev base URL (decision Q4)', () => {
     assert.equal(OPENAPI_DOCUMENT.openapi, '3.1.0');

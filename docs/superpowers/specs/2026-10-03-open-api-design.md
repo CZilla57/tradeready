@@ -63,7 +63,7 @@ Key management lives in the app (Settings → API access). Documentation is a st
 | Action | Effect |
 |---|---|
 | Create | Name (≤ 40 characters), scopes, expiry (none / 90 days / 1 year; default 1 year). At most **5 live keys** per owner |
-| Rotate | One transaction: mint a replacement with the same name and scopes, and set the old key's `expires_at` to now + 24 hours (or now, if the owner picks "immediately"). The UI shows the grace window |
+| Rotate | One transaction: mint a replacement with the same name and scopes, and set the old key's `expires_at` to now + 24 hours (or now, if the owner picks "immediately"). The UI shows the grace window. A grace key behind the rotated key ends immediately, and at most 5 grace keys work at once (so at most 10 working keys in all) |
 | Revoke | Sets `revoked_at` (one-way, never cleared). Effective on the next request |
 | Expiry | Checked on every request. An expired key is a hard 401 |
 | Account deletion | `on delete cascade` from `auth.users`, so every key and log row goes with the account |
@@ -207,7 +207,8 @@ create table public.api_usage_counters (   -- durable per-key windows
 | Per key, burst | 60 requests per minute | `api_key_authorize` minute counter (durable). A Cloudflare `[[ratelimits]]` binding (`period = 60`) can be added in front as a cheap first layer. It is per-location and eventually consistent by design ([Workers rate limiting](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/)), so it is never the only layer |
 | Per key, daily | 5,000 requests per day (UTC) | Day counter in the same RPC |
 | Per owner, daily | 10,000 across all keys | The RPC sums the owner's day counters |
-| Failed auth per IP | 20 per minute per isolate | `createRateLimiter` keyed on `cf-connecting-ip` |
+| Failed auth per IP | 20 per minute per isolate | In-memory counter keyed on `cf-connecting-ip`. Blocks only requests without a well-formed key; valid keys are never rejected by it (§14.4 #10) |
+| Unknown / over-limit key hash | 5 unknown answers per minute; over-limit until reset | In-memory, keyed on sha256 of the presented key, so a well-formed key cannot hammer the database (§14.4 #10) |
 
 Each request costs one RPC plus one or two PostgREST GETs. A key polling every 15 minutes across seven resources is under 700 requests a day. List responses select only `id,updated_at,deleted,data` and are capped at 100 rows.
 
@@ -414,7 +415,7 @@ No `backend/` (Vercel) twin: the open API is Workers-only, like the portal's Pha
 
 Storage and RPCs:
 1. `api_keys` gains three columns beyond §4: `expiry_days` (90 | 365 | null, so rotate keeps the owner's lifetime choice), `operation_id` (unique when set) and `request_hash` (replay detection without storing the raw key). Plus check constraints on hash shape, prefix length, scopes and log `event`, and `replaced_by … on delete set null`.
-2. "Live" means not revoked, not expired and not replaced. Keys in a rotation grace window don't count toward the 5-key cap, so rotate never fails on the cap.
+2. "Live" means not revoked, not expired and not replaced. The 5-key cap counts live keys, so rotate (which swaps one live key for another) never fails on it. Keys in a rotation grace window are bounded separately (corrected 2026-10-04, see the fix note at the end of this section): rotating a key ends its own grace predecessor now, and after every rotate at most 5 grace keys keep working, so an owner never holds more than 5 live + 5 grace = 10 working keys. (Originally grace keys were uncounted and repeated rotation could leave an unbounded number of working keys.)
 3. Rotate inherits name, scopes and lifetime. The old key's `expires_at` becomes the earlier of its current expiry and now + grace. Only a live, not-yet-rotated key rotates; anything else is `not_found`.
 4. Revoke is idempotent: a second revoke answers 200 with the key unchanged (`revoked_at` never moves).
 5. Rate limits are check-then-increment under a per-owner advisory lock, so concurrent requests never over-admit and **refused requests consume no quota**. The `X-RateLimit-*` headers describe the per-key minute window. Daily windows are UTC.
@@ -422,9 +423,9 @@ Storage and RPCs:
 7. Both RPCs refuse a client JWT that reaches them anyway (the `booking_is_client_caller` logic, inlined to avoid a dependency on the booking migrations).
 
 Request contract:
-8. Check order: GET-only → key in query → route → failed-auth block → Bearer parse → RPC → scope → parameters → reads. `HEAD` and `OPTIONS` are 405 like every non-GET.
+8. Check order: GET-only → key in query → route → Bearer parse (a missing or malformed key meets the failed-auth block; a well-formed key skips it, §14.4 #10) → per-hash memory guards → RPC → scope → parameters → reads. `HEAD` and `OPTIONS` are 405 like every non-GET.
 9. Key-in-query means a credential-like parameter name (`api_key`, `apikey`, `key`, `access_token`, `token`, `authorization`, `bearer`) or any value starting with `trk_`. It is refused before routing and counts as an auth failure for the IP guard.
-10. Failed-auth guard: the 20th failure per minute from one `cf-connecting-ip` blocks that address for a minute, answered `429 rate_limited` before any RPC call.
+10. Failed-auth guard: the 20th failure per minute from one `cf-connecting-ip` blocks that address for a minute, answered `429 rate_limited` before any RPC call. It applies only to requests with no well-formed key (missing or malformed `Authorization`); a request carrying a well-formed `trk_` key is never rejected by it and goes to the authorize RPC (corrected 2026-10-04: it originally rejected every request from the address, valid keys included). Well-formed keys are shed per key hash instead: 5 "unknown key" answers for the same hash in a minute make that hash a `401 invalid_key` from memory until the minute ends, and a `rate_limited` answer makes that hash a `429` from memory (same `Retry-After` and `X-RateLimit-*`) until the reset. Per isolate, capped at 2,000 entries per map (expired swept, then oldest evicted), keyed by sha256 only.
 11. Worker-written log rows (requests that resolved a key): 2xx → `ok`, 403 → `denied`, 429 → `rate_limited`, anything else (400, 404, 500, 503) → `error`. Requests that never resolved an owner (405, malformed bearer, key in query, unknown path) are not logged.
 12. Headers: `TradeReady-Api-Version` and `Cache-Control: no-store` on every `/v1` response; `X-RateLimit-Limit/Remaining/Reset` (Reset in Unix seconds) on every response that resolved a key, including 429. Pre-auth responses have no key to describe, so they omit the rate headers. `/v1/openapi.json` is `Cache-Control: public, max-age=3600`. 401s carry `WWW-Authenticate: Bearer realm="TradeReady API"`.
 13. Failure mapping: authorize RPC not deployed, undecodable or erroring → `503 unavailable` (fail closed); a data read failing after auth → `500 server_error`; `API_CURSOR_SECRET` unset → list endpoints `503 unavailable` (single records and `/v1/account` still work; cursors are never minted unsigned).
@@ -438,6 +439,15 @@ Resources:
 19. Payments: the legacy synthesized `legacy_<invoiceId>` entry is included (so a key's payments always sum to `amountPaid`) and is reachable at `/v1/payments/legacy_<invoiceId>`. `processorReference` is `stripeSessionId`, else the id after `stripe_` (covers Phase 18's `stripe_<payment_intent_id>` without reading a new field). The method map adds `stripe`. A single payment is found with `data->payments=cs.[{"id":…}]`.
 20. Invoice `paid` is the stored flag; `status` is derived from the ledger. Money is rounded half away from zero to cents after `toPrecision(15)` (so 12.345 → 12.35).
 21. Manage `activity` returns `ip` too: it is the owner's own security log, and the privacy wording (Q2) discloses it.
+
+#### 14.4a Security-review fixes (2026-10-04, branch `fix/open-api-guard`)
+
+Four review findings, fixed and tested:
+
+1. **Failed-auth IP guard no longer blocks valid keys** (`lib/api/v1.js`, `lib/api/auth.js`). The Bearer is parsed first; only a request with no well-formed key meets the IP block. Well-formed keys skip it and reach the authorize RPC, so a shared egress address cannot be locked out, and `?token=x` junk can no longer hold a block against other owners. A negative cache keyed by the sha256 of the presented key answers 401 `invalid_key` from memory after 5 unknown results in a minute, so well-formed random keys cannot hammer the database. Corrects #10.
+2. **Rate-limited keys are shed before the database** (same files). A `rate_limited` RPC answer makes that hash a 429 from memory until the reported reset (`retryAfter`, 60 s if none), with the same `Retry-After` and `X-RateLimit-*` headers. All guard maps are per isolate, capped at 2,000 entries, hash-keyed only.
+3. **Show-once key can no longer be copied around the clipboard policy** (`NativeAPIAccessView.swift`). `.textSelection(.enabled)` is removed from the secret, so the Copy button (local-only, 2-minute expiry, §9) is the only copy path. `native/APIAccessTests/main.swift` now fails if the view source contains `textSelection`.
+4. **Working keys are bounded including grace keys** (`20261003_api_keys.sql`, edited in place; still unapplied). Rotation ends the rotated key's own grace predecessor immediately, and after each rotate only the 5 latest-expiring grace keys keep working (the rest end now). This holds even when a replacement is revoked (which leaves its predecessor in grace with no live successor). With the live cap of 5 this gives at most 10 working keys, and rotate still never fails on the cap. Corrects #2. The verify SQL pins the grace cap in the RPC source, and `supabase/verify/local/api_keys.sh` covers lineage rotation, create/rotate/revoke churn and rotate at the live cap.
 
 #### 14.5 Uncommitted `tradeready-legal` edit
 

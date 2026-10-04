@@ -6,8 +6,12 @@
 //   2. A key in the query string → 400 key_in_query (before routing, so a
 //      key pasted into any URL is refused, not silently ignored).
 //   3. Unknown path → 404 not_found. /v1/openapi.json is public.
-//   4. Per-IP failed-auth block (load guard) → 429 rate_limited.
-//   5. Bearer parse → 401 invalid_key (no database contact).
+//   4. Bearer parse. No well-formed key → the per-IP failed-auth block
+//      (429 rate_limited while blocked) or 401 invalid_key, no database
+//      contact. A well-formed key is never rejected by the IP block.
+//   5. Per-key-hash memory guards (no database contact): a hash the RPC has
+//      repeatedly called unknown → 401 invalid_key; a hash the RPC has said
+//      is over its limit → 429 rate_limited until its reset.
 //   6. api_key_authorize RPC → 401 key_revoked | key_expired | invalid_key,
 //      429 rate_limited, 503 unavailable. From here on the request has an
 //      owner and every outcome is logged against the key.
@@ -258,18 +262,30 @@ async function handleV1(req, env, { nowMs = Date.now(), failureGuard }) {
     return respond(200, OPENAPI_DOCUMENT, { 'Cache-Control': 'public, max-age=3600' });
   }
 
-  const blockedFor = failureGuard.blockedFor(ipKey, nowMs);
-  if (blockedFor > 0) return fail('rate_limited', { 'Retry-After': String(blockedFor) });
-
   const bearer = parseBearer(req.authorization);
   if (bearer.error) {
+    // Junk traffic only: a request with a well-formed key never reaches this
+    // block, so the IP guard cannot lock out valid keys on a shared address.
+    const blockedFor = failureGuard.blockedFor(ipKey, nowMs);
+    if (blockedFor > 0) return fail('rate_limited', { 'Retry-After': String(blockedFor) });
     failureGuard.fail(ipKey, nowMs);
     return fail('invalid_key', WWW_AUTHENTICATE);
   }
 
+  // Only the hash is ever remembered, never the key.
+  const keyHash = sha256Hex(bearer.key);
+  const shed = failureGuard.keyShed(keyHash, nowMs);
+  if (shed && shed.error === 'rate_limited') {
+    return fail('rate_limited', { 'Retry-After': String(shed.retryAfter), ...rateHeaders(shed.rate) });
+  }
+  if (shed) {
+    failureGuard.fail(ipKey, nowMs);
+    return fail(shed.error, WWW_AUTHENTICATE);
+  }
+
   let auth;
   try {
-    auth = await authorizeKey(env, { keyHash: sha256Hex(bearer.key), route: route.template, ip: req.ip || null });
+    auth = await authorizeKey(env, { keyHash, route: route.template, ip: req.ip || null });
   } catch (err) {
     console.error('[api/v1] authorize failed:', err.message);
     return fail('unavailable');
@@ -277,9 +293,11 @@ async function handleV1(req, env, { nowMs = Date.now(), failureGuard }) {
   if (auth.kind === 'unavailable') return fail('unavailable');
   if (auth.kind === 'denied') {
     failureGuard.fail(ipKey, nowMs);
+    if (auth.error === 'invalid_key') failureGuard.unknownKey(keyHash, nowMs);
     return fail(auth.error, WWW_AUTHENTICATE);
   }
   if (auth.kind === 'rate_limited') {
+    failureGuard.rateLimitedKey(keyHash, { retryAfter: auth.retryAfter, rate: auth.rate }, nowMs);
     return fail('rate_limited', { 'Retry-After': String(auth.retryAfter), ...rateHeaders(auth.rate) });
   }
 

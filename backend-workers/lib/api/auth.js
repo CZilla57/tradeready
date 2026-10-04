@@ -16,8 +16,6 @@
 // the key id, the route TEMPLATE and the status — never the key, never
 // query values. Best-effort: it never throws.
 
-const { createRateLimiter } = require('../guards.js');
-
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DENIED_ERRORS = new Set(['invalid_key', 'key_revoked', 'key_expired']);
 
@@ -115,16 +113,56 @@ async function logApiRequest(env, { userId, keyId, route, status, ip }) {
   }
 }
 
-// Failed-auth load guard (spec §6): 20 failures per minute per
-// cf-connecting-ip, per isolate. A load guard for junk traffic, not a
-// security boundary (keys are 256-bit). Built on the shared
-// createRateLimiter: each failure is one hit, and the `limit`-th failure in
-// a window (the first hit the limiter refuses) opens a block for one
-// window. The block is checked BEFORE the RPC, so at most `limit` failures
-// per window ever reach the database from one address.
-function createAuthFailureGuard({ limit = 20, windowMs = 60_000 } = {}) {
-  const record = createRateLimiter({ limit: limit - 1, windowMs });
-  const blockedUntil = new Map();
+// In-memory load guards (spec §6), per isolate. Load guards for junk and
+// hammering traffic, not security boundaries (keys are 256-bit). Three
+// independent layers, all bounded:
+//
+//   1. IP failure guard. The `limit`-th failed request in a window from one
+//      cf-connecting-ip blocks that address for one window. It applies to
+//      requests that carry NO well-formed key (missing or malformed
+//      Authorization, key in the query, a bad route of that kind). A request
+//      carrying a well-formed `trk_` key is NEVER rejected by it: valid keys
+//      behind a shared egress IP (an integration platform, a corporate NAT)
+//      must not be locked out by someone else's junk. Well-formed keys are
+//      shed by the two per-hash layers below instead.
+//   2. Unknown-key negative cache, keyed by sha256 of the presented key.
+//      After `unknownLimit` "unknown key" answers for the same hash in a
+//      window, that hash is answered 401 invalid_key from memory without the
+//      RPC, until the window ends. At most `unknownLimit` RPCs per hash per
+//      window reach the database.
+//   3. Rate-limited-key shed, keyed the same way. Once the RPC answers
+//      `rate_limited` for a hash, further requests with it are answered 429
+//      from memory (same Retry-After and X-RateLimit-* the RPC gave) until
+//      the reported reset, so a key over its limit costs no authorize RPC
+//      (each takes the per-owner advisory lock).
+//
+// Only sha256 hex hashes ever enter the per-hash maps (anything else is
+// ignored), never the presented key. Every map is capped: past the cap,
+// expired entries are swept and then the oldest entries are evicted.
+const GUARD_MAX_ENTRIES = 2000;
+const HASH_RE = /^[0-9a-f]{64}$/;
+
+function setBounded(map, key, value, max, isExpired) {
+  map.delete(key); // re-insert so iteration order is write order (oldest first)
+  map.set(key, value);
+  if (map.size <= max) return;
+  for (const [k, v] of map) if (isExpired(v)) map.delete(k);
+  while (map.size > max) map.delete(map.keys().next().value);
+}
+
+function createAuthFailureGuard({
+  limit = 20,
+  windowMs = 60_000,
+  unknownLimit = 5,
+  maxEntries = GUARD_MAX_ENTRIES,
+} = {}) {
+  const failures = new Map(); // ip -> { start, count }
+  const blockedUntil = new Map(); // ip -> ms
+  const unknownKeys = new Map(); // key hash -> { start, count }
+  const limitedKeys = new Map(); // key hash -> { until, rate }
+
+  const windowExpired = (now) => (w) => now - w.start >= windowMs;
+
   return {
     // Seconds until the block lifts, or 0 when not blocked.
     blockedFor(ip, now = Date.now()) {
@@ -137,12 +175,51 @@ function createAuthFailureGuard({ limit = 20, windowMs = 60_000 } = {}) {
       return Math.ceil((until - now) / 1000);
     },
     fail(ip, now = Date.now()) {
-      if (!record(ip, now)) {
-        blockedUntil.set(ip, now + windowMs);
-        if (blockedUntil.size > 1000) {
-          for (const [k, until] of blockedUntil) if (until <= now) blockedUntil.delete(k);
-        }
+      const w = failures.get(ip);
+      const next = w && now - w.start < windowMs ? { start: w.start, count: w.count + 1 } : { start: now, count: 1 };
+      setBounded(failures, ip, next, maxEntries, windowExpired(now));
+      if (next.count >= limit) {
+        setBounded(blockedUntil, ip, now + windowMs, maxEntries, (until) => until <= now);
       }
+    },
+
+    // Answered from memory for this key hash, or null to go to the RPC.
+    //   { error: 'invalid_key' }                       (negative cache)
+    //   { error: 'rate_limited', retryAfter, rate }    (over its limit)
+    keyShed(keyHash, now = Date.now()) {
+      if (!HASH_RE.test(keyHash)) return null;
+      const limited = limitedKeys.get(keyHash);
+      if (limited) {
+        if (limited.until > now) {
+          return { error: 'rate_limited', retryAfter: Math.max(1, Math.ceil((limited.until - now) / 1000)), rate: limited.rate };
+        }
+        limitedKeys.delete(keyHash);
+      }
+      const unknown = unknownKeys.get(keyHash);
+      if (unknown) {
+        if (now - unknown.start >= windowMs) unknownKeys.delete(keyHash);
+        else if (unknown.count >= unknownLimit) return { error: 'invalid_key' };
+      }
+      return null;
+    },
+    // The RPC said this hash is unknown.
+    unknownKey(keyHash, now = Date.now()) {
+      if (!HASH_RE.test(keyHash)) return;
+      const w = unknownKeys.get(keyHash);
+      const next = w && now - w.start < windowMs ? { start: w.start, count: w.count + 1 } : { start: now, count: 1 };
+      setBounded(unknownKeys, keyHash, next, maxEntries, windowExpired(now));
+    },
+    // The RPC said this key is over its limit; `retryAfter` is whole seconds
+    // to its reset (the route's default of 60 applies when the RPC gave none).
+    rateLimitedKey(keyHash, { retryAfter, rate = null } = {}, now = Date.now()) {
+      if (!HASH_RE.test(keyHash)) return;
+      const seconds = Number.isFinite(retryAfter) && retryAfter >= 1 ? retryAfter : 60;
+      setBounded(limitedKeys, keyHash, { until: now + seconds * 1000, rate }, maxEntries, (v) => v.until <= now);
+    },
+
+    // Test hook: how many entries each map holds.
+    sizes() {
+      return { ips: failures.size, blocked: blockedUntil.size, unknownKeys: unknownKeys.size, limitedKeys: limitedKeys.size };
     },
   };
 }

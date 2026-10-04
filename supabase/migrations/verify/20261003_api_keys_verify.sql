@@ -111,6 +111,16 @@ begin
     if n <> 1 then raise exception 'NOT SECURITY DEFINER WITH PINNED search_path: %', fn; end if;
   end loop;
 
+  -- 4b. The working-key ceiling (5 live + 5 grace) is in the admin RPC:
+  -- rotate ends its own grace predecessor and trims grace keys to the cap.
+  select count(*) into n from pg_proc p
+   where p.oid = to_regprocedure('public.api_key_admin(uuid,text,uuid,text,uuid,text,text[],integer,text,text,integer)')
+     and p.prosrc like '%c_max_live%constant integer := 5%'
+     and p.prosrc like '%c_max_grace%constant integer := 5%'
+     and p.prosrc like '%offset c_max_grace%'
+     and p.prosrc like '%g.replaced_by = v_old.id%';
+  if n <> 1 then raise exception 'api_key_admin lacks the grace-key cap (c_max_grace / offset / predecessor end)'; end if;
+
   -- 5. Account deletion cascades: every API table reaches auth.users with
   -- ON DELETE CASCADE (counters through api_keys).
   select count(*) into n from pg_constraint con

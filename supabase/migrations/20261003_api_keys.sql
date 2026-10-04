@@ -258,11 +258,17 @@ grant execute on function public.api_key_authorize(text, text, text) to service_
 -- key. Ownership is checked here: a key id that is not the caller's is
 -- `not_found`, indistinguishable from a missing one.
 --
--- create: 5-live-key cap (live = not revoked, not expired, not replaced —
---   keys in a rotation grace window don't count).
+-- create: 5-live-key cap (live = not revoked, not expired, not replaced).
 -- rotate: one transaction: insert the replacement (same name, scopes and
 --   lifetime choice), then set the old key's replaced_by and cut its
 --   expires_at to least(current, now + grace). Only a live key rotates.
+--   Rotation never changes the live count, so it never fails on the cap.
+-- Working-key ceiling: a key in a rotation grace window (replaced, not yet
+--   expired) still authorizes, so it is bounded separately: rotating a key
+--   ends its own grace predecessor immediately (one grace key per lineage),
+--   and after every rotate at most c_max_grace (5) grace keys keep working;
+--   the ones expiring soonest are ended now. An owner therefore never has
+--   more than 5 live + 5 grace = 10 working keys, however often they rotate.
 -- revoke: sets revoked_at once (never cleared); idempotent.
 -- Replay: create/rotate carry the app's operationId. A committed id answers
 --   already_completed with the key's id and prefix (no secret exists to
@@ -291,6 +297,7 @@ set search_path = pg_catalog, public
 as $$
 declare
   c_max_live  constant integer := 5;
+  c_max_grace constant integer := 5;
   v_now       timestamptz := now();
   v_existing  record;
   v_old       public.api_keys;
@@ -391,6 +398,15 @@ begin
      v_old.expiry_days, p_operation_id, p_request_hash)
   returning * into v_new;
 
+  -- A key still in grace behind the one being rotated ends now: one grace
+  -- key per lineage.
+  update public.api_keys g
+     set expires_at = v_now
+   where g.user_id = p_user_id
+     and g.replaced_by = v_old.id
+     and g.revoked_at is null
+     and (g.expires_at is null or g.expires_at > v_now);
+
   update public.api_keys k
      set replaced_by = v_new.id,
          expires_at = case
@@ -399,6 +415,24 @@ begin
            else k.expires_at end
    where k.id = v_old.id
   returning * into v_old;
+
+  -- Hard bound on grace keys (a revoked replacement leaves its predecessor
+  -- in grace with no live successor, so the lineage rule alone is not
+  -- enough): keep the c_max_grace latest-expiring working grace keys, end
+  -- the rest now.
+  update public.api_keys k
+     set expires_at = v_now
+   where k.id in (
+     select g.id
+       from public.api_keys g
+      where g.user_id = p_user_id
+        and g.revoked_at is null
+        and g.replaced_by is not null
+        and g.expires_at > v_now
+      order by g.expires_at desc, g.created_at desc, g.id
+     offset c_max_grace);
+
+  select * into v_old from public.api_keys k where k.id = v_old.id;
 
   return jsonb_build_object('ok', true, 'decision', 'committed',
     'key', public.api_key_public(v_new), 'previous', public.api_key_public(v_old));
