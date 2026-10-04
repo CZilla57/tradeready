@@ -16,8 +16,6 @@
 // the key id, the route TEMPLATE and the status — never the key, never
 // query values. Best-effort: it never throws.
 
-const { createRateLimiter } = require('../guards.js');
-
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DENIED_ERRORS = new Set(['invalid_key', 'key_revoked', 'key_expired']);
 
@@ -115,16 +113,67 @@ async function logApiRequest(env, { userId, keyId, route, status, ip }) {
   }
 }
 
-// Failed-auth load guard (spec §6): 20 failures per minute per
-// cf-connecting-ip, per isolate. A load guard for junk traffic, not a
-// security boundary (keys are 256-bit). Built on the shared
-// createRateLimiter: each failure is one hit, and the `limit`-th failure in
-// a window (the first hit the limiter refuses) opens a block for one
-// window. The block is checked BEFORE the RPC, so at most `limit` failures
-// per window ever reach the database from one address.
-function createAuthFailureGuard({ limit = 20, windowMs = 60_000 } = {}) {
-  const record = createRateLimiter({ limit: limit - 1, windowMs });
-  const blockedUntil = new Map();
+// In-memory load guards (spec §6), per isolate. Load guards for junk and
+// hammering traffic, not security boundaries (keys are 256-bit). Layers:
+//
+//   1. IP failure guard. The `limit`-th failed request in a window from one
+//      cf-connecting-ip (every unknown/revoked/expired key, malformed or
+//      missing key, key in the query) blocks that address for one window.
+//      Requests with NO well-formed key are answered 429 while blocked.
+//   2. Well-formed keys are never flatly rejected by the IP block (valid keys
+//      behind a shared egress IP must keep working), but while their IP is
+//      blocked a key hash NOT in the positive cache may reach the authorize
+//      RPC only `ipBudget` times per window per IP; beyond that, 429 from
+//      memory. A flood of distinct random well-formed keys therefore costs
+//      the database at most `limit` + `ipBudget` RPCs per window per IP.
+//   3. Positive cache: sha256 hashes that authorized (or were rate limited,
+//      which only a live key can be) in the last `knownTtlMs`. A hash in it
+//      is never held to the IP budget. It does NOT skip the RPC: revocation
+//      and expiry are checked on every request, and a denial removes the hash.
+//      Accepted trade-off: a valid key this isolate has not seen recently,
+//      arriving from an address that is over the threshold, shares that IP's
+//      small budget.
+//   4. Unknown-key negative cache, keyed by hash: after `unknownLimit`
+//      "unknown key" answers for one hash in a window, that hash is answered
+//      401 invalid_key from memory until the window ends.
+//   5. Rate-limited-key shed, keyed by hash: once the RPC answers
+//      `rate_limited`, further requests with it are answered 429 from memory
+//      (same Retry-After and X-RateLimit-*) until the reported reset.
+//
+// Only sha256 hex hashes ever enter the per-hash maps (anything else is
+// ignored), never the presented key. Every map is separate and capped: past
+// its cap, expired entries are swept and then the oldest in THAT map are
+// evicted, so churn in one map (an attacker's random keys) cannot evict the
+// entries of another (known-good keys, active rate-limit entries).
+const GUARD_MAX_ENTRIES = 2000;
+const HASH_RE = /^[0-9a-f]{64}$/;
+
+function setBounded(map, key, value, max, isExpired) {
+  map.delete(key); // re-insert so iteration order is write order (oldest first)
+  map.set(key, value);
+  if (map.size <= max) return;
+  for (const [k, v] of map) if (isExpired(v)) map.delete(k);
+  while (map.size > max) map.delete(map.keys().next().value);
+}
+
+function createAuthFailureGuard({
+  limit = 20,
+  windowMs = 60_000,
+  unknownLimit = 5,
+  ipBudget = 5,
+  knownTtlMs = 300_000,
+  maxKnownKeys = 500,
+  maxEntries = GUARD_MAX_ENTRIES,
+} = {}) {
+  const failures = new Map(); // ip -> { start, count }
+  const blockedUntil = new Map(); // ip -> ms
+  const unknownKeys = new Map(); // key hash -> { start, count }
+  const limitedKeys = new Map(); // key hash -> { until, rate }
+  const knownKeys = new Map(); // key hash -> expiry ms (positive cache)
+  const budgets = new Map(); // ip -> { start, count } of RPCs spent while blocked
+
+  const windowExpired = (now) => (w) => now - w.start >= windowMs;
+
   return {
     // Seconds until the block lifts, or 0 when not blocked.
     blockedFor(ip, now = Date.now()) {
@@ -137,12 +186,87 @@ function createAuthFailureGuard({ limit = 20, windowMs = 60_000 } = {}) {
       return Math.ceil((until - now) / 1000);
     },
     fail(ip, now = Date.now()) {
-      if (!record(ip, now)) {
-        blockedUntil.set(ip, now + windowMs);
-        if (blockedUntil.size > 1000) {
-          for (const [k, until] of blockedUntil) if (until <= now) blockedUntil.delete(k);
-        }
+      const w = failures.get(ip);
+      const next = w && now - w.start < windowMs ? { start: w.start, count: w.count + 1 } : { start: now, count: 1 };
+      setBounded(failures, ip, next, maxEntries, windowExpired(now));
+      // A failure inside an existing block (a budgeted RPC) never extends it.
+      if (next.count >= limit && !((blockedUntil.get(ip) || 0) > now)) {
+        setBounded(blockedUntil, ip, now + windowMs, maxEntries, (until) => until <= now);
       }
+    },
+    // Spend one of the IP's RPC credits for a key hash outside the positive
+    // cache. Meant for use only while the IP is blocked; false = answer 429.
+    takeIpBudget(ip, now = Date.now()) {
+      const w = budgets.get(ip);
+      const cur = w && now - w.start < windowMs ? w : { start: now, count: 0 };
+      if (cur.count >= ipBudget) return false;
+      setBounded(budgets, ip, { start: cur.start, count: cur.count + 1 }, maxEntries, windowExpired(now));
+      return true;
+    },
+
+    // Positive cache (never skips the RPC; it only exempts from the IP budget).
+    isKnownKey(keyHash, now = Date.now()) {
+      if (!HASH_RE.test(keyHash)) return false;
+      const until = knownKeys.get(keyHash);
+      if (!until) return false;
+      if (until <= now) {
+        knownKeys.delete(keyHash);
+        return false;
+      }
+      return true;
+    },
+    knownKey(keyHash, now = Date.now()) {
+      if (!HASH_RE.test(keyHash)) return;
+      setBounded(knownKeys, keyHash, now + knownTtlMs, maxKnownKeys, (until) => until <= now);
+    },
+    forgetKey(keyHash) {
+      knownKeys.delete(keyHash);
+    },
+
+    // Answered from memory for this key hash, or null to go to the RPC.
+    //   { error: 'invalid_key' }                       (negative cache)
+    //   { error: 'rate_limited', retryAfter, rate }    (over its limit)
+    keyShed(keyHash, now = Date.now()) {
+      if (!HASH_RE.test(keyHash)) return null;
+      const limited = limitedKeys.get(keyHash);
+      if (limited) {
+        if (limited.until > now) {
+          return { error: 'rate_limited', retryAfter: Math.max(1, Math.ceil((limited.until - now) / 1000)), rate: limited.rate };
+        }
+        limitedKeys.delete(keyHash);
+      }
+      const unknown = unknownKeys.get(keyHash);
+      if (unknown) {
+        if (now - unknown.start >= windowMs) unknownKeys.delete(keyHash);
+        else if (unknown.count >= unknownLimit) return { error: 'invalid_key' };
+      }
+      return null;
+    },
+    // The RPC said this hash is unknown.
+    unknownKey(keyHash, now = Date.now()) {
+      if (!HASH_RE.test(keyHash)) return;
+      const w = unknownKeys.get(keyHash);
+      const next = w && now - w.start < windowMs ? { start: w.start, count: w.count + 1 } : { start: now, count: 1 };
+      setBounded(unknownKeys, keyHash, next, maxEntries, windowExpired(now));
+    },
+    // The RPC said this key is over its limit; `retryAfter` is whole seconds
+    // to its reset (the route's default of 60 applies when the RPC gave none).
+    rateLimitedKey(keyHash, { retryAfter, rate = null } = {}, now = Date.now()) {
+      if (!HASH_RE.test(keyHash)) return;
+      const seconds = Number.isFinite(retryAfter) && retryAfter >= 1 ? retryAfter : 60;
+      setBounded(limitedKeys, keyHash, { until: now + seconds * 1000, rate }, maxEntries, (v) => v.until <= now);
+    },
+
+    // Test hook: how many entries each map holds.
+    sizes() {
+      return {
+        ips: failures.size,
+        blocked: blockedUntil.size,
+        unknownKeys: unknownKeys.size,
+        limitedKeys: limitedKeys.size,
+        knownKeys: knownKeys.size,
+        budgets: budgets.size,
+      };
     },
   };
 }

@@ -120,7 +120,7 @@
    "testSources": [
     {
      "path": "native/APIAccessTests",
-     "sha256": "114d1838ae661d0716dd8bfb0bc2486ab4582484e2750e29bba818901a810ad1"
+     "sha256": "c7b569867019a7e36daa408ef9f01e026e29624a7d78ebd80359e0c4d317d81a"
     }
    ],
    "fixtures": []
@@ -2630,7 +2630,7 @@
   },
   "openApiWorkers": {
    "path": "__tests__/openApiWorkers.test.js",
-   "sha256": "7dd394537d8b5f9ca91d2987ff76ccb65703a7dd9d1f93eaf20f571fa76e0ad7"
+   "sha256": "92e311d077918db6276a91a1b42f06176ba98863ee5861bdd851caa465e6b74b"
   },
   "paymentLink": {
    "path": "__tests__/paymentLink.test.js",
