@@ -57,6 +57,8 @@ sh "$ROOT_DIR/native/run-lead-source-tests.sh"
 # Phase 32: quote expiration dates (pure policy + shared expiry vectors with the Worker).
 sh "$ROOT_DIR/native/run-quote-expiry-tests.sh"
 sh "$ROOT_DIR/native/run-quote-expiry-store-tests.sh"
+# Phase 28: tips on online payments (ledger, cash basis, Money card, CSV/package rows, Settings toggle).
+sh "$ROOT_DIR/native/run-tips-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-pdf-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-delivery-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-message-draft-tests.sh"

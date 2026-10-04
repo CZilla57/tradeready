@@ -20,7 +20,7 @@ afterEach(() => w && w.restore());
 const pTok = (over = {}) => mintInvoicePayToken(SECRET, { userId: USER, invoiceId: 'inv1', ...over });
 const viewP = (token, extra = {}) => view(ENV, { stripe: extra.stripe || fakeStripe(), query: { t: token, ...extra.query }, nowSec: NOW_SEC });
 
-const INVOICE_KEYS = ['amountDue', 'autopay', 'businessName', 'depositRequested', 'description', 'due', 'invoiceNumber', 'kind', 'paid', 'paidAt', 'receipt'];
+const INVOICE_KEYS = ['amountDue', 'autopay', 'businessName', 'depositRequested', 'description', 'due', 'invoiceNumber', 'kind', 'paid', 'paidAt', 'receipt', 'tips'];
 const OFFER_KEYS = ['amount', 'cadence', 'consentText', 'consentVersion', 'isUpdate', 'planDescription'];
 
 describe('pay view — invoice (t)', () => {
@@ -41,6 +41,7 @@ describe('pay view — invoice (t)', () => {
     assert.equal(res.body.paid, false);
     assert.equal(res.body.paidAt, null);
     assert.equal(res.body.receipt, null);
+    assert.equal(res.body.tips, null, 'tips are off unless the owner turned them on (Phase 28)');
     assert.equal(res.body.autopay.active, null);
     assert.deepEqual({ ...res.body.autopay.offer, consentText: undefined }, {
       planDescription: 'Quarterly HVAC maintenance', amount: 120, cadence: 'every month',
@@ -202,7 +203,7 @@ describe('pay view — receipt after Checkout (t + session_id)', () => {
     w = W.world();
     const stripe = fakeStripe({ 'checkout.sessions.retrieve': async () => session({ metadata: { invoiceId: 'inv1', tr_enrollment: 'x' } }) });
     const res = await viewP(pTok(), { stripe, query: { session_id: 'cs_test_1' } });
-    assert.deepEqual(res.body.receipt, { status: 'paid', amountPaid: 120, total: 120, cardBrand: 'Visa', last4: '4242', autopay: true });
+    assert.deepEqual(res.body.receipt, { status: 'paid', amountPaid: 120, total: 120, invoiceAmount: 120, tip: null, cardBrand: 'Visa', last4: '4242', autopay: true });
     const [call] = stripe.callsTo('checkout.sessions.retrieve');
     assert.deepEqual(call.args, ['cs_test_1', { expand: ['payment_intent.latest_charge'] }, { stripeAccount: W.ACCOUNT }]);
   });
@@ -331,5 +332,103 @@ describe('pay view route', () => {
     const handler = createPayViewHandler({ stripeFactory: () => fakeStripe() });
     const res = await handler(fakeC({ method: 'GET', query: { t: pTok() }, env: ENV }));
     assert.deepEqual([res.status, res.body.code], [500, 'server_error']);
+  });
+});
+
+// Phase 28 (tips spec §3, §4.1, §8): the `tips` block exists only for an
+// unpaid invoice, paid for its full live balance, through a link that was not
+// minted as a deposit, when the owner's settings say tipsEnabled === true.
+describe('pay view — tips (Phase 28)', () => {
+  const ON = { settings: [W.settingsRow({ tipsEnabled: true })] };
+  const partlyPaid = (amount = 20) => W.invoiceRow({ payments: [{ id: 'p1', amount, date: '2026-10-02', method: 'cash' }] });
+
+  test('enabled + unpaid + full balance → { presetsPercent, baseAmount } with exactly those keys', async () => {
+    w = W.world(ON);
+    const res = await viewP(pTok());
+    assert.deepEqual(res.body.tips, { presetsPercent: [10, 15, 20], baseAmount: 120 });
+    assert.deepEqual(Object.keys(res.body.tips).sort(), ['baseAmount', 'presetsPercent']);
+  });
+
+  test('a link minted for the full balance explicitly still offers a tip; baseAmount is the live balance', async () => {
+    w = W.world({ ...ON, invoices: [partlyPaid(20)] });
+    assert.deepEqual((await viewP(pTok())).body.tips, { presetsPercent: [10, 15, 20], baseAmount: 100 });
+    assert.deepEqual((await viewP(pTok({ cents: 12000, balanceCents: 12000 }))).body.tips.baseAmount, 100);
+  });
+
+  test('off unless tipsEnabled is exactly true (absent, false, null, "true", 1)', async () => {
+    for (const tipsEnabled of [undefined, false, null, 'true', 1]) {
+      w = W.world({ settings: [W.settingsRow(tipsEnabled === undefined ? {} : { tipsEnabled })] });
+      assert.equal((await viewP(pTok())).body.tips, null, String(tipsEnabled));
+      w.restore();
+      w = null;
+    }
+  });
+
+  test('absent for a deposit link (before and after the deposit is paid) and for a stale partial ask', async () => {
+    w = W.world(ON);
+    assert.equal((await viewP(pTok({ cents: 5000, balanceCents: 12000 }))).body.tips, null);
+    assert.equal((await viewP(pTok({ cents: 5000 }))).body.tips, null);
+    w.restore();
+    // The deposit has been paid: the link now asks for the live balance, but it is still a deposit link.
+    w = W.world({ ...ON, invoices: [W.invoiceRow({ amount: 300, payments: [{ id: 'p1', amount: 100, date: '2026-10-02', method: 'stripe' }] })] });
+    const res = await viewP(pTok({ cents: 10000, balanceCents: 30000 }));
+    assert.equal(res.body.amountDue, 200);
+    assert.equal(res.body.tips, null);
+  });
+
+  test('absent on a paid invoice, even with a receipt', async () => {
+    w = W.world({ ...ON, invoices: [W.invoiceRow({ payments: [{ id: 'p1', amount: 120, date: '2026-10-02', method: 'stripe' }] })] });
+    const res = await viewP(pTok());
+    assert.equal(res.body.paid, true);
+    assert.equal(res.body.tips, null);
+  });
+
+  test('absent from the setup and manage views (other kinds)', async () => {
+    const e = W.enrollmentRow();
+    w = W.world({ ...ON, enrollments: [e] });
+    const s = await view(ENV, { query: { s: mintSetupToken(SECRET, { userId: USER, planId: 'ri1', customerId: 'c1', nowSec: NOW_SEC }) }, nowSec: NOW_SEC });
+    assert.equal(s.status, 200);
+    assert.equal('tips' in s.body, false);
+    const m = await view(ENV, { query: { m: mintManageToken(SECRET, { userId: USER, enrollmentId: e.id }) }, nowSec: NOW_SEC });
+    assert.equal(m.status, 200);
+    assert.equal('tips' in m.body, false);
+  });
+
+  describe('receipt split', () => {
+    const session = (over = {}) => ({
+      id: 'cs_test_1', mode: 'payment', status: 'complete', payment_status: 'paid', amount_total: 13800,
+      metadata: { invoiceId: 'inv1', tr_kind: 'invoice', tr_invoice_cents: '12000', tr_tip_cents: '1800' },
+      payment_intent: { id: 'pi_1', latest_charge: { payment_method_details: { card: { brand: 'visa', last4: '4242' } } } },
+      ...over,
+    });
+    const receiptFor = async (s) => {
+      const stripe = fakeStripe({ 'checkout.sessions.retrieve': async () => s });
+      return (await viewP(pTok(), { stripe, query: { session_id: 'cs_test_1' } })).body.receipt;
+    };
+
+    test('a tipped session: invoiceAmount + tip = total', async () => {
+      w = W.world(ON);
+      assert.deepEqual(await receiptFor(session()), { status: 'paid', amountPaid: 138, total: 138, invoiceAmount: 120, tip: 18, cardBrand: 'Visa', last4: '4242', autopay: false });
+    });
+
+    test('no tip metadata: tip is null and invoiceAmount is the total (legacy and tip-less sessions)', async () => {
+      w = W.world(ON);
+      const plain = await receiptFor(session({ amount_total: 12000, metadata: { invoiceId: 'inv1', tr_kind: 'invoice', tr_invoice_cents: '12000' } }));
+      assert.deepEqual([plain.invoiceAmount, plain.tip, plain.total], [120, null, 120]);
+      const legacy = await receiptFor(session({ amount_total: 12000, metadata: { invoiceId: 'inv1' } }));
+      assert.deepEqual([legacy.invoiceAmount, legacy.tip, legacy.total], [120, null, 120]);
+    });
+
+    test('a mismatched split shows the whole amount (the same rule the webhook books by)', async () => {
+      w = W.world(ON);
+      const r = await receiptFor(session({ amount_total: 13900 }));
+      assert.deepEqual([r.invoiceAmount, r.tip, r.total], [139, null, 139]);
+    });
+
+    test('the receipt shows the tip even if tips have since been turned off', async () => {
+      w = W.world();
+      const r = await receiptFor(session());
+      assert.deepEqual([r.invoiceAmount, r.tip, r.total], [120, 18, 138]);
+    });
   });
 });

@@ -406,6 +406,13 @@ struct InvoiceDetailView: View {
                                     Text("\(payment.date.shortDate) · \(payment.method)")
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
+                                // Phase 28 (tips spec §6.3): the tip rides beside the
+                                // payment; it is never part of the amount above.
+                                if let tip = payment.tip, tip > 0 {
+                                    Text("+ \(tip.currency) tip")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .accessibilityLabel("plus \(tip.currency) tip")
+                                }
                                 if payment.id.hasPrefix("legacy_") {
                                     Text("Recorded before itemized history").font(.caption).italic().foregroundStyle(.secondary)
                                 } else if !payment.note.isEmpty {

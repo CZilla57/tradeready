@@ -1158,17 +1158,22 @@ public extension Canonical {
         public var method: PaymentMethod
         public var note, stripeSessionId: String?
         public var voidedAt: DateString?
+        /// Phase 28 (tips spec §5, §6.1): the tip the customer added on the
+        /// pay page, in dollars. Written only by the Stripe webhook; `amount`
+        /// stays the invoice portion, so balances never see it. Absent = no tip.
+        public var tipAmount: Decimal?
         public var preservation: Preservation
         public init(from decoder: Decoder) throws {
             var o = try ObjectReader(decoder); id = try o.required("id"); amount = try o.required("amount")
             date = try o.required("date"); method = try o.required("method"); note = try o.optional("note")
-            stripeSessionId = try o.optional("stripeSessionId"); voidedAt = try o.optional("voidedAt"); preservation = o.finish()
+            stripeSessionId = try o.optional("stripeSessionId"); voidedAt = try o.optional("voidedAt")
+            tipAmount = try o.optional("tipAmount"); preservation = o.finish()
         }
         public func encode(to encoder: Encoder) throws {
             var o = ObjectWriter(preservation); try o.put(id, for: "id"); try o.put(amount, for: "amount")
             try o.put(date, for: "date"); try o.put(method, for: "method"); try o.putOptional(note, for: "note")
             try o.putOptional(stripeSessionId, for: "stripeSessionId"); try o.putOptional(voidedAt, for: "voidedAt")
-            try o.encode(to: encoder)
+            try o.putOptional(tipAmount, for: "tipAmount"); try o.encode(to: encoder)
         }
     }
 
@@ -1652,6 +1657,9 @@ public extension Canonical {
         public var reviewRequestDelayHours: Int
         /// Phase 32: integer 0…365. Absent = 30; 0 = estimates don't expire.
         public var estimateValidityDays: Int?
+        /// Phase 28 (tips spec §2): "Let customers add a tip". Absent or false
+        /// = off. The Worker reads it at pay-view and checkout time.
+        public var tipsEnabled: Bool?
         public var preservation: Preservation
 
         public init(from decoder: Decoder) throws {
@@ -1684,6 +1692,7 @@ public extension Canonical {
             googleReviewLink = try o.defaulted("googleReviewLink", to: "")
             reviewRequestDelayHours = try o.defaulted("reviewRequestDelayHours", to: 3)
             estimateValidityDays = try o.optional("estimateValidityDays")
+            tipsEnabled = try o.optional("tipsEnabled")
             preservation = o.finish()
         }
 
@@ -1713,6 +1722,7 @@ public extension Canonical {
             try o.putDefaulted(reviewRequestEnabled, for: "reviewRequestEnabled"); try o.putDefaulted(reviewRequestTemplate, for: "reviewRequestTemplate")
             try o.putDefaulted(googleReviewLink, for: "googleReviewLink"); try o.putDefaulted(reviewRequestDelayHours, for: "reviewRequestDelayHours")
             try o.putOptional(estimateValidityDays, for: "estimateValidityDays")
+            try o.putOptional(tipsEnabled, for: "tipsEnabled")
             try o.encode(to: encoder)
         }
     }

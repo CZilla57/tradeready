@@ -55,9 +55,14 @@ function planName(description) {
 }
 
 // Payment receipt (pay-page payments) and autopay receipt (spec §4.7).
-function buildReceiptEmail({ settings, to, customerName, invoiceNumber, amountCents, card, remainingCents, date, autopay = false, manageUrl }) {
+// `amountCents` is the invoice payment. A pay-page payment with a tip
+// (Phase 28, tips spec §4.4) passes `tipCents` and the receipt itemizes
+// invoice payment / tip / total charged; without one the text is unchanged.
+// Autopay receipts never carry a tip.
+function buildReceiptEmail({ settings, to, customerName, invoiceNumber, amountCents, tipCents = 0, card, remainingCents, date, autopay = false, manageUrl }) {
   const number = clean(invoiceNumber, 60);
   const manage = autopay ? safeLink(manageUrl) : null;
+  const tip = !autopay && Number.isInteger(tipCents) && tipCents > 0 ? tipCents : 0;
   const lines = [
     greeting(customerName),
     '',
@@ -66,7 +71,9 @@ function buildReceiptEmail({ settings, to, customerName, invoiceNumber, amountCe
       : `Thanks for your payment to ${biz(settings)}.`,
     '',
     `Invoice ${number || '(no number)'}`,
-    `Amount paid: ${money(amountCents)}`,
+    ...(tip
+      ? [`Invoice payment: ${money(amountCents)}`, `Tip: ${money(tip)}`, `Total charged: ${money(amountCents + tip)}`]
+      : [`Amount paid: ${money(amountCents)}`]),
     ...(card ? [`Card: ${card}`] : []),
     `Date: ${date}`,
     remainingCents > 0 ? `Remaining balance: ${money(remainingCents)}` : 'This invoice is now paid in full.',

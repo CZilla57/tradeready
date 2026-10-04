@@ -211,6 +211,13 @@ struct NativeMoneySummaryCardView: View {
                 )
             }
 
+            // Phase 28 (tips spec §6.3): income already includes tips.
+            if let tipsCaption = card.tipsCaption {
+                Text(tipsCaption)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
             if let margin = card.marginPercent {
                 VStack(alignment: .leading, spacing: 4) {
                     NativeMoneyTrack(fraction: card.marginFraction, tone: card.netProfitTone, height: 6)

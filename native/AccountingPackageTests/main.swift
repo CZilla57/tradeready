@@ -186,6 +186,7 @@ private func testSummaryAndPackage() {
       "range_start": "2026-01-01",
       "range_end": "2026-12-31",
       "cash_collected": 1000,
+      "tips_collected": 0,
       "voided_amount": 0,
       "expenses_total": 250.5,
       "net_cash": 749.5,
@@ -217,13 +218,21 @@ private func testSummaryAndPackage() {
     // (12 bytes) plus one empty field per customer row (1 byte each). The
     // stored ZIP's headers are fixed-width, so the archive grows by exactly
     // that; the CRC-32 is re-pinned to the native bytes.
+    //
+    // Phase 28 (tips, spec §6.3) deliberately adds two more things for every
+    // package, with or without tips: the always-present `tips_collected` key in
+    // summary.json and one README note. The stored ZIP grows by exactly those
+    // bytes and the CRC-32 is re-pinned again.
     let leadSourceHeaderBytes = ",Lead source".utf8.count
-    expectEqual(first.bytes.count, 3931 + leadSourceHeaderBytes + 1, "package byte length is the RN oracle plus the lead-source column")
-    expectEqual(NativeZipArchive.crc32(first.bytes), 2_615_559_630, "package CRC-32 (RN oracle + lead-source column)")
+    let tipsSummaryBytes = "  \"tips_collected\": 0,\n".utf8.count
+    let tipsReadmeBytes = "  - Tips appear as separate rows with Note \"Tip\". They are income but not invoice payments, so invoices.csv Amount Paid excludes them.\n".utf8.count
+    let tipsBytes = tipsSummaryBytes + tipsReadmeBytes
+    expectEqual(first.bytes.count, 3931 + leadSourceHeaderBytes + 1 + tipsBytes, "package byte length is the RN oracle plus the lead-source column and the tips lines")
+    expectEqual(NativeZipArchive.crc32(first.bytes), 3_164_589_493, "package CRC-32 (RN oracle + lead-source column + tips lines)")
 
     let emptyPackage = NativeAccountingPackage.buildAccountingPackage(NativePackageInput(), start: jan1, end: dec31)
-    expectEqual(emptyPackage.bytes.count, 3626 + leadSourceHeaderBytes, "empty package byte length is the RN oracle plus the lead-source header")
-    expectEqual(NativeZipArchive.crc32(emptyPackage.bytes), 3_621_479_273, "empty package CRC-32 (RN oracle + lead-source header)")
+    expectEqual(emptyPackage.bytes.count, 3626 + leadSourceHeaderBytes + tipsBytes, "empty package byte length is the RN oracle plus the lead-source header and the tips lines")
+    expectEqual(NativeZipArchive.crc32(emptyPackage.bytes), 1_917_782_463, "empty package CRC-32 (RN oracle + lead-source header + tips lines)")
 
     let expectedOrder = [
         "invoices.csv", "invoice-line-items.csv", "active-payments.csv", "payment-activity.csv",

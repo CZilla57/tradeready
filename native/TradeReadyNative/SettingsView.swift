@@ -531,6 +531,12 @@ struct PaymentsSettings: View {
                             }
                         }.disabled(onboardBusy)
                     }
+                    // Phase 28 (tips spec §2): written through the same settings
+                    // save path as the neighbouring toggles; the existing sync
+                    // pushes it to the Worker with the settings blob.
+                    Toggle("Let customers add a tip", isOn: $store.settings.tipsEnabled)
+                    Text("Customers paying an invoice online can add an optional tip (10%, 15%, 20% or their own amount). Tips are recorded separately from the invoice and count as income. Not offered on deposits or automatic payments.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Button { confirmingDisconnect = true } label: {
                         HStack {
                             Text("Disconnect").foregroundStyle(Color.tradeDangerText)

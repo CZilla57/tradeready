@@ -5,7 +5,8 @@ import Foundation
 // Pure port of `utils/businessSnapshot.ts` (`aggregateSnapshot` +
 // `buildTaxSnapshotBlock`). The snapshot is the compact business summary the AI
 // coach may cite, so every figure comes from the shared engines —
-// `PaymentLedger` (balances), `NativeCashBasis.collectedByPeriod` (revenue),
+// `PaymentLedger` (balances), `NativeCashBasis.receivedByPeriod` (revenue,
+// tips included since Phase 28),
 // `NativeChangeOrders.billableTotal` (job value), and `TaxEstimateEngine` — and
 // nothing here mutates canonical state.
 //
@@ -107,7 +108,8 @@ enum NativeBusinessSnapshotEngine {
             start: NativeCashBasis.localDate(year: lastYear, month: lastMonth, day: 1),
             end: NativeCashBasis.localDate(year: lastYear, month: lastMonth + 1, day: 0)
         )
-        let revenue = NativeCashBasis.collectedByPeriod(
+        // Phase 28 (tips spec §6.3): the coach revenue series counts tips.
+        let revenue = NativeCashBasis.receivedByPeriod(
             invoices: invoices, ranges: [thisMonthRange, lastMonthRange]
         )
 

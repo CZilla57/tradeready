@@ -6,6 +6,7 @@
 
 const { centsToDollars, clean, cardLabel, cardLabelWithExpiry, brandName } = require('../autopay/format.js');
 const { cadencePhrase, renderConsent, CONSENT_VERSION } = require('../autopay/consentText.js');
+const { splitSessionAmount } = require('./tips.js');
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -47,8 +48,10 @@ function activeBlock(enrollment) {
 }
 
 // `receipt` comes from receiptFromSession below (null without a matching
-// session).
-function invoiceView({ businessName, invoice, paid, balanceCents, depositCents, planRow, offer, activeEnrollment, receipt }) {
+// session). `tips` is lib/pay/tips.js tipsBlock (Phase 28): null unless the
+// owner turned tips on and this visit pays the full balance of an unpaid
+// invoice.
+function invoiceView({ businessName, invoice, paid, balanceCents, depositCents, planRow, offer, activeEnrollment, receipt, tips }) {
   const autopayOffer = paid ? null : offerBlock({ businessName, planRow, offer });
   const active = activeBlock(activeEnrollment);
   return {
@@ -62,23 +65,29 @@ function invoiceView({ businessName, invoice, paid, balanceCents, depositCents, 
     paid: !!paid,
     paidAt: paid ? dateOrNull(invoice.paidAt) || lastPaymentDate(invoice) : null,
     autopay: autopayOffer || active ? { offer: autopayOffer, active } : null,
+    tips: paid ? null : tips || null,
     receipt: receipt || null,
   };
 }
 
 // Checkout Session → receipt block, ONLY when the session belongs to this
 // invoice (metadata match); anything else is null so a session id from
-// another invoice reveals nothing.
+// another invoice reveals nothing. `invoiceAmount` / `tip` (Phase 28) use the
+// webhook's exact split (lib/pay/tips.js splitSessionAmount), so the return
+// page and the ledger always agree; `tip` is null without one.
 function receiptFromSession(session, invoiceId) {
   if (!session || !session.metadata || session.metadata.invoiceId !== invoiceId || session.mode !== 'payment') return null;
   if (session.status !== 'complete') return null;
   const charge = session.payment_intent && typeof session.payment_intent === 'object' ? session.payment_intent.latest_charge : null;
   const card = charge && typeof charge === 'object' && charge.payment_method_details ? charge.payment_method_details.card : null;
   const total = centsToDollars(session.amount_total);
+  const split = splitSessionAmount(session);
   return {
     status: session.payment_status === 'paid' ? 'paid' : 'processing',
     amountPaid: total,
     total,
+    invoiceAmount: centsToDollars(split.invoiceCents),
+    tip: split.tipCents > 0 ? centsToDollars(split.tipCents) : null,
     cardBrand: card ? brandName(card.brand) : null,
     last4: card && /^\d{4}$/.test(String(card.last4 || '')) ? card.last4 : null,
     autopay: !!session.metadata.tr_enrollment,

@@ -17,12 +17,18 @@
 //     that text, version, time, IP and user agent. A stale version or a
 //     changed amount is a 409 "please reload", never a silent record.
 //   - Card data never touches TradeReady: entry is on Stripe Checkout.
+//   - Tips (Phase 28, tips spec §4): offered only on a full-balance payment
+//     of an unpaid invoice when the owner's settings say tipsEnabled; the
+//     setting is re-read at checkout, the tip is capped at the invoice amount
+//     being paid, and it rides as a SEPARATE "Tip" line with server-set
+//     metadata (tr_tip_cents) so the webhook books it apart from the invoice.
 //
 // Every result is { status, body }.
 
 const { balanceDue, isFullyPaid, PAID_EPSILON } = require('../paymentMath.js');
 const { verifyPayToken, mintManageToken, mintSetupToken, payPageUrl, payPublicBase, tokenCharge } = require('./payToken.js');
 const { invoiceView, receiptFromSession, setupView, manageView } = require('./payView.js');
+const { tipsEnabled, tipBaseCents, tipsBlock, parseTipCents } = require('./tips.js');
 const { evaluateInvoiceOffer, evaluatePlanSetup, planCents, isPlanOfferable, activeEnrollmentForPlan } = require('../autopay/offer.js');
 const { renderConsent, checkoutSubmitMessage, checkoutSetupMessage, CONSENT_VERSION } = require('../autopay/consentText.js');
 const { dollarsToCents, clean } = require('../autopay/format.js');
@@ -44,11 +50,14 @@ const MESSAGES = {
   changed: 'This page is out of date. Please reload.',
   maybe_paid: 'This invoice may have just been paid. Reload.',
   busy: 'Please try again in a moment.',
+  tips_off: 'Tips are no longer offered. Please reload.',
+  tip_invalid: "Please check the tip amount. It can't be more than the invoice.",
   server_error: 'Something went wrong. Please try again.',
 };
 const STATUS = {
   bad_request: 400, invalid: 404, not_ready: 409, gone: 410, unavailable: 410, expired: 410,
-  paid: 409, in_flight: 409, changed: 409, maybe_paid: 409, busy: 409, server_error: 500,
+  paid: 409, in_flight: 409, changed: 409, maybe_paid: 409, busy: 409, tips_off: 409, tip_invalid: 400,
+  server_error: 500,
 };
 
 function fail(code, businessName) {
@@ -141,6 +150,7 @@ async function viewInvoice(env, { stripe, token, sessionId, nowSec }) {
     enrollments: ctx.enrollments,
     isFullBalance: chargeCents === balanceCents,
   });
+  const tipBase = tipBaseCents({ settings: ctx.settings, paid, payload: v.payload, balanceCents, chargeCents });
   return {
     status: 200,
     body: invoiceView({
@@ -153,6 +163,7 @@ async function viewInvoice(env, { stripe, token, sessionId, nowSec }) {
       offer,
       activeEnrollment: active,
       receipt,
+      tips: tipsBlock(tipBase),
     }),
   };
 }
@@ -339,6 +350,21 @@ async function checkoutInvoice(env, { stripe, body, ip, userAgent, nowMs }) {
   if (cents <= 0 || balanceCents / 100 <= PAID_EPSILON) return fail('paid', biz);
   if (charges.some((ch) => ch.status === 'claimed')) return fail('in_flight', biz);
 
+  // The tip (Phase 28, spec §4.2), all before any Stripe call: re-read the
+  // owner's setting (it may have been turned off since the page loaded),
+  // refuse it on anything but a full-balance payment (a deposit), refuse it
+  // when the amount the page based it on is stale, and cap it at the
+  // invoice amount being paid. Without a tip nothing below changes.
+  const tip = parseTipCents(body.tipCents);
+  if (!tip.ok) return fail('tip_invalid', biz);
+  const tipCents = tip.cents;
+  if (tipCents > 0) {
+    if (!tipsEnabled(ctx.settings)) return fail('tips_off', biz);
+    if (tipBaseCents({ settings: ctx.settings, paid: false, payload: v.payload, balanceCents, chargeCents: cents }) === null) return fail('tips_off', biz);
+    if (body.baseCents !== undefined && body.baseCents !== cents) return fail('changed', biz);
+    if (tipCents > cents) return fail('tip_invalid', biz);
+  }
+
   let offer = null;
   let consent = null;
   if (optIn) {
@@ -355,7 +381,9 @@ async function checkoutInvoice(env, { stripe, body, ip, userAgent, nowMs }) {
   }
 
   const bucket = Math.floor(nowMs / TEN_MINUTES_MS);
-  const idemKey = `tr-co:${invoiceId}:${cents}:${optIn ? 'a' : 'n'}:${bucket}`;
+  // The tip is part of the key, so a double-click replays the same session
+  // and a changed tip mints a new one (and expires the old one below).
+  const idemKey = `tr-co:${invoiceId}:${cents}${tipCents > 0 ? `:t${tipCents}` : ''}:${optIn ? 'a' : 'n'}:${bucket}`;
   try {
     await expireOtherOpenSessions(stripe, ctx.accountId, invoiceId, idemKey, nowSec);
   } catch (err) {
@@ -389,11 +417,15 @@ async function checkoutInvoice(env, { stripe, body, ip, userAgent, nowMs }) {
   const params = {
     mode: 'payment',
     payment_method_types: ['card'],
-    line_items: [{ price_data: { currency: 'usd', unit_amount: cents, product_data: { name } }, quantity: 1 }],
+    line_items: [
+      { price_data: { currency: 'usd', unit_amount: cents, product_data: { name } }, quantity: 1 },
+      ...(tipCents > 0 ? [{ price_data: { currency: 'usd', unit_amount: tipCents, product_data: { name: 'Tip' } }, quantity: 1 }] : []),
+    ],
     metadata: {
       invoiceId,
       tr_kind: 'invoice',
       tr_invoice_cents: String(cents),
+      ...(tipCents > 0 ? { tr_tip_cents: String(tipCents) } : {}),
       tr_idem: idemKey,
       ...(enrollment ? { tr_enrollment: enrollment.id } : {}),
     },

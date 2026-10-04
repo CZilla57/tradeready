@@ -21,6 +21,17 @@
 //   A pay-page PaymentIntent must NEVER be booked from a PaymentIntent event:
 //   its ledger id is the session's (forward note for Phase 18).
 //
+// Phase 28 (tips spec §4.3): a pay-page session may carry a second "Tip"
+// line. The SAME ledger entry records `amount` = the invoice portion and
+// `tipAmount` = the tip, split from the server-set metadata tr_invoice_cents
+// + tr_tip_cents only when they add up exactly to amount_total
+// (lib/pay/tips.js splitSessionAmount). Otherwise — legacy Payment Link
+// sessions, or a mismatch that should never happen — the whole amount_total
+// is booked as the invoice payment exactly as before (a mismatch is logged as
+// tip_split_mismatch), so money is never dropped. paid/paidAt still come from
+// `amount` only (paymentMath.js unchanged), so a tip never pays or overpays
+// an invoice.
+//
 // The invoice's `payments` array is the source of truth for what's been paid;
 // `paid`/`paidAt` are written alongside it as a best-effort CACHE (not the
 // source of truth) so simple reads don't need to sum the ledger. A FUTURE
@@ -65,6 +76,7 @@ import { cardLabel } from '../../../lib/autopay/format.js';
 import { fetchSettings } from '../../../lib/autopay/store.js';
 import { sendCustomerEmail } from '../../../lib/ownerAlert.js';
 import { balanceDue } from '../../../lib/paymentMath.js';
+import { splitSessionAmount } from '../../../lib/pay/tips.js';
 
 // The PaymentIntent behind a paid session, with its card and saved payment
 // method expanded. Null on any error (callers degrade, never fail).
@@ -99,7 +111,7 @@ async function activate(env, stripe, { enrollmentId, event, session, intent, inv
   }
 }
 
-async function sendPaymentReceipt(env, { result, session, intent }) {
+async function sendPaymentReceipt(env, { result, session, intent, split }) {
   try {
     const invoice = result.invoice || {};
     const charge = intent && intent.latest_charge && typeof intent.latest_charge === 'object' ? intent.latest_charge : null;
@@ -110,7 +122,8 @@ async function sendPaymentReceipt(env, { result, session, intent }) {
       to: session.customer_details && session.customer_details.email,
       customerName: invoice.customer,
       invoiceNumber: invoice.number,
-      amountCents: session.amount_total,
+      amountCents: split.invoiceCents,
+      tipCents: split.tipCents,
       card: card ? cardLabel(card.brand, card.last4) : null,
       remainingCents: Math.round(balanceDue(invoice) * 100),
       date: new Date().toISOString().split('T')[0],
@@ -184,14 +197,22 @@ export function createStripeWebhookHandler({ stripeFactory = makeStripe } = {}) 
       return c.json({ received: true, skipped: true }, 200);
     }
 
+    const split = splitSessionAmount(session);
+    if (split.mismatch) {
+      console.warn(
+        `[stripe/webhook] tip_split_mismatch ${session.id}: tr_invoice_cents=${String(metadata.tr_invoice_cents)} ` +
+        `tr_tip_cents=${String(metadata.tr_tip_cents)} amount_total=${String(session.amount_total)} — booking the whole amount`
+      );
+    }
+
     let result;
     try {
       result = await recordStripePayment(c.env, {
         invoiceId,
         connectedAccountId: event.account,
         ledgerId: `stripe_${session.id}`,
-        amount: (session.amount_total || 0) / 100,
-        extra: { stripeSessionId: session.id },
+        amount: split.invoiceCents / 100,
+        extra: { stripeSessionId: session.id, ...(split.tipCents > 0 ? { tipAmount: split.tipCents / 100 } : {}) },
       });
     } catch (err) {
       console.error('[stripe/webhook] failed to mark invoice paid:', err.message);
@@ -214,7 +235,7 @@ export function createStripeWebhookHandler({ stripeFactory = makeStripe } = {}) 
         invoiceEmail: result.invoice ? result.invoice.email : null,
       });
     }
-    if (wantsReceipt) await sendPaymentReceipt(c.env, { result, session, intent });
+    if (wantsReceipt) await sendPaymentReceipt(c.env, { result, session, intent, split });
     if (session.payment_link) await deactivatePaymentLink(stripe, session, event.account);
 
     return c.json({ received: true }, 200);

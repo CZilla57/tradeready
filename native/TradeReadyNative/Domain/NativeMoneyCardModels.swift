@@ -105,9 +105,15 @@ struct NativeMoneySummaryCard: Equatable {
     /// Present only when `income > 0` (RN hides the whole margin block otherwise).
     var marginPercent: Int?
     var marginFraction: Double
+    /// Phase 28 (tips spec §6.3): the tips inside `income` for the window.
+    var tips: Decimal = 0
 
     var isProfitable: Bool { netProfit >= 0 }
     var netProfitTone: NativeMoneyCardTone { isProfitable ? .success : .danger }
+    /// "Includes $Y in tips" under the figures, only when the window has tips.
+    var tipsCaption: String? {
+        tips > 0 ? "Includes \(NativeMoneyFormat.money(tips)) in tips" : nil
+    }
 
     static func make(
         invoices: [Canonical.Invoice],
@@ -117,7 +123,10 @@ struct NativeMoneySummaryCard: Equatable {
         previousRange: NativeDateRange?,
         label: String
     ) -> NativeMoneySummaryCard {
-        let income = NativeCashBasis.collected(invoices: invoices, start: start, end: end)
+        // Phase 28 (tips spec §6.3): income is cash received, tips included;
+        // net profit and the previous-window comparison follow.
+        let income = NativeCashBasis.received(invoices: invoices, start: start, end: end)
+        let tips = NativeCashBasis.tipsCollected(invoices: invoices, start: start, end: end)
         let expenseTotal = Self.expenseTotal(expenses, start: start, end: end)
         let profit = income - expenseTotal
 
@@ -125,7 +134,7 @@ struct NativeMoneySummaryCard: Equatable {
         var previousProfit: Decimal?
         var previousExpenses: Decimal?
         if let previousRange {
-            previousIncome = NativeCashBasis.collected(
+            previousIncome = NativeCashBasis.received(
                 invoices: invoices, start: previousRange.start, end: previousRange.end
             )
             previousExpenses = Self.expenseTotal(
@@ -150,7 +159,8 @@ struct NativeMoneySummaryCard: Equatable {
                 current: profit, previous: previousProfit
             ),
             marginPercent: margin.map { NativeMoneyFormat.round($0) },
-            marginFraction: margin ?? 0
+            marginFraction: margin ?? 0,
+            tips: tips
         )
     }
 
@@ -205,7 +215,7 @@ struct NativeMoneyMonthlyChartCard: Equatable {
                 end: NativeCashBasis.localDate(year: $0.year, month: $0.month + 1, day: 0)
             )
         }
-        let income = NativeCashBasis.collectedByPeriod(invoices: invoices, ranges: ranges)
+        let income = NativeCashBasis.receivedByPeriod(invoices: invoices, ranges: ranges)
         let rows = months.enumerated().map { index, month -> NativeMoneyMonthlyChartRow in
             let monthExpenses = expenses.reduce(Decimal.zero) { total, expense in
                 guard let date = NativeCashBasis.parseLocalDate(expense.date) else { return total }

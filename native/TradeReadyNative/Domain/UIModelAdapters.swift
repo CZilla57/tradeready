@@ -877,6 +877,8 @@ enum CanonicalUIAdapters {
             "googleReviewLink": .string(value.googleReviewLink),
             "reviewRequestDelayHours": .number(Decimal(value.reviewRequestDelayHours)),
             "estimateValidityDays": .number(Decimal(value.estimateValidityDays)),
+            // Phase 28: absent = off, so a new record writes the key only when on.
+            "tipsEnabled": value.tipsEnabled ? .bool(true) : .null,
             // Native-only preferences stay inside the canonical record's
             // preservation bag instead of a second persisted model.
             "appearance": .string(value.appearance.rawValue),
@@ -1066,6 +1068,8 @@ enum CanonicalUIAdapters {
         if edit.value.reviewRequestDelayHours != original.reviewRequestDelayHours { fields["reviewRequestDelayHours"] = .number(Decimal(edit.value.reviewRequestDelayHours)) }
         // Phase 32: absent reads as 30, so an untouched default never writes the key.
         if edit.value.estimateValidityDays != original.estimateValidityDays { fields["estimateValidityDays"] = .number(Decimal(edit.value.estimateValidityDays)) }
+        // Phase 28: absent reads as off, so an untouched default never writes the key.
+        updateBool(&fields, "tipsEnabled", edit.value.tipsEnabled, original.tipsEnabled)
         if edit.value.appearance != original.appearance { fields["appearance"] = .string(edit.value.appearance.rawValue) }
         if edit.value.bookingEnabled != original.bookingEnabled { fields["bookingEnabled"] = .bool(edit.value.bookingEnabled) }
 
@@ -1108,7 +1112,8 @@ enum CanonicalUIAdapters {
     static func payment(from value: Canonical.Payment, calendar: Calendar = .current) throws -> Payment {
         Payment(id: value.id, amount: double(value.amount), date: try parsed(value.date, field: "payment.date", calendar: calendar),
                 method: displayPaymentMethod(value.method), note: value.note ?? "",
-                voidedAt: try value.voidedAt.map { try parsed($0, field: "payment.voidedAt", calendar: calendar) })
+                voidedAt: try value.voidedAt.map { try parsed($0, field: "payment.voidedAt", calendar: calendar) },
+                tip: value.tipAmount.map(double))
     }
 
     static func invoice(from value: Canonical.Invoice, calendar: Calendar = .current) throws -> Invoice {
@@ -1169,6 +1174,7 @@ enum CanonicalUIAdapters {
         result.reviewRequestDelayHours = value.reviewRequestDelayHours; result.reviewRequestTemplate = value.reviewRequestTemplate
         // Phase 32: absent = 30; a malformed stored value is clamped into 0…365.
         result.estimateValidityDays = min(max(value.estimateValidityDays ?? 30, 0), 365)
+        result.tipsEnabled = value.tipsEnabled ?? false
         if case let .string(raw)? = value.preservation.unknownFields["appearance"] {
             result.appearance = Appearance(rawValue: raw) ?? .system
         }
@@ -1290,15 +1296,21 @@ private extension CanonicalUIAdapters {
         }
         return result
     }
+    /// Phase 24: `stripe` (pay-link, pay-page and autopay payments booked by
+    /// the Worker) shows as "Stripe", matching RN `PaymentHistoryList`'s
+    /// METHOD_LABELS; it read "Other" before. The two maps round-trip it, so
+    /// a re-canonicalized Stripe payment never becomes `other`.
     static func displayPaymentMethod(_ value: String) -> String {
         switch value.lowercased() {
         case "cash": return "Cash"; case "check", "cheque": return "Check"; case "card": return "Card"
+        case "stripe": return "Stripe"
         case "ach", "bank_transfer", "bank transfer": return "ACH"; default: return "Other"
         }
     }
     static func canonicalPaymentMethod(_ value: String) -> String {
         switch value.lowercased() {
         case "cash": return "cash"; case "check", "cheque": return "check"; case "card": return "card"
+        case "stripe": return "stripe"
         case "ach", "bank_transfer", "bank transfer": return "bank_transfer"; default: return "other"
         }
     }
@@ -1314,12 +1326,15 @@ private extension CanonicalUIAdapters {
         return try decode(fields)
     }
     static func newCanonicalPayment(_ value: Payment, calendar: Calendar) throws -> Canonical.Payment {
-        let fields: [String: Canonical.JSONValue] = [
+        var fields: [String: Canonical.JSONValue] = [
             "id": .string(value.id), "amount": .number(Decimal(string: String(value.amount)) ?? 0),
             "date": .string(day(value.date, calendar: calendar)), "method": .string(canonicalPaymentMethod(value.method)),
             "note": value.note.isEmpty ? .null : .string(value.note),
             "voidedAt": value.voidedAt.map { .string(timestamp($0)) } ?? .null
         ]
+        // Phase 28: the UI never creates a tip, but a projected payment that
+        // carries one keeps it on the no-baseline path.
+        if let tip = value.tip { fields["tipAmount"] = number(tip) }
         return try decode(fields)
     }
     static func scheduleFieldsChanged(_ value: BusinessSettings, _ old: BusinessSettings) -> Bool {
