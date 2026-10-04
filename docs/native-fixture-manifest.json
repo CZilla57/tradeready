@@ -364,7 +364,7 @@
    "testSources": [
     {
      "path": "native/CalendarSyncTests",
-     "sha256": "4e9db703f962843a24799b948bb6bc6535448f7a032a7e84e00322e0cc6000e3"
+     "sha256": "545c8aa5991675b912bd1ff13b5660e72e6752317e1acf7d36b30f48fdd6bebd"
     }
    ],
    "fixtures": []
@@ -1715,7 +1715,7 @@
    "testSources": [
     {
      "path": "native/StoreIntegrationTests",
-     "sha256": "e279d9a45dc401ec715129330a7180ed47f6a8514dddec011cb73bcd8f26c3d9"
+     "sha256": "5508821ef16144722ed45b9e66e9508a83119d3a3a1bff9fd060158b9dda9ddc"
     },
     {
      "path": "native/CanonicalTests",
