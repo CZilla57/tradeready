@@ -443,6 +443,12 @@ let scrollRootInventory: [String: Int] = [
     // Phase 12 (12.00b.1, D3): Settings › Cloud Sync › changes not saved.
     "NativeRejectedChangesView.swift|NativeRejectedChangesView|Form": 1,
     "NativeReviewRequestView.swift|NativeReviewRequestView|Form": 1,
+    // Phase 34: the referral share and thank-you sheets, the "Referred by"
+    // picker and Money › Referrals.
+    "NativeReferralShareView.swift|NativeReferralShareView|Form": 1,
+    "NativeReferralRewardSheet.swift|NativeReferralRewardSheet|Form": 1,
+    "NativeCustomerReferralsSection.swift|NativeReferredByPicker|List": 1,
+    "NativeReferralsView.swift|NativeReferralsView|List": 1,
     "NativeRouteView.swift|NativeRouteView|List": 1,
     "NativeScheduleEditorView.swift|NativeScheduleEditorView|Form": 1,
     "NativeScheduleSettingsView.swift|NativeScheduleSettingsView|Form": 1,

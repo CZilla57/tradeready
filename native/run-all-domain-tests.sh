@@ -56,6 +56,9 @@ sh "$ROOT_DIR/native/run-quote-options-store-tests.sh"
 sh "$ROOT_DIR/native/run-job-forms-tests.sh"
 # Phase 27: lead source tracking (normalizer, capture rules, report, coach block).
 sh "$ROOT_DIR/native/run-lead-source-tests.sh"
+# Phase 34: referral program (codes with the Worker's shared vectors, intake
+# decision, credits, report control total, coach block, Today insight).
+sh "$ROOT_DIR/native/run-referral-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-pdf-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-delivery-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-message-draft-tests.sh"

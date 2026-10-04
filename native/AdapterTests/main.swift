@@ -111,6 +111,44 @@ run("customer lead source projects, edits and clears without touching siblings")
     expect(projected.leadSource == "yelp", "the UI projection carries the source")
 }
 
+// Phase 34 (spec 2026-10-03-referral-program-design.md §2, §7): the editor
+// sets only `referredByCustomerId`; the code, its aliases and the reward are
+// canonical-only and survive every editor save through the baseline merge.
+run("customer referrer round-trips and editor saves keep the canonical-only referral fields") {
+    let source: Canonical.Customer = try field("customer", rich)
+    let sourceFields = try object(source)
+    var edit = try CanonicalUIAdapters.edit(source)
+    expect(edit.value.referredByCustomerId == "c-7", "the referrer projects into the UI model")
+
+    edit.value.name = "Ada L."
+    edit.value.notes = "Gate code 1234"
+    let saved = try CanonicalUIAdapters.canonical(from: edit)
+    let savedFields = try object(saved)
+    for key in ["referralCode", "referralCodeAliases", "referralReward", "referredByCustomerId"] {
+        expect(savedFields[key] == sourceFields[key], "an editor save keeps \(key)")
+    }
+
+    edit.value.referredByCustomerId = "c-9"
+    let changed = try CanonicalUIAdapters.canonical(from: edit)
+    expect(changed.referredByCustomerId == "c-9", "the editor can change the referrer")
+    expect(changed.referralReward?.amount == 25, "changing the referrer keeps the reward (it moves with the referral)")
+    edit.value.referredByCustomerId = nil
+    let cleared = try CanonicalUIAdapters.canonical(from: edit)
+    let clearedFields = try object(cleared)
+    expect(clearedFields["referredByCustomerId"] == nil, "clearing the referrer removes the key")
+    expect(clearedFields["referralCode"] == sourceFields["referralCode"], "clearing the referrer keeps the code")
+
+    var draft = Customer(name: "Word Of Mouth")
+    draft.leadSource = "referral"
+    draft.referredByCustomerId = "c-42"
+    let created = try CanonicalUIAdapters.canonical(from: draft)
+    expect(created.referredByCustomerId == "c-42", "a new customer's referrer is written")
+    let projected = try CanonicalUIAdapters.customer(from: created)
+    expect(projected.referredByCustomerId == "c-42", "the UI projection carries the referrer")
+    let plain = try object(CanonicalUIAdapters.canonical(from: Customer(name: "No Referrer")))
+    expect(plain["referredByCustomerId"] == nil && plain["referralCode"] == nil, "a new customer without a referrer has no keys")
+}
+
 run("settings logo reference projects, edits and clears without touching siblings") {
     let source: Canonical.Settings = try field("settings", rich)
     var edit = try CanonicalUIAdapters.edit(source)

@@ -3187,6 +3187,49 @@ struct ScheduleBookingRecoveryTests {
                     "\(id) [Phase 27]: a customer sourced meanwhile keeps it")
         expect(unchanged?.drafts.contains { $0.table == "customers" } == false,
                "\(id) [Phase 27]: …and is not queued")
+
+        // Phase 34 (spec 2026-10-03-referral-program-design.md §5.3): the
+        // recheck makes the same first-touch referrer fill, and a referrer or
+        // another source set after the plan wins.
+        var referrer = known
+        referrer.id = "cust-ref"
+        referrer.name = "Rita Ref"
+        referrer.referralCode = "0123456789abcdef"
+        var referred = workerBooking()
+        referred["referralCode"] = "0123456789abcdef"
+        guard let referredData = try? JSONSerialization.data(withJSONObject: referred),
+              let referredRequest = try? JSONDecoder().decode(Canonical.BookingRequest.self, from: referredData)
+        else {
+            expect(false, "\(id): fixture: the referred booking decodes")
+            return
+        }
+        let referralPlan = NativeBookingIntake.plan(
+            requests: [referredRequest], jobs: [], customers: [complete, referrer], settings: settings,
+            makeCustomerID: { "c-new" }, nowISO: { writeStamp })
+        let referralFill = NativeScheduleBookingPolicy.recheckedIntakePlan(
+            referralPlan, currentRequests: [referredRequest], currentJobs: [], currentCustomers: [complete, referrer])
+        expectEqual(customer(referralFill)?.leadSource, "referral", "\(id) [Phase 34]: the code makes the match a referral")
+        expectEqual(customer(referralFill)?.referredByCustomerId, "cust-ref", "\(id) [Phase 34]: …and the recheck fills the referrer")
+        expect(referralFill?.drafts.contains { $0.table == "customers" && $0.recordId == "cust-sam" } == true,
+               "\(id) [Phase 34]: …and the fill is queued")
+        var referredMeanwhile = complete
+        referredMeanwhile.leadSource = "referral"
+        referredMeanwhile.referredByCustomerId = "cust-other"
+        let referrerRace = NativeScheduleBookingPolicy.recheckedIntakePlan(
+            referralPlan, currentRequests: [referredRequest], currentJobs: [],
+            currentCustomers: [referredMeanwhile, referrer])
+        expectEqual(customer(referrerRace)?.referredByCustomerId, "cust-other",
+                    "\(id) [Phase 34]: a referrer set after the plan wins")
+        expect(referrerRace?.drafts.contains { $0.table == "customers" } == false,
+               "\(id) [Phase 34]: …and nothing is queued for the customer")
+        var otherSourceMeanwhile = complete
+        otherSourceMeanwhile.leadSource = "yelp"
+        let sourceRace = NativeScheduleBookingPolicy.recheckedIntakePlan(
+            referralPlan, currentRequests: [referredRequest], currentJobs: [],
+            currentCustomers: [otherSourceMeanwhile, referrer])
+        expectEqual(customer(sourceRace)?.leadSource, "yelp", "\(id) [Phase 34]: another source set meanwhile is kept")
+        expectEqual(customer(sourceRace)?.referredByCustomerId, nil,
+                    "\(id) [Phase 34]: …and no referrer is filled without a Referral source (R1)")
     }
 
     /// K6: the account changes while the foreground refresh's pull is in its

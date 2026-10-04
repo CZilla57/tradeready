@@ -154,6 +154,14 @@ struct NativeInvoiceFromJobDraft: Identifiable {
     /// The job's current billable total, shown in the "pre-filled from job
     /// estimate" banner (create/requestDeposit only; 0 hides the banner).
     let prefillReferenceAmount: Decimal
+    /// Phase 34 (spec §5.6): the referral credit owed to this job's customer
+    /// when the sheet opened (create/finalize only, and only when the job
+    /// produced a line); 0 hides the "Referral credit" section.
+    var referralCreditAvailable: Decimal = 0
+    /// The credit the owner turned on: 0 or exactly `referralCreditAvailable`
+    /// (partial application is not in v1). `amount` already has it
+    /// subtracted; commit adds the matching negative line.
+    var referralCreditToApply: Decimal = 0
 
     var id: String { jobID }
 }
@@ -170,6 +178,7 @@ enum CanonicalUIAdapters {
         ]
         if let archivedAt = value.archivedAt { fields["archivedAt"] = .string(archivedAt) }
         if let leadSource = value.leadSource { fields["leadSource"] = .string(leadSource) }
+        if let referrer = value.referredByCustomerId { fields["referredByCustomerId"] = .string(referrer) }
         return try decode(fields)
     }
 
@@ -815,6 +824,7 @@ enum CanonicalUIAdapters {
         if edit.value.createdAt != original.createdAt { fields["createdAt"] = .string(timestamp(edit.value.createdAt)) }
         updateOptional(&fields, "archivedAt", edit.value.archivedAt, original.archivedAt)
         updateOptional(&fields, "leadSource", edit.value.leadSource, original.leadSource)
+        updateOptional(&fields, "referredByCustomerId", edit.value.referredByCustomerId, original.referredByCustomerId)
         return try decode(fields)
     }
 
@@ -968,7 +978,8 @@ enum CanonicalUIAdapters {
         Customer(id: value.id, name: value.name, email: value.email, phone: value.phone,
                  address: value.address, notes: value.notes,
                  createdAt: try parsed(value.createdAt ?? "1970-01-01", field: "customer.createdAt", calendar: calendar),
-                 archivedAt: value.archivedAt, leadSource: value.leadSource)
+                 archivedAt: value.archivedAt, leadSource: value.leadSource,
+                 referredByCustomerId: value.referredByCustomerId)
     }
 
     static func job(from value: Canonical.Job, calendar: Calendar = .current) throws -> Job {

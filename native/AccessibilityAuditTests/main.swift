@@ -847,6 +847,19 @@ let viewFileInventory: Set<String> = [
     // an owner-choice picker whose radio rows combine into one element with
     // the selected trait, and text alerts for every refusal.
     "N/NativeQuoteOptionsView.swift",
+    // Phase 34 (referrals), reviewed: the customer-detail Referrals section
+    // (text-titled Share / Reset / Record thank-you rows with per-customer
+    // VoiceOver labels; each referred customer one combined element; status
+    // as text plus an icon, never colour alone; Reset confirms through a
+    // titled dialog), the "Referred by" picker (text rows, a checkmark plus
+    // the selected trait), the share sheet (the review-request shape: text
+    // channel picker, labelled TextEditor, link state as text with Retry,
+    // composer hand-off only) and the reward sheet (labelled kind picker,
+    // CurrencyField, note field and date; Remove confirms; text alerts), and
+    // Money › Referrals (combined rows that stack at accessibility sizes).
+    // All carry the Done bar where they have pad or multi-line fields.
+    "N/NativeCustomerReferralsSection.swift", "N/NativeReferralRewardSheet.swift",
+    "N/NativeReferralShareView.swift", "N/NativeReferralsView.swift",
     "N/NativeAuthView.swift", "N/NativeBookingRequestsView.swift",
     "N/NativeBookingSettingsView.swift", "N/NativeCalendarView.swift", "N/NativeChangeOrdersView.swift",
     "N/NativeCoachComponents.swift", "N/NativeConfirmation.swift", "N/NativeCreateInvoiceFromJobView.swift",
@@ -980,6 +993,9 @@ let keyboardDoneBarCoverage: [String: String] = [
     "NativeRecurringInvoiceEditor": "NativeRecurringInvoiceEditor",
     "NativeRecurringJobEditor": "NativeRecurringJobEditor",
     "NativeReviewRequestView": "NativeReviewRequestView",
+    // Phase 34: the referral share message and the thank-you amount/note.
+    "NativeReferralShareView": "NativeReferralShareView",
+    "NativeReferralRewardSheet": "NativeReferralRewardSheet",
     "NativeScheduleSettingsView": "NativeScheduleSettingsView",
     "NativeTaxSettingsView": "NativeTaxSettingsView",
     "NativeTripEditor": "NativeTripEditor",
@@ -1618,8 +1634,9 @@ func testSemanticColors(root: URL, sources: [SourceFile]) {
     }
     // 13: Phase 12 (12.00b.1, D3) adds the Discard button of each entry in
     // `NativeRejectedChangesView`. 14: the Remove logo button on Business Profile.
-    // 16: Phase 25's Delete option and Remove options rows.
-    expectEqual(inRowDestructive, 16, "in-row destructive buttons audited")
+    // 16: Phase 25's Delete option and Remove options rows. 17: Phase 34's
+    // Remove record on the thank-you sheet.
+    expectEqual(inRowDestructive, 17, "in-row destructive buttons audited")
     if let views = file(sources, "NativeAccessibilityViews.swift") {
         let raw = String(views.raw)
         expect(raw.contains("func nativeDestructiveText() -> some View {\n        modifier(NativeDestructiveText())"),

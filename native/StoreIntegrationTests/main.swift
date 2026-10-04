@@ -2397,6 +2397,207 @@ struct StoreIntegrationTests {
                    "8.08 account boundary scrubs owner-bound pending work")
         }
 
+        // MARK: - Phase 34: referrals through AppStore (spec 2026-10-03-referral-program-design.md §5.2, §5.6, §7)
+        do {
+            func customer34(_ json: String) -> Canonical.Customer {
+                try! JSONDecoder().decode(Canonical.Customer.self, from: Data(json.utf8))
+            }
+            func job34(id: String, status: String, invoiceId: String? = nil) -> Canonical.Job {
+                var json = """
+                {"id":"\(id)","customerId":"c_sam","customerName":"Sam Ortiz","title":"Panel swap",
+                 "description":"d","status":"\(status)","address":"1 Main",
+                 "estimateTotal":500,"laborHours":4,"laborRate":100,"materials":[],
+                 "materialMarkup":0,"overhead":10,"margin":30,"notes":"",
+                 "createdAt":"2026-09-01T00:00:00.000Z"
+                """
+                if let invoiceId { json += ",\"invoiceId\":\"\(invoiceId)\"" }
+                return try! JSONDecoder().decode(Canonical.Job.self, from: Data((json + "}").utf8))
+            }
+            let customers = [
+                customer34(#"{"id":"c_sam","name":"Sam Ortiz","email":"sam@example.test","phone":"602-555-0142","address":"","notes":""}"#),
+                customer34(#"{"id":"c_alex","name":"Alex Kim","email":"","phone":"","address":"","notes":"","leadSource":"referral","referredByCustomerId":"c_sam","referralReward":{"kind":"invoice_credit","amount":25,"recordedOn":"2026-09-10"}}"#),
+                customer34(#"{"id":"c_bea","name":"Bea Ray","email":"","phone":"","address":"","notes":"","leadSource":"referral","referredByCustomerId":"c_sam"}"#),
+            ]
+            var settings = settings08(bookingLink: "{\"token\":\"\(token48A)\",\"enabled\":true}")
+            settings.autoInvoiceOnComplete = true
+            let (store, dir) = try seed08Store(
+                jobs: [job34(id: "j_done", status: "complete"), job34(id: "j_auto", status: "in_progress"),
+                       job34(id: "j_deposit", status: "approved")],
+                customers: customers, settings: settings, tag: "referrals")
+            let storeURL = dir.appendingPathComponent("store.json")
+            func queued(_ table: String, _ id: String) -> [Canonical.MutationItem] {
+                pendingMutations(storeURL).filter { $0.table == table && $0.recordId == id }
+            }
+            func stored(_ id: String) -> Canonical.Customer? {
+                try? snapshot08(storeURL).payload.customers?.first { $0.id == id }
+            }
+
+            // Codes: generated once, persisted and queued; idempotent.
+            var draws = 0
+            let fixedBytes: (Int) -> [UInt8]? = { count in draws += 1; return [UInt8](repeating: 7, count: count) }
+            expect(store.referralCode(customerID: "c_sam") == nil, "34 no code exists before the first share")
+            let code = store.ensureReferralCode(customerID: "c_sam", randomBytes: fixedBytes)
+            expect(code != nil && code == NativeReferrals.encodeCode([UInt8](repeating: 7, count: 10)),
+                   "34 ensureReferralCode generates a code from the injected bytes")
+            expect(stored("c_sam")?.referralCode == code, "34 the code is persisted on the customer")
+            expect(queued("customers", "c_sam").count == 1, "34 the code write is queued once")
+            let again = store.ensureReferralCode(customerID: "c_sam", randomBytes: fixedBytes)
+            expect(again == code && draws == 1, "34 ensureReferralCode is idempotent and draws no new bytes")
+            expect(queued("customers", "c_sam").count == 1, "34 an existing code writes nothing")
+            expect(store.ensureReferralCode(customerID: "c_missing", randomBytes: fixedBytes) == nil, "34 a missing customer has no code")
+            expect(store.ensureReferralCode(customerID: "c_bea", randomBytes: { _ in nil }) == nil
+                   && stored("c_bea")?.referralCode == nil, "34 an RNG failure writes nothing")
+            expect(store.ensureReferralCode(customerID: "c_bea", randomBytes: { count in [UInt8](repeating: 7, count: count) }) == nil,
+                   "34 a colliding code fails closed after three draws (R2)")
+
+            // Reset: a new code, the old one dropped (not aliased).
+            let resetBytes: (Int) -> [UInt8]? = { count in [UInt8](repeating: 9, count: count) }
+            expect(store.resetReferralCode(customerID: "c_sam", randomBytes: resetBytes), "34 resetReferralCode succeeds")
+            let resetCode = stored("c_sam")?.referralCode
+            expect(resetCode != nil && resetCode != code && stored("c_sam")?.referralCodeAliases == nil,
+                   "34 the reset code replaces the old one, which is not kept as an alias")
+            expect(queued("customers", "c_sam").count == 1 && store.referralCode(customerID: "c_sam") == resetCode,
+                   "34 the reset is queued")
+            expect(!store.resetReferralCode(customerID: "c_bea", randomBytes: resetBytes), "34 a customer with no code has nothing to reset")
+
+            // Share link: only after a fresh verified status read.
+            let unverified = await store.referralShareLink(customerID: "c_bea")
+            expect(unverified == .unverified && stored("c_bea")?.referralCode == nil,
+                   "34 signed out: unverified, and no code is created for a customer never shared")
+            let missingLink = await store.referralShareLink(customerID: "c_missing")
+            expect(missingLink == .unavailable, "34 a missing customer is unavailable")
+            seed08Owner(store, binding: "bind-ref")
+            let loader = ScheduleBookingTestLoader()
+            let service = NativeBookingAdministrationService(
+                endpoint: URL(string: "https://example.com/api/booking/admin")!, loader: loader)
+            loader.handler = { _ in (Data("{\"ok\":true,\"enabled\":false,\"revision\":3,\"tokenValid\":true}".utf8), 200) }
+            let off = await store.referralShareLink(customerID: "c_bea", adminService: service)
+            expect(off == .bookingLinkOff && stored("c_bea")?.referralCode == nil,
+                   "34 a disabled booking link is bookingLinkOff, and no code is created")
+            loader.handler = { _ in (Data("oops".utf8), 500) }
+            let failedRead = await store.referralShareLink(customerID: "c_bea", adminService: service)
+            expect(failedRead == .unverified, "34 a failed status read is unverified")
+            loader.handler = { _ in (Data("{\"ok\":true,\"enabled\":true,\"revision\":3,\"tokenValid\":true}".utf8), 200) }
+            let ready = await store.referralShareLink(customerID: "c_bea", adminService: service, randomBytes: { count in
+                [0x00, 0x44, 0x32, 0x14, 0xC7, 0x42, 0x54, 0xB6, 0x35, 0xCF].prefix(count).map { $0 }
+            })
+            expect(ready == .ready(URL(string: "https://gettradereadyapp.com/book.html?b=\(token48A)&r=0123456789abcdef")!),
+                   "34 a verified, enabled link returns the referral URL")
+            expect(stored("c_bea")?.referralCode == "0123456789abcdef", "34 sharing created and stored Bea's code")
+            if case let .ready(url) = ready {
+                expect(NativeBookingAdministrationService.isValidBookingURL(url, token: token48A),
+                       "34 the referral URL is still a valid booking URL")
+            }
+
+            // Rewards: a record on the referred customer, queued.
+            let reward = try NativeReferrals.makeReward(kind: .invoiceCredit, amount: 10, note: "Thanks", recordedOn: "2026-09-20")
+            expect(store.recordReferralReward(referredCustomerID: "c_bea", reward: reward), "34 recordReferralReward saves")
+            expect(stored("c_bea")?.referralReward?.amount == 10 && queued("customers", "c_bea").count == 1,
+                   "34 the reward is persisted and queued")
+            expect(!store.recordReferralReward(referredCustomerID: "c_sam", reward: reward),
+                   "34 a customer without a referrer cannot carry a reward (R3)")
+            expect(store.referralSummary(customerID: "c_sam")?.creditOwed == 35, "34 Sam is owed 25 + 10")
+            expect(store.removeReferralReward(referredCustomerID: "c_bea") && stored("c_bea")?.referralReward == nil,
+                   "34 removeReferralReward clears the record")
+            expect(store.referralSummary(customerID: "c_sam")?.creditOwed == 25, "34 removing the reward re-closes its credit")
+            let summary = store.referralSummary(customerID: "c_sam")
+            expect(Set(summary?.referred.map(\.id) ?? []) == ["c_alex", "c_bea"] && summary?.hasCode == true,
+                   "34 the summary lists everyone Sam referred")
+
+            // Auto-invoice never adds a credit line.
+            guard case let .autoInvoiced(autoID) = store.completeJob(id: "j_auto") else {
+                expect(false, "34 the auto-invoice fixture completes into an invoice")
+                throw StoreTestError.missingFixture
+            }
+            let autoInvoice = try snapshot08(storeURL).payload.invoices?.first { $0.id == autoID }
+            expect(autoInvoice?.amount == 500 && autoInvoice?.lineItems?.contains { $0.category == "referral_credit" } == false,
+                   "34 auto-invoice on complete never applies a referral credit")
+            expect(store.referralCreditOwed(customerId: "c_sam", name: "Sam Ortiz") == 25, "34 the credit is still owed")
+
+            // Invoice-from-job: offered, applied as a negative line, never a payment.
+            guard var draft = store.invoiceFromJobDraft(jobID: "j_done") else {
+                expect(false, "34 the complete job opens an invoice draft")
+                throw StoreTestError.missingFixture
+            }
+            expect(draft.mode == .create && draft.referralCreditAvailable == 25 && draft.amount == 500,
+                   "34 the create draft offers the owed credit")
+            draft.referralCreditToApply = 30
+            draft.amount = 470
+            expect(!store.commitInvoiceFromJob(draft), "34 a credit larger than what is owed is refused")
+            let invoiceCountAfterRefusal = try snapshot08(storeURL).payload.invoices?.count
+            expect(invoiceCountAfterRefusal == 1, "34 …and nothing is written")
+            draft.referralCreditToApply = 25
+            draft.amount = 475
+            expect(store.commitInvoiceFromJob(draft), "34 the invoice with the credit commits")
+            let credited = try snapshot08(storeURL).payload.invoices?.first { $0.jobId == "j_done" }
+            expect(credited?.amount == 475, "34 the credit lowers invoice.amount")
+            let creditLine = credited?.lineItems?.first { $0.category == "referral_credit" }
+            expect(creditLine?.amount == -25 && creditLine?.description == "Referral credit \u{2014} thank you!",
+                   "34 the credit is a negative Referral credit line")
+            expect((credited?.payments ?? []).isEmpty, "34 the credit is never a payment entry")
+            expect(credited.map { queued("invoices", $0.id).count } == 1, "34 the credited invoice is queued")
+            expect(store.referralCreditOwed(customerId: "c_sam", name: "Sam Ortiz") == 0, "34 the applied credit is no longer owed")
+            if let credited {
+                let ledger = NativeCashBasis.ledgerInvoice(credited)
+                expect(PaymentLedger.balanceDue(ledger) == 475, "34 balance due is the lowered amount")
+                let pdf = NativeInvoicePDFDocument(invoice: credited, settings: settings)
+                expect(pdf.total == 475 && pdf.balance == 475
+                       && pdf.lineItems.contains { $0.label == "Referral credit \u{2014} thank you!" && $0.amount == -25 },
+                       "34 the PDF prints the credit line and the lowered total")
+                var paidPayment = Payment()
+                paidPayment.amount = 475
+                paidPayment.method = "Cash"
+                if case let .success(paid) = store.recordPayment(invoiceID: credited.id, payment: paidPayment) {
+                    expect(paid.isPaid, "34 paying the lowered amount settles the invoice")
+                } else {
+                    expect(false, "34 a payment on the credited invoice records")
+                }
+                let paidInvoice = try snapshot08(storeURL).payload.invoices?.first { $0.id == credited.id }
+                let allTime = NativeCashBasis.range(for: "all_time", now: Date())
+                expect(paidInvoice.map { NativeCashBasis.collected(invoices: [$0], start: allTime.start, end: allTime.end) } == 475,
+                       "34 collected cash is what the customer paid, not the pre-credit total")
+            }
+            guard let noCreditDraft = store.invoiceFromJobDraft(jobID: "j_deposit") else {
+                expect(false, "34 the approved job opens a deposit draft")
+                throw StoreTestError.missingFixture
+            }
+            expect(noCreditDraft.mode == .requestDeposit && noCreditDraft.referralCreditAvailable == 0,
+                   "34 a deposit request never offers a credit")
+
+            // Finalize keeps an applied credit through a recompute.
+            expect(store.recordReferralReward(referredCustomerID: "c_bea", reward: reward), "34 Bea's 10 credit is recorded")
+            expect(store.commitInvoiceFromJob(noCreditDraft), "34 the deposit invoice commits")
+            if var depositJob = store.jobs.first(where: { $0.id == "j_deposit" }) {
+                depositJob.status = .complete
+                expect(store.upsert(depositJob), "34 the deposit job is completed")
+            }
+            guard var finalizeDraft = store.invoiceFromJobDraft(jobID: "j_deposit") else {
+                expect(false, "34 the completed deposit job opens a finalize draft")
+                throw StoreTestError.missingFixture
+            }
+            expect(finalizeDraft.mode == .finalize && finalizeDraft.referralCreditAvailable == 10,
+                   "34 finalize offers the newly owed credit")
+            finalizeDraft.referralCreditToApply = 10
+            finalizeDraft.amount -= 10
+            let finalizedAmount = finalizeDraft.amount
+            expect(store.commitInvoiceFromJob(finalizeDraft), "34 finalize with a credit commits")
+            if var reopened = store.jobs.first(where: { $0.id == "j_deposit" }) {
+                reopened.status = .complete
+                expect(store.upsert(reopened), "34 the finalized job is set back to complete")
+            }
+            guard let refinalize = store.invoiceFromJobDraft(jobID: "j_deposit") else {
+                expect(false, "34 a second finalize draft opens")
+                throw StoreTestError.missingFixture
+            }
+            expect(refinalize.referralCreditAvailable == 0 && refinalize.amount == finalizedAmount,
+                   "34 a second finalize offers nothing and keeps the credited amount")
+            expect(store.commitInvoiceFromJob(refinalize), "34 the recompute commits")
+            let refinalized = try snapshot08(storeURL).payload.invoices?.first { $0.jobId == "j_deposit" }
+            expect(refinalized?.lineItems?.filter { $0.category == "referral_credit" }.map(\.amount) == [-10],
+                   "34 the recompute keeps the earlier credit line exactly once")
+            expect(store.referralCreditOwed(customerId: "c_sam", name: "Sam Ortiz") == 0, "34 nothing is owed afterwards")
+        }
+
         // P1 portal admin: saved-customer guard, server-first merge, already_exists adoption.
         do {
             let loader = ScheduleBookingTestLoader()
@@ -4116,6 +4317,11 @@ struct StoreIntegrationTests {
                    "10.12 low_margin_estimate is dismiss-only, no snooze option")
             expect(NativeInsightsCardPolicy.snoozeDays(for: .expenseAnomaly) == nil,
                    "10.12 expense_anomaly is dismiss-only, no snooze option")
+            // Phase 34: referral_thanks is muteable, dismiss-only, with the gift icon.
+            expect(NativeInsightsCardPolicy.isMuteable(.referralThanks)
+                   && NativeInsightsCardPolicy.snoozeDays(for: .referralThanks) == nil
+                   && NativeInsightsCardPolicy.symbolName(for: .referralThanks) == "gift",
+                   "34 referral_thanks is muteable, dismiss-only, icon gift")
 
             // Fail-closed (brief step 5, decision row 17): mutes == nil (the
             // store was unreadable) renders ONLY the five non-muteable kinds,

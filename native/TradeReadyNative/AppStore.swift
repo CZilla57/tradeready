@@ -1620,8 +1620,10 @@ final class AppStore: ObservableObject {
                 return nil
             }
             let changeOrderDelta = JobInvoiceDomain.approvedChangeOrderTotal(changeOrderMirrors(job))
-            let amount = changeOrderDelta != 0 ? billableBreakdown(for: job).total : existing.amount
-            return NativeInvoiceFromJobDraft(
+            // Phase 34: a re-derived amount keeps the credits already applied.
+            let appliedCredit = JobInvoiceDomain.referralCreditTotal(Self.lineDrafts(of: existing))
+            let amount = changeOrderDelta != 0 ? billableBreakdown(for: job).total + appliedCredit : existing.amount
+            var draft = NativeInvoiceFromJobDraft(
                 jobID: jobID, mode: .finalize, existingInvoiceID: invoiceID,
                 customer: existing.customer, customerID: existing.customerId ?? "",
                 number: existing.number, amount: amount, due: JobInvoiceDomain.defaultDueDate(),
@@ -1629,12 +1631,15 @@ final class AppStore: ObservableObject {
                 billedFromTracked: false, finalizeChangeOrderDelta: changeOrderDelta,
                 prefillReferenceAmount: 0
             )
+            draft.referralCreditAvailable = invoiceLineDrafts(for: job).isEmpty
+                ? 0 : referralCreditOwed(customerId: existing.customerId, name: existing.customer)
+            return draft
         }
 
         let customer = NativeCustomerIdentity.resolve(customers: customers, customerID: job.customerId, customerName: job.customerName)
         let breakdown = billableBreakdown(for: job)
         let changeOrderTotal = JobInvoiceDomain.approvedChangeOrderTotal(changeOrderMirrors(job))
-        return NativeInvoiceFromJobDraft(
+        var draft = NativeInvoiceFromJobDraft(
             jobID: jobID, mode: mode, existingInvoiceID: nil,
             customer: job.customerName, customerID: customer?.id ?? job.customerId,
             number: nextInvoiceNumber(), amount: breakdown.total, due: JobInvoiceDomain.defaultDueDate(),
@@ -1645,6 +1650,11 @@ final class AppStore: ObservableObject {
             // job estimate" banner quotes, not the tracked-time-aware `amount`.
             prefillReferenceAmount: job.estimateTotal + changeOrderTotal
         )
+        // Phase 34 (spec §5.6): offered on a full invoice only, never a deposit.
+        if mode == .create, !invoiceLineDrafts(for: job).isEmpty {
+            draft.referralCreditAvailable = referralCreditOwed(customerId: customer?.id ?? job.customerId, name: job.customerName)
+        }
+        return draft
     }
 
     /// Commits a create/requestDeposit/finalize invoice draft atomically with
@@ -1676,7 +1686,30 @@ final class AppStore: ObservableObject {
                 return false
             }
 
-            let lineItems = try CanonicalUIAdapters.invoiceLineItems(from: invoiceLineDrafts(for: job))
+            // Phase 34 (spec §5.6): a finalize recompute keeps applied
+            // referral credits, and a credit the owner turned on is re-checked
+            // against what is owed now.
+            let jobLineDrafts = invoiceLineDrafts(for: job)
+            let existingInvoice = draft.mode == .finalize
+                ? updated.payload.invoices?.first(where: { $0.id == draft.existingInvoiceID }) : nil
+            if draft.referralCreditToApply != 0 {
+                let owed = referralCreditOwed(
+                    customerId: draft.customerID.isEmpty ? existingInvoice?.customerId : draft.customerID,
+                    name: draft.customer
+                )
+                guard draft.mode != .requestDeposit, !jobLineDrafts.isEmpty, draft.referralCreditToApply > 0,
+                      draft.amount > 0, draft.referralCreditToApply <= owed
+                else {
+                    migrationMessage = "The referral credit changed while this invoice was open. Review it again before saving."
+                    return false
+                }
+            }
+            let lineItems = try CanonicalUIAdapters.invoiceLineItems(from: jobLineDrafts.isEmpty ? [] :
+                JobInvoiceDomain.appendingReferralCredit(
+                    jobLineDrafts,
+                    existingInvoiceLines: existingInvoice.map(Self.lineDrafts(of:)) ?? [],
+                    credit: draft.referralCreditToApply
+                ))
             var invoiceRecords = updated.payload.invoices ?? []
             let resultInvoice: Canonical.Invoice
             let invoicePaid: Bool
@@ -4418,6 +4451,31 @@ final class AppStore: ObservableObject {
         /// A changed row: refused when a pull has removed it meanwhile, so a
         /// stale screen never resurrects a deleted form.
         case replace
+    }
+
+    /// Phase 34 (`NativeReferralsStore.swift`): durably saves already-stored
+    /// customer rows changed by one referral action, publishes them, then
+    /// queues one `customers` upsert each. Nothing is written when a row is
+    /// no longer stored.
+    func commitCanonicalCustomers(_ changed: [Canonical.Customer], failureMessage: String) -> Bool {
+        guard !changed.isEmpty else { return true }
+        guard ensurePersistenceWritable() else { return false }
+        var updated = snapshot
+        var records = updated.payload.customers ?? []
+        for record in changed {
+            guard let index = records.firstIndex(where: { $0.id == record.id }) else { return false }
+            records[index] = record
+        }
+        updated.payload.customers = records
+        do {
+            try repository.save(updated)
+            try apply(updated)
+        } catch {
+            migrationMessage = failureMessage
+            return false
+        }
+        for record in changed { enqueueUpsert(table: "customers", recordId: record.id, record: record) }
+        return true
     }
 
     /// Durably commits one `forms` row and enqueues its upsert: durable save,
@@ -9728,6 +9786,13 @@ final class AppStore: ObservableObject {
         )
     }
 
+    /// An invoice's stored lines as drafts (Phase 34 credit carry-over).
+    private static func lineDrafts(of invoice: Canonical.Invoice) -> [JobInvoiceLineDraft] {
+        (invoice.lineItems ?? []).map {
+            JobInvoiceLineDraft(description: $0.description, amount: $0.amount, category: $0.category)
+        }
+    }
+
     /// A job's invoice line items, recomputed fresh from its current
     /// canonical record — see `commitInvoiceFromJob`.
     private func invoiceLineDrafts(for job: Canonical.Job) -> [JobInvoiceLineDraft] {
@@ -12886,9 +12951,10 @@ extension AppStore {
     /// to persist it under.
     func applyInsightMute(_ insight: NativeTodayInsight, days: Int?) {
         guard let mutes = insightMutes, let binding = verifiedAccountBinding else { return }
-        if let days {
+        // Phase 34: `referral_thanks` is not in the §9.5 catalog, so it sends nothing.
+        if insight.kind.isInAnalyticsCatalog, let days {
             emitAnalytics(.insightSnoozed(insight.kind, insightID: insight.id, days: days))
-        } else {
+        } else if insight.kind.isInAnalyticsCatalog {
             emitAnalytics(.insightDismissed(insight.kind, insightID: insight.id))
         }
         let now = Date()
@@ -13039,18 +13105,25 @@ extension AppStore {
         lastShownInsightIDsKey = key
         // Task 11.08: typed string arrays (the 11.07 handoff), not
         // comma-joined strings.
-        emitAnalytics(.insightShown(kinds: insights.map(\.kind), ids: insights.map(\.id)))
+        // Phase 34: kinds outside the §9.5 catalog (`referral_thanks`) are
+        // left out rather than failing the whole event at the transport.
+        let cataloged = insights.filter(\.kind.isInAnalyticsCatalog)
+        guard !cataloged.isEmpty else { return }
+        emitAnalytics(.insightShown(kinds: cataloged.map(\.kind), ids: cataloged.map(\.id)))
     }
 
     func trackInsightTapped(_ insight: NativeTodayInsight) {
+        guard insight.kind.isInAnalyticsCatalog else { return }
         emitAnalytics(.insightTapped(insight.kind))
     }
 
     func trackInsightCoachOpened(_ insight: NativeTodayInsight) {
+        guard insight.kind.isInAnalyticsCatalog else { return }
         emitAnalytics(.insightCoachOpened(insight.kind))
     }
 
     func trackInsightReasonViewed(_ insight: NativeTodayInsight) {
+        guard insight.kind.isInAnalyticsCatalog else { return }
         emitAnalytics(.insightReasonViewed(insight.kind))
     }
 

@@ -7,7 +7,7 @@
    "testSources": [
     {
      "path": "native/AccessibilityAuditTests",
-     "sha256": "b035a213e1b73284e4c90bd420bf5c7fbaa1e2b273f35be8446a4488e7ab5b2f"
+     "sha256": "79f352786198a5ce02142db13fd1699bee837f870acc53da6fce0f02101b9681"
     }
    ],
    "fixtures": []
@@ -29,7 +29,7 @@
    "testSources": [
     {
      "path": "native/AccountingPackageTests",
-     "sha256": "82b0a7fb065aa0a0f1865eb3d0c438826f5220a055c2d72e7ee43e7cf80895f4"
+     "sha256": "69b3bf98ee12223262dd10bc7226ae0152f485ce4c20883e032015746e8481ab"
     }
    ],
    "fixtures": []
@@ -40,11 +40,11 @@
    "testSources": [
     {
      "path": "native/AdapterTests",
-     "sha256": "5092faa008ec9034e07e00a57b4669a791ebea58d317b8b0d5a0b73f7914ab46"
+     "sha256": "49e532f8510636aed0971adbd6e8bb20cb67e25ccc58d0a26378835383128901"
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "23c93c24371478638b198710cf55ee6a28b7c9e2c255f82306675f530798d466"
+     "sha256": "b7879eb7b06d7a9031162d3d24df9b36900717ef54710f7ae01c6192162287d0"
     }
    ],
    "fixtures": [
@@ -65,8 +65,8 @@
     },
     {
      "path": "native/CanonicalTests/Fixtures/canonical-rich.json",
-     "sha256": "3eec60523c97a2967db7d8f327f03c30fd371ca9b2ac4cc098664c6abfc32108",
-     "bytes": 14633
+     "sha256": "2f4b10bf76240ee35fb9ebecf10416786bb4804722e6da028dc939c23c0a656a",
+     "bytes": 14924
     }
    ]
   },
@@ -236,7 +236,7 @@
   },
   "booking-attention": {
    "script": "native/run-booking-attention-tests.sh",
-   "scriptSha256": "43210c307f6a63ec94dae5112a41ee4b295fa1c0534ac281b27525e81e2a5396",
+   "scriptSha256": "19fd203db914bd0812c87e8e3b7583629f2efd77d22c2d30c0b0438da885c528",
    "testSources": [
     {
      "path": "native/BookingAttentionTests",
@@ -247,11 +247,11 @@
   },
   "booking-intake": {
    "script": "native/run-booking-intake-tests.sh",
-   "scriptSha256": "d73f78dc93766784019f87cc9ac37325400bebb13bc1c97aa3fed2c9b781a611",
+   "scriptSha256": "bfd8658682cd99bd402f8dde1077f723d7b84450bcab383a558e1eb7b3f11d9e",
    "testSources": [
     {
      "path": "native/BookingIntakeTests",
-     "sha256": "b83fa8103215bf678b5bf9d55f9a8ace16e0bca5bd8f8deb8d98494dacda7dd1"
+     "sha256": "d5666b9a553f5f91979c57bf84d11e0162ddbd74a5fa4886df4b9a978258afc5"
     }
    ],
    "fixtures": []
@@ -302,11 +302,11 @@
   },
   "business-snapshot": {
    "script": "native/run-business-snapshot-tests.sh",
-   "scriptSha256": "35b2459ee80bbdf022f32ae61f262a9ddeefae448cd42c830dae633ed835309f",
+   "scriptSha256": "2525c29ab96f2320b24629d4db5045282bf8d6ce33d3eefbb67a2cbf7796f669",
    "testSources": [
     {
      "path": "native/BusinessSnapshotTests",
-     "sha256": "9599c0746b41131e7c61f09adfc75f59d69eac657572256d6e47a1833b4281d1"
+     "sha256": "99168e928e48ecca321a168c0746b71d85df61bde672effc9a524a55d0b20873"
     }
    ],
    "fixtures": []
@@ -321,7 +321,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "23c93c24371478638b198710cf55ee6a28b7c9e2c255f82306675f530798d466"
+     "sha256": "b7879eb7b06d7a9031162d3d24df9b36900717ef54710f7ae01c6192162287d0"
     }
    ],
    "fixtures": [
@@ -342,8 +342,8 @@
     },
     {
      "path": "native/CanonicalTests/Fixtures/canonical-rich.json",
-     "sha256": "3eec60523c97a2967db7d8f327f03c30fd371ca9b2ac4cc098664c6abfc32108",
-     "bytes": 14633
+     "sha256": "2f4b10bf76240ee35fb9ebecf10416786bb4804722e6da028dc939c23c0a656a",
+     "bytes": 14924
     }
    ]
   },
@@ -364,7 +364,7 @@
    "testSources": [
     {
      "path": "native/CanonicalTests",
-     "sha256": "23c93c24371478638b198710cf55ee6a28b7c9e2c255f82306675f530798d466"
+     "sha256": "b7879eb7b06d7a9031162d3d24df9b36900717ef54710f7ae01c6192162287d0"
     }
    ],
    "fixtures": [
@@ -385,8 +385,8 @@
     },
     {
      "path": "native/CanonicalTests/Fixtures/canonical-rich.json",
-     "sha256": "3eec60523c97a2967db7d8f327f03c30fd371ca9b2ac4cc098664c6abfc32108",
-     "bytes": 14633
+     "sha256": "2f4b10bf76240ee35fb9ebecf10416786bb4804722e6da028dc939c23c0a656a",
+     "bytes": 14924
     }
    ]
   },
@@ -425,11 +425,11 @@
   },
   "coach-prompt": {
    "script": "native/run-coach-prompt-tests.sh",
-   "scriptSha256": "50975ff6627c78a4f7086e217182afa2fd45bd08a7019d6af858b6a078bbd915",
+   "scriptSha256": "98db1b167bf2f880f2c9586d4b1bbb083853736f6e9a0866de2dca01c10c3e56",
    "testSources": [
     {
      "path": "native/CoachPromptTests",
-     "sha256": "c56741906d4cf681b516315edf5af22477d4ff50ea5800ddebb5110394733f4c"
+     "sha256": "beeeb523df5bd939ddc8bb7ba86601d942b64527682c784610ec9f6531befdd4"
     }
    ],
    "fixtures": []
@@ -495,11 +495,11 @@
    "testSources": [
     {
      "path": "native/CustomerIdentityTests",
-     "sha256": "476304342a66236b53cc469be2b680d5b2e6441d22ffd1d8f00575bf9babf4a2"
+     "sha256": "dbcd45889aab7c81d28e0da1ea69ac36368f8e0928fca0146ea705da44e301b2"
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "23c93c24371478638b198710cf55ee6a28b7c9e2c255f82306675f530798d466"
+     "sha256": "b7879eb7b06d7a9031162d3d24df9b36900717ef54710f7ae01c6192162287d0"
     }
    ],
    "fixtures": [
@@ -520,8 +520,8 @@
     },
     {
      "path": "native/CanonicalTests/Fixtures/canonical-rich.json",
-     "sha256": "3eec60523c97a2967db7d8f327f03c30fd371ca9b2ac4cc098664c6abfc32108",
-     "bytes": 14633
+     "sha256": "2f4b10bf76240ee35fb9ebecf10416786bb4804722e6da028dc939c23c0a656a",
+     "bytes": 14924
     }
    ]
   },
@@ -546,7 +546,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "23c93c24371478638b198710cf55ee6a28b7c9e2c255f82306675f530798d466"
+     "sha256": "b7879eb7b06d7a9031162d3d24df9b36900717ef54710f7ae01c6192162287d0"
     }
    ],
    "fixtures": [
@@ -567,8 +567,8 @@
     },
     {
      "path": "native/CanonicalTests/Fixtures/canonical-rich.json",
-     "sha256": "3eec60523c97a2967db7d8f327f03c30fd371ca9b2ac4cc098664c6abfc32108",
-     "bytes": 14633
+     "sha256": "2f4b10bf76240ee35fb9ebecf10416786bb4804722e6da028dc939c23c0a656a",
+     "bytes": 14924
     }
    ]
   },
@@ -604,14 +604,14 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "23c93c24371478638b198710cf55ee6a28b7c9e2c255f82306675f530798d466"
+     "sha256": "b7879eb7b06d7a9031162d3d24df9b36900717ef54710f7ae01c6192162287d0"
     }
    ],
    "fixtures": [
     {
      "path": "native/CanonicalTests/Fixtures/canonical-rich.json",
-     "sha256": "3eec60523c97a2967db7d8f327f03c30fd371ca9b2ac4cc098664c6abfc32108",
-     "bytes": 14633
+     "sha256": "2f4b10bf76240ee35fb9ebecf10416786bb4804722e6da028dc939c23c0a656a",
+     "bytes": 14924
     }
    ]
   },
@@ -746,7 +746,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "23c93c24371478638b198710cf55ee6a28b7c9e2c255f82306675f530798d466"
+     "sha256": "b7879eb7b06d7a9031162d3d24df9b36900717ef54710f7ae01c6192162287d0"
     }
    ],
    "fixtures": [
@@ -767,8 +767,8 @@
     },
     {
      "path": "native/CanonicalTests/Fixtures/canonical-rich.json",
-     "sha256": "3eec60523c97a2967db7d8f327f03c30fd371ca9b2ac4cc098664c6abfc32108",
-     "bytes": 14633
+     "sha256": "2f4b10bf76240ee35fb9ebecf10416786bb4804722e6da028dc939c23c0a656a",
+     "bytes": 14924
     }
    ]
   },
@@ -822,7 +822,7 @@
    "testSources": [
     {
      "path": "native/InvoiceFromJobTests",
-     "sha256": "a8201d5f8c5306ce120cab2a996601cf016c51c9ccce26e9d701138917b0f91b"
+     "sha256": "7a3e66feae8848df6f119cf98f9b1b84306264f39da91ed407fe339e24bb6a5f"
     }
    ],
    "fixtures": []
@@ -855,7 +855,7 @@
    "testSources": [
     {
      "path": "native/InvoicePDFTests",
-     "sha256": "793e7fd3bcd9eeab0ad1f9a5ae0f5949ae2d2b431898112e10e1a3e559d856d8"
+     "sha256": "8254d5ef00e3beeaa032dc978981afdc3b275bacf3cbd749e4fe44af39eb23c9"
     }
    ],
    "fixtures": []
@@ -870,14 +870,14 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "23c93c24371478638b198710cf55ee6a28b7c9e2c255f82306675f530798d466"
+     "sha256": "b7879eb7b06d7a9031162d3d24df9b36900717ef54710f7ae01c6192162287d0"
     }
    ],
    "fixtures": [
     {
      "path": "native/CanonicalTests/Fixtures/canonical-rich.json",
-     "sha256": "3eec60523c97a2967db7d8f327f03c30fd371ca9b2ac4cc098664c6abfc32108",
-     "bytes": 14633
+     "sha256": "2f4b10bf76240ee35fb9ebecf10416786bb4804722e6da028dc939c23c0a656a",
+     "bytes": 14924
     }
    ]
   },
@@ -942,7 +942,7 @@
    "testSources": [
     {
      "path": "native/LayoutMetricsTests",
-     "sha256": "c65ab5130679ca2dadf81a49738fda815b6a7d81f169d61f57e2e698e747c765"
+     "sha256": "69fd6d3b7e9f506d37a1b3c9bfaba81eb64ae2500841baa4c5082ff836b4e5d4"
     }
    ],
    "fixtures": []
@@ -968,7 +968,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "23c93c24371478638b198710cf55ee6a28b7c9e2c255f82306675f530798d466"
+     "sha256": "b7879eb7b06d7a9031162d3d24df9b36900717ef54710f7ae01c6192162287d0"
     }
    ],
    "fixtures": [
@@ -989,8 +989,8 @@
     },
     {
      "path": "native/CanonicalTests/Fixtures/canonical-rich.json",
-     "sha256": "3eec60523c97a2967db7d8f327f03c30fd371ca9b2ac4cc098664c6abfc32108",
-     "bytes": 14633
+     "sha256": "2f4b10bf76240ee35fb9ebecf10416786bb4804722e6da028dc939c23c0a656a",
+     "bytes": 14924
     }
    ]
   },
@@ -1037,7 +1037,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "23c93c24371478638b198710cf55ee6a28b7c9e2c255f82306675f530798d466"
+     "sha256": "b7879eb7b06d7a9031162d3d24df9b36900717ef54710f7ae01c6192162287d0"
     }
    ],
    "fixtures": [
@@ -1058,14 +1058,14 @@
     },
     {
      "path": "native/CanonicalTests/Fixtures/canonical-rich.json",
-     "sha256": "3eec60523c97a2967db7d8f327f03c30fd371ca9b2ac4cc098664c6abfc32108",
-     "bytes": 14633
+     "sha256": "2f4b10bf76240ee35fb9ebecf10416786bb4804722e6da028dc939c23c0a656a",
+     "bytes": 14924
     }
    ]
   },
   "mileage-log": {
    "script": "native/run-mileage-log-tests.sh",
-   "scriptSha256": "db19c208df608491a8d67d04fd9e43cabf884e0ef2cf415cbdde7c07188b5d9b",
+   "scriptSha256": "55981ac43ecf019a8407bcd9676123b12d6e957d84aac9e1078de7a0f02e1bc1",
    "testSources": [
     {
      "path": "native/MileageLogTests",
@@ -1087,11 +1087,11 @@
   },
   "money-card": {
    "script": "native/run-money-card-tests.sh",
-   "scriptSha256": "d3a483b38211645fcfbe71eb9fccbf2e221f1642d67a148a669d0508c5b04ea4",
+   "scriptSha256": "fd317cc205c0db90691b993eade5624c026a9d78336194f4c4149a14f1cf52af",
    "testSources": [
     {
      "path": "native/MoneyCardsTests",
-     "sha256": "273961978aef61fa220d6a873523947dd198d8e9e4e108610c1c8100453447de"
+     "sha256": "7d9dd9a5d3e90117fd5f12c157b3c6864f8cc6396090891160f678ee6c26dc27"
     }
    ],
    "fixtures": []
@@ -1236,7 +1236,7 @@
   },
   "phase10-qualification": {
    "script": "native/run-phase10-qualification-tests.sh",
-   "scriptSha256": "129b866c625edf5045b7d8920dc168670b3f8a73ea672184bb187eb75a41f0a8",
+   "scriptSha256": "11a5bfdb54957e0c2244ce942afa1da1ab52774e2ae905dcd023373bf9cba78a",
    "testSources": [
     {
      "path": "native/Phase10QualificationTests",
@@ -1343,14 +1343,14 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "23c93c24371478638b198710cf55ee6a28b7c9e2c255f82306675f530798d466"
+     "sha256": "b7879eb7b06d7a9031162d3d24df9b36900717ef54710f7ae01c6192162287d0"
     }
    ],
    "fixtures": [
     {
      "path": "native/CanonicalTests/Fixtures/canonical-rich.json",
-     "sha256": "3eec60523c97a2967db7d8f327f03c30fd371ca9b2ac4cc098664c6abfc32108",
-     "bytes": 14633
+     "sha256": "2f4b10bf76240ee35fb9ebecf10416786bb4804722e6da028dc939c23c0a656a",
+     "bytes": 14924
     },
     {
      "path": "native/QuoteOptionsTests/Fixtures/quote-selection-vectors.json",
@@ -1380,7 +1380,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "23c93c24371478638b198710cf55ee6a28b7c9e2c255f82306675f530798d466"
+     "sha256": "b7879eb7b06d7a9031162d3d24df9b36900717ef54710f7ae01c6192162287d0"
     }
    ],
    "fixtures": [
@@ -1401,8 +1401,8 @@
     },
     {
      "path": "native/CanonicalTests/Fixtures/canonical-rich.json",
-     "sha256": "3eec60523c97a2967db7d8f327f03c30fd371ca9b2ac4cc098664c6abfc32108",
-     "bytes": 14633
+     "sha256": "2f4b10bf76240ee35fb9ebecf10416786bb4804722e6da028dc939c23c0a656a",
+     "bytes": 14924
     }
    ]
   },
@@ -1427,6 +1427,23 @@
     }
    ],
    "fixtures": []
+  },
+  "referral": {
+   "script": "native/run-referral-tests.sh",
+   "scriptSha256": "8abf5b4c358e88c57fd92f6c2497d86c40a378283c0734b2a2a31f270df25886",
+   "testSources": [
+    {
+     "path": "native/ReferralTests",
+     "sha256": "3427bed7fb99532b4bffaa8dea86194a303d9fd75f5665b0c84d8995080c6040"
+    }
+   ],
+   "fixtures": [
+    {
+     "path": "native/ReferralTests/Fixtures/referral-code-vectors.json",
+     "sha256": "0059312c1b74cf82baeae47fff28a01bd4fa5e1e6916a10fe88a1a0b9129f235",
+     "bytes": 4693
+    }
+   ]
   },
   "rejected-changes": {
    "script": "native/run-rejected-changes-tests.sh",
@@ -1500,7 +1517,7 @@
    "testSources": [
     {
      "path": "native/ScheduleBookingRecoveryTests",
-     "sha256": "48fa5a54c4a2eab2f017a2b8f2f85715690358c706248bc5f27a90fd71af5ebb"
+     "sha256": "7498a599dc48bbde941fa1dfa24a56ce73fb8c1db2f4d344b3782430f961932d"
     }
    ],
    "fixtures": []
@@ -1515,7 +1532,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "23c93c24371478638b198710cf55ee6a28b7c9e2c255f82306675f530798d466"
+     "sha256": "b7879eb7b06d7a9031162d3d24df9b36900717ef54710f7ae01c6192162287d0"
     }
    ],
    "fixtures": [
@@ -1536,8 +1553,8 @@
     },
     {
      "path": "native/CanonicalTests/Fixtures/canonical-rich.json",
-     "sha256": "3eec60523c97a2967db7d8f327f03c30fd371ca9b2ac4cc098664c6abfc32108",
-     "bytes": 14633
+     "sha256": "2f4b10bf76240ee35fb9ebecf10416786bb4804722e6da028dc939c23c0a656a",
+     "bytes": 14924
     }
    ]
   },
@@ -1573,7 +1590,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "23c93c24371478638b198710cf55ee6a28b7c9e2c255f82306675f530798d466"
+     "sha256": "b7879eb7b06d7a9031162d3d24df9b36900717ef54710f7ae01c6192162287d0"
     }
    ],
    "fixtures": [
@@ -1594,8 +1611,8 @@
     },
     {
      "path": "native/CanonicalTests/Fixtures/canonical-rich.json",
-     "sha256": "3eec60523c97a2967db7d8f327f03c30fd371ca9b2ac4cc098664c6abfc32108",
-     "bytes": 14633
+     "sha256": "2f4b10bf76240ee35fb9ebecf10416786bb4804722e6da028dc939c23c0a656a",
+     "bytes": 14924
     },
     {
      "path": "native/SnapshotTests/Fixtures/current-versioned.json",
@@ -1615,11 +1632,11 @@
    "testSources": [
     {
      "path": "native/StoreIntegrationTests",
-     "sha256": "97df3f502fe3c9c824d834a241cdf8ce0c8165ba54cc8466f3dee7df426cfe42"
+     "sha256": "6539f9adce94de683f64da75186f970444ac9588cabb85ff2cbb0c817fb088c7"
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "23c93c24371478638b198710cf55ee6a28b7c9e2c255f82306675f530798d466"
+     "sha256": "b7879eb7b06d7a9031162d3d24df9b36900717ef54710f7ae01c6192162287d0"
     }
    ],
    "fixtures": [
@@ -1640,8 +1657,8 @@
     },
     {
      "path": "native/CanonicalTests/Fixtures/canonical-rich.json",
-     "sha256": "3eec60523c97a2967db7d8f327f03c30fd371ca9b2ac4cc098664c6abfc32108",
-     "bytes": 14633
+     "sha256": "2f4b10bf76240ee35fb9ebecf10416786bb4804722e6da028dc939c23c0a656a",
+     "bytes": 14924
     }
    ]
   },
@@ -1699,7 +1716,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "23c93c24371478638b198710cf55ee6a28b7c9e2c255f82306675f530798d466"
+     "sha256": "b7879eb7b06d7a9031162d3d24df9b36900717ef54710f7ae01c6192162287d0"
     }
    ],
    "fixtures": [
@@ -1720,8 +1737,8 @@
     },
     {
      "path": "native/CanonicalTests/Fixtures/canonical-rich.json",
-     "sha256": "3eec60523c97a2967db7d8f327f03c30fd371ca9b2ac4cc098664c6abfc32108",
-     "bytes": 14633
+     "sha256": "2f4b10bf76240ee35fb9ebecf10416786bb4804722e6da028dc939c23c0a656a",
+     "bytes": 14924
     }
    ]
   },
@@ -1742,7 +1759,7 @@
    "testSources": [
     {
      "path": "native/TaxSettingsTests",
-     "sha256": "dc0b24da8000f533c35e635abe317894e8734943f0201748774a7103ffee0ea4"
+     "sha256": "6bd724674c63a004b37adca3d79402bd6d833c7eed7737c490603bcc9e240523"
     }
    ],
    "fixtures": []
@@ -1760,7 +1777,7 @@
   },
   "today-briefing": {
    "script": "native/run-today-briefing-tests.sh",
-   "scriptSha256": "dfb36808415e87aefd28fcc45c0ca8cdbba52a9bec502d770e1718b997c665d8",
+   "scriptSha256": "3807c8dcb01f08776060ec5962ae89485968205f3d55dcbc603b55300451a946",
    "testSources": [
     {
      "path": "native/TodayBriefingTests",
@@ -1771,11 +1788,11 @@
   },
   "today-insights": {
    "script": "native/run-today-insights-tests.sh",
-   "scriptSha256": "54328c7f4e4fdb11d515536c8272d1f5d453242d895534bfcf896e9b23a6858e",
+   "scriptSha256": "e5077ecb1089a33c14bfcb6bf07e7c653001e0bf96734067bd06284edf06f869",
    "testSources": [
     {
      "path": "native/TodayInsightsTests",
-     "sha256": "a79b63ae49b0e21fcd8fbf8e139e50bb3c424ccd2b6cf82a3e22aff6ce64ac2b"
+     "sha256": "7b9d3f029bec581af788eb508f0fabcbfee81d7e47d96f18a918b7d58bb22c78"
     }
    ],
    "fixtures": []
@@ -1801,7 +1818,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "23c93c24371478638b198710cf55ee6a28b7c9e2c255f82306675f530798d466"
+     "sha256": "b7879eb7b06d7a9031162d3d24df9b36900717ef54710f7ae01c6192162287d0"
     }
    ],
    "fixtures": [
@@ -1822,8 +1839,8 @@
     },
     {
      "path": "native/CanonicalTests/Fixtures/canonical-rich.json",
-     "sha256": "3eec60523c97a2967db7d8f327f03c30fd371ca9b2ac4cc098664c6abfc32108",
-     "bytes": 14633
+     "sha256": "2f4b10bf76240ee35fb9ebecf10416786bb4804722e6da028dc939c23c0a656a",
+     "bytes": 14924
     }
    ]
   },
@@ -1870,7 +1887,7 @@
     },
     {
      "path": "native/CanonicalTests",
-     "sha256": "23c93c24371478638b198710cf55ee6a28b7c9e2c255f82306675f530798d466"
+     "sha256": "b7879eb7b06d7a9031162d3d24df9b36900717ef54710f7ae01c6192162287d0"
     }
    ],
    "fixtures": [
@@ -1891,8 +1908,8 @@
     },
     {
      "path": "native/CanonicalTests/Fixtures/canonical-rich.json",
-     "sha256": "3eec60523c97a2967db7d8f327f03c30fd371ca9b2ac4cc098664c6abfc32108",
-     "bytes": 14633
+     "sha256": "2f4b10bf76240ee35fb9ebecf10416786bb4804722e6da028dc939c23c0a656a",
+     "bytes": 14924
     }
    ]
   },
@@ -2077,6 +2094,14 @@
    "path": "__tests__/bookingNotify.test.js",
    "sha256": "5d9d320277dbeeffb1682ab9a99263b9f4b43602aad3a38591feedc4b3d16569"
   },
+  "bookingNotifyReferralWorkers": {
+   "path": "__tests__/bookingNotifyReferralWorkers.test.js",
+   "sha256": "ffaef72864a68b08cc22105d6770bc06e2587f1f1480185a289e3a4a2bd7160b"
+  },
+  "bookingReferralPrivacyWorkers": {
+   "path": "__tests__/bookingReferralPrivacyWorkers.test.js",
+   "sha256": "0c89376f9dec749ef5722e7a2a7368e1455512753b886e033cdebc3c6bced8d5"
+  },
   "bookingRequestsStorage": {
    "path": "__tests__/bookingRequestsStorage.test.ts",
    "sha256": "9c801b65bafa57b3efaebac6fc1c98baded71977ad7dc164a15f445334526e05"
@@ -2091,7 +2116,7 @@
   },
   "bookingSlotsReserve": {
    "path": "__tests__/bookingSlotsReserve.test.js",
-   "sha256": "ce304eb7cecb040c07016bb95c1ea0df503abb2f8764f80ee7a04394ac77fab1"
+   "sha256": "3ed9f7eba6278ff00c0702408eb53d39ed5f00ea2470332706259a010ba38692"
   },
   "bookingStore": {
    "path": "__tests__/bookingStore.test.js",
@@ -2108,6 +2133,10 @@
   "bookingValidateLeadSource": {
    "path": "__tests__/bookingValidateLeadSource.test.js",
    "sha256": "9c39948c00721fc4903ad069d3730bba685a038574473962c87606be1c27b352"
+  },
+  "bookingValidateReferralWorkers": {
+   "path": "__tests__/bookingValidateReferralWorkers.test.js",
+   "sha256": "1b5f3a0d82b46dff187877910a7a81fcf805b4f53b19c057e27df5f225dfdd3e"
   },
   "bulkInvoiceActions": {
    "path": "__tests__/bulkInvoiceActions.test.ts",

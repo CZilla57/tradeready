@@ -29,6 +29,44 @@ struct NativeCreateInvoiceFromJobView: View {
         )
     }
 
+    // MARK: Referral credit (Phase 34, spec 2026-10-03-referral-program-design.md §5.6)
+
+    /// On subtracts the whole owed credit from the amount, off adds it back.
+    /// Partial application is not in v1, so a credit that is not smaller than
+    /// the invoice cannot be turned on.
+    private var referralCreditApplied: Binding<Bool> {
+        Binding(
+            get: { draft.referralCreditToApply > 0 },
+            set: { isOn in
+                if isOn, draft.referralCreditToApply == 0, referralCreditFits {
+                    draft.referralCreditToApply = draft.referralCreditAvailable
+                    draft.amount -= draft.referralCreditAvailable
+                } else if !isOn, draft.referralCreditToApply > 0 {
+                    draft.amount += draft.referralCreditToApply
+                    draft.referralCreditToApply = 0
+                }
+            }
+        )
+    }
+
+    private var referralCreditFits: Bool { draft.referralCreditAvailable < draft.amount }
+
+    private var referralCreditSection: some View {
+        let credit = NSDecimalNumber(decimal: draft.referralCreditAvailable).doubleValue
+        return Section {
+            Toggle("Apply \(credit.currency) referral credit", isOn: referralCreditApplied)
+                .disabled(draft.referralCreditToApply == 0 && !referralCreditFits)
+            if draft.referralCreditToApply == 0, !referralCreditFits {
+                Text("This credit is more than the invoice. Apply it to a larger one.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Referral credit")
+        } footer: {
+            Text("Adds a \u{201C}Referral credit\u{201D} line and lowers this invoice. Nothing is applied unless you turn this on.")
+        }
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -63,6 +101,7 @@ struct NativeCreateInvoiceFromJobView: View {
                     TextField("Email", text: $draft.email).keyboardType(.emailAddress).textInputAutocapitalization(.never)
                     TextField("Phone", text: $draft.phone).keyboardType(.phonePad)
                 }
+                if draft.referralCreditAvailable > 0 { referralCreditSection }
             }
             .nativeContentColumn(.list)
             .scrollContentBackground(.hidden).background(Color.tradeCanvas)

@@ -178,9 +178,16 @@ enum NativeAccountingPackage {
     /// Phase 27 (lead source, spec §7) appends `Lead source` after RN's seven
     /// columns: the display name, custom labels verbatim, empty when unknown.
     /// It is the one deliberate divergence from the RN package bytes.
-    static let customersHeader = ["Name", "Email", "Phone", "Address", "Notes", "Created", "Archived", "Lead source"]
+    /// Phase 34 (referrals, spec §5.9) appends `Referred by`: the
+    /// referrer's name, "Former customer" when that record is gone, or blank
+    /// (no referrer, or one that breaks R1). Codes and rewards are never
+    /// exported.
+    static let customersHeader = [
+        "Name", "Email", "Phone", "Address", "Notes", "Created", "Archived", "Lead source", "Referred by",
+    ]
 
     static func buildCustomersCsv(_ customers: [Canonical.Customer]) -> String {
+        let names = Dictionary(customers.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
         let rows = NativeCSVExport.stableSorted(customers) {
             NativeCSVExport.byCodeThenCode($0.name, $0.id, $1.name, $1.id)
         }.map { customer in
@@ -188,9 +195,19 @@ enum NativeAccountingPackage {
                 customer.name, customer.email, customer.phone, customer.address,
                 customer.notes, customer.createdAt ?? "", customer.archivedAt ?? "",
                 NativeLeadSource.exportLabel(customer.leadSource),
+                referredByLabel(customer, names: names),
             ]
         }
         return NativeCSVExport.toCsv(customersHeader, rows)
+    }
+
+    /// R1 inline (this file's runners do not compile `NativeReferrals`).
+    static func referredByLabel(_ customer: Canonical.Customer, names: [String: String]) -> String {
+        let referrer = customer.referredByCustomerId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !referrer.isEmpty, referrer != customer.id,
+              NativeLeadSource.normalize(customer.leadSource) == "referral"
+        else { return "" }
+        return names[referrer] ?? "Former customer"
     }
 
     static let categoryHeader = ["Category ID", "Label"]

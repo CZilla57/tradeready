@@ -1388,6 +1388,27 @@ public extension Canonical {
                 try o.put(enabled, for: "enabled"); try o.encode(to: encoder)
             }
         }
+        /// Phase 34: the owner's record of thanking the referrer for THIS
+        /// customer's referral (`NativeReferrals`). A record only: nothing is
+        /// ever sent or paid from it.
+        public struct ReferralReward: Codable {
+            /// `thank_you` · `gift_card` · `invoice_credit` · `other`.
+            public var kind: String
+            /// > 0; required for `invoice_credit`, absent for `thank_you`.
+            public var amount: Decimal?
+            public var note: String?
+            /// Local `YYYY-MM-DD`.
+            public var recordedOn: DateString
+            public var preservation: Preservation
+            public init(from decoder: Decoder) throws {
+                var o = try ObjectReader(decoder); kind = try o.required("kind"); amount = try o.optional("amount")
+                note = try o.optional("note"); recordedOn = try o.required("recordedOn"); preservation = o.finish()
+            }
+            public func encode(to encoder: Encoder) throws {
+                var o = ObjectWriter(preservation); try o.put(kind, for: "kind"); try o.putOptional(amount, for: "amount")
+                try o.putOptional(note, for: "note"); try o.put(recordedOn, for: "recordedOn"); try o.encode(to: encoder)
+            }
+        }
         public var id, name, email, phone, address, notes: String
         public var createdAt: DateString?
         public var portal: Portal?
@@ -1396,20 +1417,33 @@ public extension Canonical {
         /// Phase 27: how the customer first found the business (a preset key
         /// or custom label, `NativeLeadSource`). Absent means Unknown.
         public var leadSource: String?
+        /// Phase 34 (referrals, spec 2026-10-03-referral-program-design.md §2):
+        /// this customer's own 16-character code, codes inherited from
+        /// merged-away duplicates, who referred them (meaningful only while
+        /// `leadSource` is `referral`, invariant R1) and the reward record.
+        public var referralCode: String?
+        public var referralCodeAliases: [String]?
+        public var referredByCustomerId: String?
+        public var referralReward: ReferralReward?
         public var preservation: Preservation
         public init(from decoder: Decoder) throws {
             var o = try ObjectReader(decoder); id = try o.required("id"); name = try o.required("name")
             email = try o.required("email"); phone = try o.required("phone"); address = try o.required("address")
             notes = try o.required("notes"); createdAt = try o.optional("createdAt"); portal = try o.optional("portal")
             archivedAt = try o.optional("archivedAt"); importBatchId = try o.optional("importBatchId")
-            leadSource = try o.optional("leadSource"); preservation = o.finish()
+            leadSource = try o.optional("leadSource"); referralCode = try o.optional("referralCode")
+            referralCodeAliases = try o.optional("referralCodeAliases"); referredByCustomerId = try o.optional("referredByCustomerId")
+            referralReward = try o.optional("referralReward"); preservation = o.finish()
         }
         public func encode(to encoder: Encoder) throws {
             var o = ObjectWriter(preservation); try o.put(id, for: "id"); try o.put(name, for: "name")
             try o.put(email, for: "email"); try o.put(phone, for: "phone"); try o.put(address, for: "address")
             try o.put(notes, for: "notes"); try o.putOptional(createdAt, for: "createdAt"); try o.putOptional(portal, for: "portal")
             try o.putOptional(archivedAt, for: "archivedAt"); try o.putOptional(importBatchId, for: "importBatchId")
-            try o.putOptional(leadSource, for: "leadSource"); try o.encode(to: encoder)
+            try o.putOptional(leadSource, for: "leadSource"); try o.putOptional(referralCode, for: "referralCode")
+            try o.putOptional(referralCodeAliases, for: "referralCodeAliases")
+            try o.putOptional(referredByCustomerId, for: "referredByCustomerId")
+            try o.putOptional(referralReward, for: "referralReward"); try o.encode(to: encoder)
         }
     }
 
@@ -1532,6 +1566,10 @@ public extension Canonical {
         /// Phase 27: the booking link's `?src=` marketing tag, cleaned by the
         /// Worker validator (never empty, at most 40 characters).
         public var leadSource: String?
+        /// Phase 34: the booking link's `?r=` referral code, format-checked
+        /// and lowercased by the Worker (absent when unusable). The device
+        /// re-normalizes it at intake (`NativeReferrals.normalizeCode`).
+        public var referralCode: String?
         public var preservation: Preservation
         public init(from decoder: Decoder) throws {
             var o = try ObjectReader(decoder); id = try o.required("id"); status = try o.required("status")
@@ -1542,7 +1580,7 @@ public extension Canonical {
             kind = try o.optional("kind"); slot = try o.optional("slot"); manageToken = try o.optional("manageToken")
             history = try o.optional("history"); source = try o.optional("source"); sourceCustomerId = try o.optional("sourceCustomerId")
             jobRef = try o.optional("jobRef"); portalKind = try o.optional("portalKind"); handledAt = try o.optional("handledAt")
-            leadSource = try o.optional("leadSource"); preservation = o.finish()
+            leadSource = try o.optional("leadSource"); referralCode = try o.optional("referralCode"); preservation = o.finish()
         }
         public func encode(to encoder: Encoder) throws {
             var o = ObjectWriter(preservation); try o.put(id, for: "id"); try o.put(status, for: "status")
@@ -1554,7 +1592,8 @@ public extension Canonical {
             try o.putOptional(history, for: "history"); try o.putOptional(source, for: "source")
             try o.putOptional(sourceCustomerId, for: "sourceCustomerId"); try o.putOptional(jobRef, for: "jobRef")
             try o.putOptional(portalKind, for: "portalKind"); try o.putOptional(handledAt, for: "handledAt")
-            try o.putOptional(leadSource, for: "leadSource"); try o.encode(to: encoder)
+            try o.putOptional(leadSource, for: "leadSource"); try o.putOptional(referralCode, for: "referralCode")
+            try o.encode(to: encoder)
         }
     }
 }

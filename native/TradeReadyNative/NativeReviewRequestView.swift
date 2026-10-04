@@ -12,6 +12,9 @@ struct NativeReviewRequestView: View {
     @State private var showingUnavailable = false
     @State private var copied = false
     @State private var notice: Notice?
+    /// Phase 34: the "Add their referral link" state.
+    @State private var referralState: NativeReferralLinkState?
+    @State private var addingReferral = false
 
     private var draft: NativeReviewRequestDraft? { store.reviewRequestDraft(jobID: jobID) }
     private var recipient: String {
@@ -62,6 +65,9 @@ struct NativeReviewRequestView: View {
                         } label: {
                             Label(copied ? "Copied" : "Copy message", systemImage: copied ? "checkmark" : "doc.on.doc")
                         }
+                    }
+                    if store.canonicalCustomers.contains(where: { $0.id == draft.customerID }) {
+                        referralSection(customerID: draft.customerID)
                     }
                     if draft.missingLink {
                         Section {
@@ -145,5 +151,50 @@ struct NativeReviewRequestView: View {
             }
         }
         .nativeAnalyticsScreen(.reviewRequest)
+    }
+
+    // MARK: Referral link (Phase 34, spec 2026-10-03-referral-program-design.md §5.5)
+
+    private var referralAdded: Bool {
+        if case .ready = referralState { return true }
+        return false
+    }
+
+    private func referralSection(customerID: String) -> some View {
+        Section {
+            Button {
+                Task { await addReferralLink(customerID: customerID) }
+            } label: {
+                Label(referralAdded ? "Referral link added" : "Add their referral link",
+                      systemImage: referralAdded ? "checkmark" : "link")
+            }
+            .disabled(referralAdded || addingReferral)
+            if addingReferral {
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text(NativeReferrals.checkingLinkText).foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+            } else if let text = referralState?.message {
+                Label(text, systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundStyle(Color.tradeWarningText)
+            }
+        } header: {
+            Text("Referral link")
+        } footer: {
+            Text("Adds a personal booking link to the message above. You can edit it before sending.")
+        }
+    }
+
+    private func addReferralLink(customerID: String) async {
+        guard !addingReferral, !referralAdded else { return }
+        addingReferral = true
+        let state = await store.referralShareLink(customerID: customerID)
+        if case let .ready(url) = state {
+            message = NativeReferrals.appendingReferralParagraph(to: message, link: url)
+        }
+        referralState = state
+        addingReferral = false
     }
 }

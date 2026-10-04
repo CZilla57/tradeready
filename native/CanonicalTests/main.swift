@@ -334,6 +334,57 @@ run("lead source is typed on customers and booking requests") {
     expect(taggedJSON == .object(requestFields), "a tagged booking request round-trips exactly")
 }
 
+// Phase 34 (spec 2026-10-03-referral-program-design.md §2, §7): the four
+// referral fields are typed on the customer, `referralReward` keeps unknown
+// keys of its own, and a booking request's `referralCode` is typed.
+run("referral fields are typed on customers and booking requests") {
+    let customer: Canonical.Customer = try field("customer", from: rich)
+    expect(customer.referralCode == "0123456789abcdef", "rich customer referral code decodes")
+    expect(customer.referralCodeAliases == ["ghjkmnpqrstvwxyz"], "rich customer code aliases decode")
+    expect(customer.referredByCustomerId == "c-7", "rich customer referrer decodes")
+    expect(customer.referralReward?.kind == "invoice_credit" && customer.referralReward?.amount == 25
+        && customer.referralReward?.note == "Thanks for Sam" && customer.referralReward?.recordedOn == "2026-09-28",
+           "rich customer reward decodes")
+    expect(customer.referralReward?.preservation.unknownFields["futureRewardField"] == .bool(true),
+           "an unknown key inside referralReward is preserved")
+    for key in ["referralCode", "referralCodeAliases", "referredByCustomerId", "referralReward"] {
+        expect(customer.preservation.unknownFields[key] == nil, "\(key) is typed, not an unknown field")
+    }
+    guard case let .object(fixtureCustomer)? = rich["customer"] else {
+        throw NSError(domain: "CanonicalTests", code: 34, userInfo: [NSLocalizedDescriptionKey: "Missing customer"])
+    }
+    let customerJSON = try json(customer)
+    expect(customerJSON == .object(fixtureCustomer), "the rich customer with referral fields round-trips exactly")
+
+    var cleared = customer
+    cleared.referralCode = nil
+    cleared.referralCodeAliases = nil
+    cleared.referredByCustomerId = nil
+    cleared.referralReward = nil
+    let clearedFields = try object(cleared)
+    for key in ["referralCode", "referralCodeAliases", "referredByCustomerId", "referralReward"] {
+        expect(clearedFields[key] == nil, "clearing \(key) removes the key")
+    }
+    let legacyCustomer: Canonical.Customer = try field("customer", from: legacy)
+    let legacyFields = try object(legacyCustomer)
+    expect(legacyCustomer.referralCode == nil && legacyFields["referralCode"] == nil
+        && legacyFields["referralReward"] == nil && legacyFields["referredByCustomerId"] == nil,
+           "a customer without referral data stays without the keys")
+
+    let request: Canonical.BookingRequest = try field("bookingRequest", from: rich)
+    expect(request.referralCode == "vtpvxvr024h36h2n" && request.preservation.unknownFields["referralCode"] == nil,
+           "a booking request's referral code is typed")
+    guard case let .object(fixtureRequest)? = rich["bookingRequest"] else {
+        throw NSError(domain: "CanonicalTests", code: 35, userInfo: [NSLocalizedDescriptionKey: "Missing booking request"])
+    }
+    let requestJSON = try json(request)
+    expect(requestJSON == .object(fixtureRequest), "the rich booking request with a referral code round-trips exactly")
+    var plain = request
+    plain.referralCode = nil
+    let plainFields = try object(plain)
+    expect(plainFields["referralCode"] == nil, "a request without a code stays without the key")
+}
+
 run("versioned envelope") {
     let job: Canonical.Job = try field("job", from: rich)
     var envelope = Canonical.Envelope(schemaVersion: 7, payload: job)

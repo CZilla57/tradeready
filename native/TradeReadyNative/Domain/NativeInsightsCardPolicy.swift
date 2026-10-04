@@ -17,6 +17,8 @@ enum NativeInsightsCardPolicy {
     /// they disappear on their own as their condition resolves.
     static let muteableKinds: Set<NativeInsightKind> = [
         .lowMarginEstimate, .maintenanceDue, .expenseAnomaly,
+        // Phase 34: dismiss-only; recording a reward clears it on its own.
+        .referralThanks,
     ]
 
     /// `SNOOZE_DAYS` — only `maintenance_due` offers "Snooze"; the other two
@@ -45,6 +47,7 @@ enum NativeInsightsCardPolicy {
         case .unscheduledApproved: return "calendar"
         case .maintenanceDue: return "wrench.and.screwdriver"
         case .expenseAnomaly: return "chart.line.uptrend.xyaxis"
+        case .referralThanks: return "gift"
         }
     }
 

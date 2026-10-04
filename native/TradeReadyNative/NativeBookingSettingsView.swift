@@ -86,7 +86,8 @@ struct NativeBookingSettingsView: View {
             Button("Rotate link", role: .destructive) { Task { await rotate() } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The current link stops working immediately. Share the new link afterwards.")
+            // Phase 34 (§5.2): referral links carry the same `b` token.
+            Text("The current link stops working immediately, including referral links your customers have shared. Share the new link afterwards.")
         }
         .nativeAnalyticsScreen(.settingsBooking)
     }
