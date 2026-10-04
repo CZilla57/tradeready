@@ -114,6 +114,10 @@ struct NativeSupabaseInitialSyncService: NativeInitialSyncServing, NativeDeltaSy
         case trips
         case bookingRequests
         case jobPhotos
+        /// Phase 20 (`supabase/migrations/20261002_forms.sql`). The full pull
+        /// fails closed on any table, so the migration must be applied before
+        /// a build that pulls it ships (`docs/release-checklist.md`).
+        case forms
     }
 
     private struct StoredSession: Decodable {
@@ -559,6 +563,8 @@ struct NativeSupabaseInitialSyncService: NativeInitialSyncServing, NativeDeltaSy
             )
         case .jobPhotos:
             payload.jobPhotos = try merge(payload.jobPhotos, rows: rows, id: \.id)
+        case .forms:
+            payload.forms = try merge(payload.forms, rows: rows, id: \.id)
         }
     }
 
@@ -917,6 +923,7 @@ extension NativeSupabaseInitialSyncService: NativeServerRecordFetching {
                 try Self.mergeBookingRequest(local: nil, remote: $0)
             }
         case .jobPhotos: payload.jobPhotos = try replacing(payload.jobPhotos, record, recordId, \.id)
+        case .forms: payload.forms = try replacing(payload.forms, record, recordId, \.id)
         }
     }
 

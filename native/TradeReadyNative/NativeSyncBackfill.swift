@@ -36,7 +36,8 @@ public extension Canonical {
         /// backend table name the push transport expects.
         static let collectionTables = [
             "jobs", "invoices", "customers", "expenses", "pricebook",
-            "recurringJobs", "recurringInvoices", "trips", "bookingRequests", "jobPhotos"
+            "recurringJobs", "recurringInvoices", "trips", "bookingRequests", "jobPhotos",
+            "forms"
         ]
 
         init(stateURL: URL, fileManager: FileManager = .default) {
@@ -96,6 +97,7 @@ public extension Canonical {
             try enqueueCollection("trips", payload.trips)
             try enqueueCollection("bookingRequests", payload.bookingRequests)
             try enqueueCollection("jobPhotos", payload.jobPhotos)
+            try enqueueCollection("forms", payload.forms)
 
             if let settings = payload.settings {
                 let value = try Self.jsonValue(settings)

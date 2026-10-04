@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 enum SettingsDestination: Hashable {
-    case business, schedule, pricing, numbering, importData
+    case business, schedule, pricing, numbering, importData, forms
     case payments, booking, appearance, ai, notifications, reviews
     case sync, subscription, account
 }
@@ -47,6 +47,7 @@ struct SettingsView: View {
                         (.schedule, "clock.fill", "Schedule", "Working hours, job length, time off"),
                         (.pricing, "tag.fill", "Pricing defaults", "Labor, markup, overhead, and margin"),
                         (.numbering, "number.square.fill", "Invoice numbering", "Prefix and starting number"),
+                        (.forms, "checklist", "Forms & checklists", formsSubtitle),
                         (.importData, "square.and.arrow.down.fill", "Import data", "Bring records over from CSV or the old app")
                     ])
                     settingsGroup("GETTING PAID", rows: [
@@ -137,6 +138,7 @@ struct SettingsView: View {
         case .pricing: PricingSettings()
         case .numbering: InvoiceNumberSettings()
         case .importData: ImportSettings()
+        case .forms: NativeFormTemplatesView()
         case .payments: PaymentsSettings()
         case .booking: NativeBookingSettingsView()
         case .appearance: AppearanceSettings()
@@ -147,6 +149,12 @@ struct SettingsView: View {
         case .subscription: SubscriptionSettings()
         case .account: AccountSettings()
         }
+    }
+
+    /// Phase 20: the owner's saved form templates.
+    private var formsSubtitle: String {
+        let count = store.customFormTemplates.count
+        return count == 0 ? "Checklist and inspection templates" : "\(count) saved template\(count == 1 ? "" : "s")"
     }
 
     private var syncSubtitle: String {

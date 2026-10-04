@@ -16,7 +16,8 @@ import Foundation
 ///   converge to the same `nextDueDate`.
 /// - Copies only the RN-authorized fields onto each occurrence: customer,
 ///   descriptive, pricing, materials, optional direct costs, schedule, and
-///   recurrence linkage. Occurrences are `scheduled` on the due date.
+///   recurrence linkage, plus the Phase 21 `propertyId`. Occurrences are
+///   `scheduled` on the due date.
 /// - Advances `occurrenceCount` / `lastGeneratedDate` / `nextDueDate` per
 ///   occurrence and deactivates the rule at count/date boundaries.
 /// - Paused rules (`isActive == false`) generate nothing.
@@ -134,7 +135,8 @@ enum NativeRecurringJobs {
 extension Canonical.Job {
     /// Builds one generated occurrence, copying only the RN-authorized
     /// fields: customer, descriptive, pricing, materials, optional direct
-    /// costs (`jobCosts`), schedule, and recurrence linkage. Lifecycle,
+    /// costs (`jobCosts`), schedule, recurrence linkage and the Phase 21
+    /// `propertyId`. Lifecycle,
     /// approval, time, photo, archive, and import state are never inherited.
     init(
         generatedFrom rule: Canonical.RecurringJob,
@@ -179,6 +181,8 @@ extension Canonical.Job {
         self.importBatchId = nil
         // Phase 25 spec §7: an occurrence copies the rule's total, never quote options.
         self.quoteOptions = nil
+        // Phase 21 spec §3: every occurrence is at the rule's property.
+        self.propertyId = rule.propertyId
         self.preservation = Canonical.Preservation()
     }
 }

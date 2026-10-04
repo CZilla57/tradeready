@@ -23,6 +23,28 @@ function cleanLeadSource(raw) {
   return Array.from(cleaned).slice(0, LEAD_SOURCE_MAX).join('').trim();
 }
 
+// Phase 34: a customer's referral code, 16 lowercase Crockford base32
+// characters (the alphabet without i, l, o, u). The device generates and
+// resolves codes; this file only checks the format.
+const REFERRAL_CODE_RE = /^[0-9a-hjkmnp-tv-z]{16}$/;
+// The same alphabet in either ASCII case. The input is checked against it
+// BEFORE lowercasing, because toLowerCase() maps U+212A KELVIN SIGN to "k".
+// Only ASCII ever becomes a code.
+const REFERRAL_CODE_ANY_CASE_RE = /^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{16}$/;
+
+// Optional referral code (the booking page's ?r= param). An opaque attribution
+// tag, not a credential: the Worker never looks it up, so a valid, unknown or
+// garbage code behaves identically for the person booking (no oracle).
+// Unusable input is dropped, never rejected. Shared vectors:
+// native/ReferralTests/Fixtures/referral-code-vectors.json.
+function cleanReferralCode(raw) {
+  if (typeof raw !== 'string') return '';
+  const trimmed = raw.trim();
+  if (!REFERRAL_CODE_ANY_CASE_RE.test(trimmed)) return '';
+  const code = trimmed.toLowerCase();
+  return REFERRAL_CODE_RE.test(code) ? code : '';
+}
+
 function validateBookingPayload(body) {
   const src = body || {};
   const value = {};
@@ -35,6 +57,8 @@ function validateBookingPayload(body) {
   }
   const leadSource = cleanLeadSource(src.leadSource);
   if (leadSource) value.leadSource = leadSource;
+  const referralCode = cleanReferralCode(src.referralCode);
+  if (referralCode) value.referralCode = referralCode;
   if (!value.name) return { ok: false, error: 'Please tell us your name.' };
   if (!value.details) return { ok: false, error: 'Please describe what you need done.' };
   if (!value.phone && !value.email) return { ok: false, error: 'Please give a phone or email so we can reach you.' };
@@ -42,4 +66,4 @@ function validateBookingPayload(body) {
   return { ok: true, value };
 }
 
-module.exports = { validateBookingPayload };
+module.exports = { validateBookingPayload, cleanReferralCode, REFERRAL_CODE_RE };

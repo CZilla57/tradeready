@@ -62,6 +62,9 @@ struct NativeBusinessSnapshot: Equatable {
     var aggregate: NativeBusinessSnapshotAggregate
     var tax: NativeTaxSnapshotBlock?
     var leadSources: NativeLeadSourceSnapshotBlock?
+    /// Phase 34: the year-to-date referral block (absent when no customer has
+    /// a referrer). Last, so the memberwise init stays source-compatible.
+    var referrals: NativeReferralSnapshotBlock?
 
     var revenueThisMonth: Decimal { aggregate.revenueThisMonth }
     var revenueLastMonth: Decimal { aggregate.revenueLastMonth }
@@ -227,7 +230,8 @@ enum NativeBusinessSnapshotEngine {
                 : nil,
             leadSources: NativeLeadSourceReport.snapshotBlock(
                 customers: customers, jobs: jobs, invoices: invoices, now: now
-            )
+            ),
+            referrals: NativeReferralReport.snapshotBlock(customers: customers, invoices: invoices, now: now)
         )
     }
 

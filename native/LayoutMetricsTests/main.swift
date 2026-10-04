@@ -434,10 +434,21 @@ let scrollRootInventory: [String: Int] = [
     "NativePricebookEntryView.swift|NativePricebookEntryView|Form": 1,
     "NativePricebookView.swift|NativePricebookView|List": 1,
     "NativePricingCalculator.swift|NativePricingCalculatorView|Form": 1,
+    // Phase 21: property detail (pushed) and the property and equipment sheets.
+    "NativePropertiesViews.swift|NativePropertyDetailView|List": 1,
+    "NativePropertiesViews.swift|NativePropertyEditor|Form": 1,
+    "NativePropertiesViews.swift|NativeEquipmentEditor|Form": 1,
     // Phase 25: the quote-options sheet, its add-on editor and owner choice.
     "NativeQuoteOptionsView.swift|NativeQuoteOptionsView|Form": 1,
     "NativeQuoteOptionsView.swift|NativeQuoteAddOnEditorView|Form": 1,
     "NativeQuoteOptionsView.swift|NativeQuoteOwnerChoiceView|Form": 1,
+    // Phase 20: the Add form picker, the fill screen, the items editor, the
+    // item sheet and Settings › Forms & checklists.
+    "NativeJobFormsView.swift|NativeFormPickerView|List": 1,
+    "NativeJobFormsView.swift|NativeJobFormView|List": 1,
+    "NativeJobFormEditorView.swift|NativeFormItemsEditor|List": 1,
+    "NativeJobFormEditorView.swift|NativeFormItemSheet|Form": 1,
+    "NativeJobFormEditorView.swift|NativeFormTemplatesView|List": 1,
     "NativeRecurringInvoicesView.swift|NativeRecurringInvoicesView|List": 1,
     "NativeRecurringInvoicesView.swift|NativeRecurringInvoiceEditor|Form": 1,
     "NativeRecurringJobsView.swift|NativeRecurringJobsView|List": 1,
@@ -445,6 +456,12 @@ let scrollRootInventory: [String: Int] = [
     // Phase 12 (12.00b.1, D3): Settings › Cloud Sync › changes not saved.
     "NativeRejectedChangesView.swift|NativeRejectedChangesView|Form": 1,
     "NativeReviewRequestView.swift|NativeReviewRequestView|Form": 1,
+    // Phase 34: the referral share and thank-you sheets, the "Referred by"
+    // picker and Money › Referrals.
+    "NativeReferralShareView.swift|NativeReferralShareView|Form": 1,
+    "NativeReferralRewardSheet.swift|NativeReferralRewardSheet|Form": 1,
+    "NativeCustomerReferralsSection.swift|NativeReferredByPicker|List": 1,
+    "NativeReferralsView.swift|NativeReferralsView|List": 1,
     "NativeRouteView.swift|NativeRouteView|List": 1,
     "NativeScheduleEditorView.swift|NativeScheduleEditorView|Form": 1,
     "NativeScheduleSettingsView.swift|NativeScheduleSettingsView|Form": 1,
@@ -465,6 +482,8 @@ let horizontalChipRows: [String: Int] = [
     "JobsView.swift": 1, "MoneyView.swift": 1, "NativeExpenseEditor.swift": 2,
     "NativeExportDataView.swift": 1, "NativeImportView.swift": 1, "NativeJobPhotosView.swift": 1,
     "NativeMileageLogView.swift": 1, "NativeInvoiceOutreachView.swift": 1, "NativeTripEditor.swift": 1,
+    // Phase 20: a form item's photo thumbnails.
+    "NativeJobFormsView.swift": 1,
 ]
 
 /// Every `SettingsPage` screen shares the capped `SettingsPage` Form.

@@ -288,6 +288,65 @@ run("picker round trip") {
            "picker: the fallback is capped at today + 365")
 }
 
+// MARK: - Non-Gregorian device calendars (review fix 2026-10-03, finding 1)
+
+/// `Calendar.current` on an iPhone whose Settings › General › Language &
+/// Region › Calendar is Buddhist or Japanese, in Phoenix. The stored date is
+/// a Gregorian `YYYY-MM-DD` the Worker and the customer page read, so every
+/// civil date must come out Gregorian whatever the device calendar is.
+private func deviceCalendar(_ identifier: Calendar.Identifier) -> Calendar {
+    var calendar = Calendar(identifier: identifier)
+    calendar.locale = Locale(identifier: "en_US")
+    calendar.timeZone = TimeZone(identifier: "America/Phoenix")!
+    return calendar
+}
+
+let noonPhoenix = instant("2026-10-03T19:00:00Z") // Oct 3, 12:00 MST
+run("non-Gregorian device calendars") {
+    for (name, device) in [("Buddhist", deviceCalendar(.buddhist)), ("Japanese", deviceCalendar(.japanese))] {
+        expect(device.component(.year, from: noonPhoenix) != 2026,
+               "\(name): the device calendar's own year is not the Gregorian one (the case under test)")
+        let today = NativeQuoteExpiry.today(now: noonPhoenix, calendar: device)
+        expect(today == "2026-10-03", "\(name): today is the Gregorian date (got \(today))")
+        expect(NativeQuoteExpiry.today(now: lateEveningPhoenix, calendar: device) == "2026-10-02",
+               "\(name): today still reads the calendar's zone (FA-039)")
+        expect(NativeQuoteExpiry.proposedValidUntil(job: try job(status: "lead"), validityDays: 30, today: today) == "2026-11-02",
+               "\(name): the default proposal is Gregorian today + 30")
+        expect(NativeQuoteExpiry.isSelectable("2026-11-02", today: today), "\(name): today + 30 is selectable")
+        expect(NativeQuoteExpiry.state(job: try job(validUntil: "2026-11-02"), today: today)
+               == .open(validUntil: "2026-11-02", daysLeft: 30), "\(name): a Gregorian date 30 days out is open")
+
+        // The DatePicker bridge with the device calendar handed in.
+        let picked = NativeValidUntilPicker.date(from: "2026-11-02", calendar: device)
+        expect(picked == instant("2026-11-02T19:00:00Z"),
+               "\(name): the picker builds noon Phoenix on the Gregorian day (got \(picked.map { "\($0)" } ?? "nil"))")
+        expect(NativeValidUntilPicker.ymd(from: instant("2026-11-02T19:00:00Z"), calendar: device) == "2026-11-02",
+               "\(name): the picker reads the Gregorian day back")
+        let range = NativeValidUntilPicker.range(today: "2026-10-03", calendar: device)
+        expect(range.lowerBound == instant("2026-10-03T07:00:00Z") && range.upperBound == instant("2027-10-04T06:59:59Z"),
+               "\(name): the picker range is today…today+365 in Gregorian days")
+    }
+}
+
+// The defaults. The runner runs this binary twice more with
+// `-AppleLocale en_US@calendar=buddhist|japanese`, so there `Calendar.current`
+// itself is the non-Gregorian calendar the review sheet and editor see.
+run("defaults never use Calendar.current's calendar") {
+    if let expected = ProcessInfo.processInfo.environment["QUOTE_EXPIRY_DEVICE_CALENDAR"] {
+        expect("\(Calendar.current.identifier)" == expected,
+               "the runner set Calendar.current to \(expected) (got \(Calendar.current.identifier))")
+    }
+    expect(NativeQuoteExpiry.today(now: noonPhoenix, calendar: .current) == "2026-10-03",
+           "today with Calendar.current is the Gregorian date")
+    expect(NativeValidUntilPicker.date(from: "2026-11-02") == instant("2026-11-02T19:00:00Z"),
+           "the picker's default calendar builds the Gregorian day")
+    expect(NativeValidUntilPicker.ymd(from: instant("2026-11-02T19:00:00Z")) == "2026-11-02",
+           "the picker's default calendar reads the Gregorian day")
+    let range = NativeValidUntilPicker.range(today: "2026-10-03")
+    expect(range.lowerBound == instant("2026-10-03T07:00:00Z") && range.upperBound == instant("2027-10-04T06:59:59Z"),
+           "the picker's default range is in Gregorian days")
+}
+
 if failures == 0 {
     print("PASS: native quote expiry tests (\(checks) checks)")
 } else {

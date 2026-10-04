@@ -67,6 +67,10 @@ struct Customer: Identifiable, Codable, Hashable {
     /// Phase 27: the stored lead source (preset key or custom label), first
     /// touch. `nil` is Unknown.
     var leadSource: String?
+    /// Phase 34: who referred this customer, set from the editor's "Referred
+    /// by" picker. Meaningful only while `leadSource` is `referral` (R1). The
+    /// other referral fields are canonical-only.
+    var referredByCustomerId: String?
 }
 
 struct Job: Identifiable, Codable, Hashable {
@@ -86,6 +90,9 @@ struct Job: Identifiable, Codable, Hashable {
     var invoiceId: String?
     var createdAt = Date()
     var archivedAt: String?
+    /// Phase 21: the customer property the job is at (`Canonical.Job.propertyId`).
+    /// `address` stays the service address of record.
+    var propertyId: String?
 }
 
 extension Job {

@@ -120,13 +120,16 @@ public enum NativeBookingIntake {
                 customer = nextCustomers.first { $0.id == sourceID }
             }
             if customer == nil {
+                // Phase 34: a referral code wins over `?src=` (§5.3).
+                let referral = referralDecision(for: request, customers: nextCustomers)
                 let upserted = upsertCustomer(
                     in: nextCustomers,
                     name: request.name,
                     email: request.email,
                     phone: request.phone,
                     address: request.address,
-                    leadSource: leadSourceCandidate(for: request),
+                    leadSource: referral.leadSource,
+                    referredByCustomerId: referral.referredByCustomerId,
                     makeCustomerID: makeCustomerID,
                     nowISO: nowISO
                 )
@@ -199,6 +202,42 @@ public enum NativeBookingIntake {
         return NativeLeadSource.normalize(request.leadSource) ?? NativeLeadSource.bookingLinkKey
     }
 
+    // MARK: - Referral (Phase 34, spec 2026-10-03-referral-program-design.md §5.3)
+
+    /// The source and referrer candidates the upsert receives.
+    public struct ReferralDecision: Equatable {
+        public var leadSource: String?
+        public var referredByCustomerId: String?
+    }
+
+    /// §5.3 matrix. Portal requests take nothing. A code the device's format
+    /// check rejects (or none) keeps the Phase 27 candidate. A code that
+    /// resolves to the booker themself (D5) is no referral. A code that
+    /// resolves to someone else makes the booker a referral of them; an
+    /// unknown, reset, deleted or ambiguous code still counts as a referral,
+    /// with no referrer (D4). The self-referral name match uses the upsert's
+    /// own `normalizedName` key.
+    public static func referralDecision(
+        for request: Canonical.BookingRequest,
+        customers: [Canonical.Customer]
+    ) -> ReferralDecision {
+        let phase27 = leadSourceCandidate(for: request)
+        guard request.source != "portal", let code = NativeReferrals.normalizeCode(request.referralCode) else {
+            return ReferralDecision(leadSource: phase27, referredByCustomerId: nil)
+        }
+        guard let referrer = NativeReferrals.resolveReferrer(code: code, customers: customers) else {
+            return ReferralDecision(leadSource: NativeReferrals.referralSourceKey, referredByCustomerId: nil)
+        }
+        let key = normalizedName(request.name)
+        let matched = key.isEmpty ? nil : customers.first { normalizedName($0.name) == key }
+        if NativeReferrals.isSelfReferral(
+            referrer: referrer, matchedCustomerID: matched?.id, email: request.email, phone: request.phone
+        ) {
+            return ReferralDecision(leadSource: phase27, referredByCustomerId: nil)
+        }
+        return ReferralDecision(leadSource: NativeReferrals.referralSourceKey, referredByCustomerId: referrer.id)
+    }
+
     // MARK: - Customer linking (RN `upsertCustomerInList` parity)
 
     public struct CustomerUpsert {
@@ -215,6 +254,10 @@ public enum NativeBookingIntake {
     /// Pure: no I/O, so one in-memory pass can batch many conversions.
     /// `leadSource` (normalized) follows the same first-touch rule: set on a
     /// new record, filled only when a matched record's source is blank.
+    /// Phase 34: `referredByCustomerId` is set on a new record only when the
+    /// source is `referral`; a matched record fills it only when it is blank,
+    /// the merged source is `referral` and the candidate is not the record
+    /// itself (first touch, R1).
     public static func upsertCustomer(
         in customers: [Canonical.Customer],
         name: String,
@@ -222,6 +265,7 @@ public enum NativeBookingIntake {
         phone: String,
         address: String,
         leadSource: String? = nil,
+        referredByCustomerId: String? = nil,
         makeCustomerID: () -> String,
         nowISO: () -> String
     ) -> CustomerUpsert {
@@ -235,6 +279,12 @@ public enum NativeBookingIntake {
             if isBlank(merged.phone), !phone.isEmpty { merged.phone = phone; touched = true }
             if isBlank(merged.address), !address.isEmpty { merged.address = address; touched = true }
             if isBlank(merged.leadSource ?? ""), let source { merged.leadSource = source; touched = true }
+            if isBlank(merged.referredByCustomerId ?? ""),
+               let referrer = NativeReferrals.sanitizedReferrer(
+                   referredByCustomerId, customerID: merged.id, leadSource: merged.leadSource
+               ) {
+                merged.referredByCustomerId = referrer; touched = true
+            }
             guard touched else {
                 return CustomerUpsert(customer: merged, customers: customers, changed: false, didCreate: false)
             }
@@ -252,6 +302,11 @@ public enum NativeBookingIntake {
             "createdAt": .string(nowISO()),
         ]
         if let source { fields["leadSource"] = .string(source) }
+        let id: String
+        if case let .string(value)? = fields["id"] { id = value } else { id = "" }
+        if let referrer = NativeReferrals.sanitizedReferrer(referredByCustomerId, customerID: id, leadSource: source) {
+            fields["referredByCustomerId"] = .string(referrer)
+        }
         let built = decodeCustomer(fields)
         return CustomerUpsert(customer: built, customers: customers + [built], changed: true, didCreate: true)
     }

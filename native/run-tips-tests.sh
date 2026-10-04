@@ -16,6 +16,8 @@ swiftc \
   "$ROOT_DIR/native/TradeReadyNative/Domain/UIModelAdapters.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeLeadSource.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeLeadSourceReport.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeReferrals.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeReferralReport.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeChangeOrders.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeJobProfitability.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeCashBasis.swift" \

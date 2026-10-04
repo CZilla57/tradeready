@@ -420,5 +420,119 @@ do {
            "upsert without a source writes no key")
 }
 
+// 15. Phase 34 referrals (spec 2026-10-03-referral-program-design.md §5.3):
+// a code from `?r=` makes the booker a referral of the code's owner (first
+// touch), self-referral and portal codes are ignored, and an unknown code is a
+// referral with no referrer.
+do {
+    let samCode = "0123456789abcdef"
+    let sam = decodeCustomer("""
+    {"id":"c_sam","name":"Sam Ortiz","email":"sam@example.com","phone":"(602) 555-0177",
+     "address":"9 Oak Ave","notes":"","leadSource":"google","referralCode":"\(samCode)"}
+    """)
+    func request(name: String = "Dana Rivers", email: String = "dana@example.com", phone: String = "555-0142",
+                 code: String?, extra: String = "", status: String = "new") -> Canonical.BookingRequest {
+        var fields = """
+        {"id":"bk_ref","status":"\(status)","name":"\(name)",
+         "phone":"\(phone)","email":"\(email)","address":"12 Elm St",
+         "details":"Leak","preferredTiming":"","createdAt":"2026-08-04T15:00:00.000Z"\(extra)
+        """
+        if let code { fields += ",\"referralCode\":\"\(code)\"" }
+        return decodeRequest(fields + "}")
+    }
+    func plan(_ request: Canonical.BookingRequest, _ customers: [Canonical.Customer]) -> NativeBookingIntake.Plan {
+        NativeBookingIntake.plan(requests: [request], jobs: [], customers: customers,
+                                 settings: settings, makeCustomerID: idFactory("c_new"), nowISO: { fixedNow })
+    }
+
+    expect(request(code: samCode).referralCode == samCode, "the request decodes its referral code")
+
+    // New customer via a code.
+    let created = plan(request(code: samCode, extra: #","leadSource":"nextdoor""#), [sam])
+    let fresh = created.customers.first { $0.id == "c_new" }
+    expect(fresh?.leadSource == "referral" && fresh?.referredByCustomerId == "c_sam",
+           "a new customer via a code is a referral of the code's owner (a code wins over ?src=)")
+    let draft = created.drafts.first { $0.table == "customers" && $0.recordId == "c_new" }
+    guard case let .object(draftFields)? = draft?.payload else { expect(false, "created customer draft present"); exit(1) }
+    expect(draftFields["referredByCustomerId"] == .string("c_sam") && draftFields["leadSource"] == .string("referral"),
+           "the created customer's upsert carries the referral")
+    expect(created.jobs.first.map { !$0.notes.contains("Sam") && !$0.title.contains("Sam") } == true,
+           "no referrer name goes into the lead job")
+
+    // Matched customer with a blank source: both fill.
+    let blank = decodeCustomer("""
+    {"id":"c1","name":"Dana Rivers","email":"","phone":"","address":"12 Elm St","notes":""}
+    """)
+    let filled = plan(request(code: samCode), [sam, blank])
+    let filledDana = filled.customers.first { $0.id == "c1" }
+    expect(filledDana?.leadSource == "referral" && filledDana?.referredByCustomerId == "c_sam",
+           "a matched customer with a blank source becomes a referral of Sam")
+    expect(filled.drafts.contains { $0.table == "customers" && $0.recordId == "c1" }, "the fill is published")
+
+    // Matched customer with another source: unchanged (first touch).
+    let google = decodeCustomer("""
+    {"id":"c1","name":"Dana Rivers","email":"dana@example.com","phone":"555-0142","address":"12 Elm St","notes":"","leadSource":"yelp"}
+    """)
+    let kept = plan(request(code: samCode), [sam, google])
+    let keptDana = kept.customers.first { $0.id == "c1" }
+    expect(keptDana?.leadSource == "yelp" && keptDana?.referredByCustomerId == nil,
+           "a matched customer with another source keeps both fields")
+    expect(!kept.drafts.contains { $0.table == "customers" }, "nothing is published for an unchanged match")
+
+    // Matched referral with no referrer: filled.
+    let referralNoReferrer = decodeCustomer("""
+    {"id":"c1","name":"Dana Rivers","email":"dana@example.com","phone":"555-0142","address":"12 Elm St","notes":"","leadSource":"Word of mouth"}
+    """)
+    let completed = plan(request(code: samCode), [sam, referralNoReferrer])
+    expect(completed.customers.first { $0.id == "c1" }?.referredByCustomerId == "c_sam",
+           "a matched referral with no referrer gets the referrer")
+    // Matched referral that already has a referrer: first touch wins.
+    let alreadyReferred = decodeCustomer("""
+    {"id":"c1","name":"Dana Rivers","email":"dana@example.com","phone":"555-0142","address":"12 Elm St","notes":"","leadSource":"referral","referredByCustomerId":"c_other"}
+    """)
+    expect(plan(request(code: samCode), [sam, alreadyReferred]).customers.first { $0.id == "c1" }?.referredByCustomerId == "c_other",
+           "an existing referrer is never replaced")
+
+    // Self-referral: by name, by email, by phone.
+    let byName = plan(request(name: "  sam ortiz", email: "", phone: "", code: samCode), [sam])
+    expect(byName.customers.count == 1 && byName.customers[0].referredByCustomerId == nil
+           && byName.customers[0].leadSource == "google", "self-referral by name changes nothing")
+    let byEmail = plan(request(name: "S Ortiz", email: "SAM@example.com", phone: "", code: samCode), [sam])
+    let emailCustomer = byEmail.customers.first { $0.id == "c_new" }
+    expect(emailCustomer?.leadSource == "booking_link" && emailCustomer?.referredByCustomerId == nil,
+           "self-referral by email is no referral (Phase 27 default)")
+    let byPhone = plan(request(name: "S Ortiz", email: "", phone: "602.555.0177", code: samCode), [sam])
+    expect(byPhone.customers.first { $0.id == "c_new" }?.referredByCustomerId == nil, "self-referral by phone is no referral")
+
+    // Unknown code: a referral with no referrer.
+    let unknown = plan(request(code: "zzzzzzzzzzzzzzzz"), [sam])
+    let unknownCustomer = unknown.customers.first { $0.id == "c_new" }
+    expect(unknownCustomer?.leadSource == "referral" && unknownCustomer?.referredByCustomerId == nil,
+           "an unknown code is a referral with no referrer")
+    // A code the device rejects is no code.
+    let malformed = plan(request(code: "ILOU456789abcdef"), [sam])
+    expect(malformed.customers.first { $0.id == "c_new" }?.leadSource == "booking_link", "a malformed code is no code")
+
+    // A portal request carrying a code: ignored, even on the dangling-id fallback.
+    let portal = plan(request(code: samCode, extra: #","source":"portal","sourceCustomerId":"c_gone""#), [sam])
+    let portalCustomer = portal.customers.first { $0.id == "c_new" }
+    expect(portalCustomer?.leadSource == nil && portalCustomer?.referredByCustomerId == nil, "a portal request's code is ignored")
+
+    // A slot booking carries the code too.
+    let slot = plan(request(code: samCode, extra: ",\"kind\":\"booked\",\"slot\":\(slotJSON)", status: "booked"), [sam])
+    expect(slot.createdJobIDs == ["jbk_bk_ref"] && slot.customers.first { $0.id == "c_new" }?.referredByCustomerId == "c_sam",
+           "a slot booking via a code records the referral")
+
+    // upsertCustomer: a referrer is set only with a referral source, never on itself.
+    let notReferral = NativeBookingIntake.upsertCustomer(
+        in: [], name: "X", email: "", phone: "", address: "", leadSource: "google", referredByCustomerId: "c_sam",
+        makeCustomerID: { "c_x" }, nowISO: { fixedNow })
+    expect(notReferral.customer?.referredByCustomerId == nil, "upsert drops a referrer without a referral source")
+    let selfRef = NativeBookingIntake.upsertCustomer(
+        in: [], name: "X", email: "", phone: "", address: "", leadSource: "referral", referredByCustomerId: "c_x",
+        makeCustomerID: { "c_x" }, nowISO: { fixedNow })
+    expect(selfRef.customer?.referredByCustomerId == nil, "upsert never makes a customer its own referrer")
+}
+
 if failures == 0 { print("PASS: native booking intake tests") }
 else { print("\(failures) booking intake test(s) failed"); exit(1) }

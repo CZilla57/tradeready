@@ -21,3 +21,13 @@ swiftc \
   -o "$OUTPUT_PATH"
 
 TZ="${TZ:-America/Phoenix}" "$OUTPUT_PATH"
+
+# Review fix 2026-10-03 (finding 1): the device-calendar test again with the
+# iPhone's Calendar setting Buddhist and Japanese (`Calendar.current` follows
+# -AppleLocale).
+for device_calendar in buddhist japanese; do
+  TZ="${TZ:-America/Phoenix}" \
+  QUOTE_EXPIRY_STORE_ONLY=device-calendar \
+  QUOTE_EXPIRY_DEVICE_CALENDAR="$device_calendar" \
+    "$OUTPUT_PATH" -AppleLocale "en_US@calendar=$device_calendar"
+done

@@ -175,6 +175,31 @@ private func testTaxWindowAndCopy() {
     expectEqual(voided.current.reserve, 0, "voided payment yields a zero reserve")
 }
 
+// MARK: - Referral credit (Phase 34, spec 2026-10-03-referral-program-design.md §5.6)
+//
+// A credit is a negative invoice line that lowers `invoice.amount`, never a
+// payment: the set-aside is computed from the cash the customer actually paid,
+// so it follows the credit automatically and the lines never enter it.
+
+private func testReferralCreditTax() {
+    func canonicalInvoice(_ json: String) -> Canonical.Invoice {
+        try! JSONDecoder().decode(Canonical.Invoice.self, from: Data(json.utf8))
+    }
+    let credited = canonicalInvoice(#"{"id":"i1","customer":"Sam","number":"INV-1","amount":975,"due":"2026-07-01","email":"","phone":"","desc":"","paid":true,"lineItems":[{"description":"Labor","amount":1000,"category":"labor"},{"description":"Referral credit","amount":-25,"category":"referral_credit"}],"payments":[{"id":"p1","amount":975,"date":"2026-06-15","method":"cash"}]}"#)
+    let plain = canonicalInvoice(#"{"id":"i1","customer":"Sam","number":"INV-1","amount":975,"due":"2026-07-01","email":"","phone":"","desc":"","paid":true,"payments":[{"id":"p1","amount":975,"date":"2026-06-15","method":"cash"}]}"#)
+    let full = canonicalInvoice(#"{"id":"i1","customer":"Sam","number":"INV-1","amount":1000,"due":"2026-07-01","email":"","phone":"","desc":"","paid":true,"payments":[{"id":"p1","amount":1000,"date":"2026-06-15","method":"cash"}]}"#)
+    let values = NativeTaxSettingsValues(taxIncomeRate: 10, vehicleDeductionMethod: .mileage).taxWindowSettings
+    func summary(_ invoice: Canonical.Invoice) -> TaxWindowSummary {
+        TaxEstimateEngine.summarize(invoices: [NativeCashBasis.ledgerInvoice(invoice)], expenses: [], trips: [],
+                                    settings: values, on: "2026-07-18")
+    }
+    expectEqual(summary(credited).current.netProfit, decimal("975"), "referral credit: the set-aside counts the cash paid")
+    expectEqual(summary(credited).current.reserve, summary(plain).current.reserve,
+                "referral credit: the lines never enter the tax math")
+    expect(summary(credited).current.reserve < summary(full).current.reserve,
+           "referral credit: a credited invoice sets aside less than the uncredited total")
+}
+
 // MARK: - JS number parity (12.00b.3)
 //
 // The sheet runs `rate.trim()` then `parseFloat` and checks the JS double
@@ -482,6 +507,7 @@ let rootArgument = CommandLine.arguments.count > 1 ? URL(fileURLWithPath: Comman
 testCanonicalMapping()
 testDraftRules()
 testTaxWindowAndCopy()
+testReferralCreditTax()
 testJSNumberParity()
 testEditorModel()
 testCardOpensEditor(rootArgument)

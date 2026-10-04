@@ -256,6 +256,22 @@ do {
     expect(savedSource("nextdoor") == "nextdoor", "a picked preset key saves unchanged")
     expect(savedSource(" Home   Show ") == "Home Show", "a custom label saves trimmed and collapsed")
     expect(savedSource("   ") == nil && savedSource(nil) == nil, "a blank source saves as Not set")
+
+    // Phase 34 (R1): the editor keeps a referrer only for a Referral source
+    // that is not the customer itself.
+    func savedReferrer(source: String?, referrer: String?, id: String = "new") -> String? {
+        var draft = customer(id: id, name: "Referred Draft")
+        draft.leadSource = source
+        draft.referredByCustomerId = referrer
+        return NativeCustomerIdentity.editorSavePlan(for: draft, existingCustomers: existing, mode: .create)
+            .customer.referredByCustomerId
+    }
+    expect(savedReferrer(source: "referral", referrer: "c-sam") == "c-sam", "a Referral source keeps its referrer")
+    expect(savedReferrer(source: "Word of mouth", referrer: "c-sam") == "c-sam", "a referral alias keeps its referrer")
+    expect(savedReferrer(source: "google", referrer: "c-sam") == nil, "another source clears the referrer")
+    expect(savedReferrer(source: nil, referrer: "c-sam") == nil, "no source clears the referrer")
+    expect(savedReferrer(source: "referral", referrer: "new", id: "new") == nil, "a customer cannot refer themself")
+    expect(savedReferrer(source: "referral", referrer: "  ") == nil, "a blank referrer saves as none")
 }
 
 do {
@@ -475,6 +491,152 @@ do {
     expect(keptWinner == "google", "a winner source is never replaced by the loser's")
     let bothBlank = try mergedSource(winner: nil, loser: nil)
     expect(bothBlank == nil, "two blank sources stay blank")
+
+    // Phase 34 (spec 2026-10-03-referral-program-design.md §5.4): codes carry
+    // over as aliases, everyone the loser referred is re-pointed to the
+    // winner, a self-reference is dropped and the reward carries.
+    func referralMerge(
+        winner configureWinner: (inout Canonical.Customer) -> Void,
+        loser configureLoser: (inout Canonical.Customer) -> Void,
+        others: [Canonical.Customer] = []
+    ) throws -> (result: NativeCustomerMergeResult, winner: Canonical.Customer?, snapshot: Canonical.Snapshot) {
+        var w = winner
+        w.referralCode = nil; w.referralCodeAliases = nil; w.referredByCustomerId = nil; w.referralReward = nil
+        var l = loser
+        l.referralCode = nil; l.referralCodeAliases = nil; l.referredByCustomerId = nil; l.referralReward = nil
+        configureWinner(&w)
+        configureLoser(&l)
+        let snapshot = Canonical.Snapshot(payload: .init(customers: [l, w] + others))
+        let result = try NativeCustomerIdentity.merge(snapshot: snapshot, winnerID: winner.id, loserID: loser.id)
+        return (result, result.snapshot.payload.customers?.first { $0.id == winner.id }, snapshot)
+    }
+    let codes = try referralMerge(
+        winner: { $0.referralCode = "wwwwwwwwwwwwwwww" },
+        loser: { $0.referralCode = "llllllllllllllll"; $0.referralCodeAliases = ["aaaaaaaaaaaaaaaa", "wwwwwwwwwwwwwwww"] }
+    )
+    expect(codes.winner?.referralCode == "wwwwwwwwwwwwwwww", "merge: the winner keeps its referral code")
+    expect(codes.winner?.referralCodeAliases == ["aaaaaaaaaaaaaaaa", "llllllllllllllll"],
+           "merge: the loser's code and aliases become the winner's aliases, deduped and sorted")
+    let takenCode = try referralMerge(
+        winner: { _ in },
+        loser: { $0.referralCode = "llllllllllllllll"; $0.referralCodeAliases = ["aaaaaaaaaaaaaaaa"] }
+    )
+    expect(takenCode.winner?.referralCode == "llllllllllllllll" && takenCode.winner?.referralCodeAliases == ["aaaaaaaaaaaaaaaa"],
+           "merge: a winner with no code takes the loser's")
+    let noCodes = try referralMerge(winner: { _ in }, loser: { _ in })
+    expect(noCodes.winner?.referralCode == nil && noCodes.winner?.referralCodeAliases == nil, "merge: no codes stay no codes")
+
+    var referredByLoser = winner
+    referredByLoser.id = "friend"
+    referredByLoser.name = "Friend Of Loser"
+    referredByLoser.referredByCustomerId = loser.id
+    var referredElsewhere = referredByLoser
+    referredElsewhere.id = "stranger"
+    referredElsewhere.name = "Stranger"
+    referredElsewhere.referredByCustomerId = "someone-else"
+    let repoint = try referralMerge(winner: { _ in }, loser: { _ in }, others: [referredByLoser, referredElsewhere])
+    let movedFriend = repoint.result.snapshot.payload.customers?.first { $0.id == "friend" }
+    expect(movedFriend?.referredByCustomerId == winner.id, "merge: a customer the loser referred now credits the winner")
+    expect(repoint.result.snapshot.payload.customers?.first { $0.id == "stranger" }?.referredByCustomerId == "someone-else",
+           "merge: other referrals are untouched")
+    expect(repoint.result.mutations.contains { $0.table == "customers" && $0.recordId == "friend" && $0.op == .upsert }
+           && !repoint.result.mutations.contains { $0.recordId == "stranger" },
+           "merge: each re-pointed customer is one upsert")
+    let repointUndone = try NativeCustomerIdentity.undo(snapshot: repoint.result.snapshot, token: repoint.result.undo)
+    // Customers only: undo writes `[]` for a collection the snapshot never had.
+    let repointUndoneBytes = try wireEncoder.encode(repointUndone.snapshot.payload.customers ?? [])
+    let repointOriginalBytes = try wireEncoder.encode(repoint.snapshot.payload.customers ?? [])
+    expect(repointUndoneBytes == repointOriginalBytes, "merge undo restores re-pointed customers exactly")
+    expect(repointUndone.mutations.contains { $0.table == "customers" && $0.recordId == "friend" && $0.op == .upsert },
+           "merge undo queues the restored re-pointed customer")
+    var friendEdited = repoint.result.snapshot
+    if let index = friendEdited.payload.customers?.firstIndex(where: { $0.id == "friend" }) {
+        friendEdited.payload.customers?[index].notes = "Edited after the merge"
+    }
+    do {
+        _ = try NativeCustomerIdentity.undo(snapshot: friendEdited, token: repoint.result.undo)
+        expect(false, "merge undo conflicts when a re-pointed customer changed")
+    } catch NativeCustomerMergeError.undoConflict {}
+
+    let selfReference = try referralMerge(
+        winner: { $0.leadSource = "referral"; $0.referredByCustomerId = loser.id }, loser: { _ in }
+    )
+    expect(selfReference.winner?.referredByCustomerId == nil, "merge: a winner 'referred' by its own duplicate drops it")
+    let loserPointsAtWinner = try referralMerge(
+        winner: { $0.leadSource = "referral" }, loser: { $0.referredByCustomerId = winner.id }
+    )
+    expect(loserPointsAtWinner.winner?.referredByCustomerId == nil, "merge: a loser referred by the winner fills nothing")
+    let filledReferrer = try referralMerge(
+        winner: { $0.leadSource = nil }, loser: { $0.leadSource = "referral"; $0.referredByCustomerId = "c-9" }
+    )
+    expect(filledReferrer.winner?.leadSource == "referral" && filledReferrer.winner?.referredByCustomerId == "c-9",
+           "merge: a blank winner takes the loser's referral and referrer")
+    let otherSource = try referralMerge(
+        winner: { $0.leadSource = "google" }, loser: { $0.leadSource = "referral"; $0.referredByCustomerId = "c-9" }
+    )
+    expect(otherSource.winner?.referredByCustomerId == nil, "merge: no referrer is filled when the merged source is not Referral")
+    let keptReferrer = try referralMerge(
+        winner: { $0.leadSource = "referral"; $0.referredByCustomerId = "c-1" },
+        loser: { $0.leadSource = "referral"; $0.referredByCustomerId = "c-9" }
+    )
+    expect(keptReferrer.winner?.referredByCustomerId == "c-1", "merge: the winner's referrer is kept (first touch)")
+
+    let rewardJSON = try JSONSerialization.data(withJSONObject: ["kind": "gift_card", "amount": 20, "recordedOn": "2026-09-01"])
+    let loserReward = try JSONDecoder().decode(Canonical.Customer.ReferralReward.self, from: rewardJSON)
+    let rewardCarry = try referralMerge(
+        winner: { $0.leadSource = "referral"; $0.referredByCustomerId = "c-1" },
+        loser: { $0.referralReward = loserReward }
+    )
+    expect(rewardCarry.winner?.referralReward?.kind == "gift_card", "merge: a winner with a referrer takes the loser's reward")
+    let rewardDropped = try referralMerge(winner: { $0.leadSource = "google" }, loser: { $0.referralReward = loserReward })
+    expect(rewardDropped.winner?.referralReward == nil, "merge: a winner without a referrer does not take a reward")
+
+    // Phase 21 (spec 2026-10-02-properties-equipment-design.md §3): the rich
+    // winner and loser are copies of one fixture customer, so they share
+    // property and equipment ids. The winner keeps its properties; the
+    // loser's (at the backfilled, same address) merge in with fresh ids.
+    expect((try? NativePropertiesEquipment.validate(mergedWinner?.properties)) != nil,
+           "merged properties keep one primary and unique ids (P1, P2)")
+    expect(mergedWinner?.properties?.prefix(2).map(\.id) == winner.properties?.map(\.id),
+           "the winner keeps its own properties first")
+    expect(mergedWinner?.properties?.first?.equipment?.count == 4,
+           "the loser's primary equipment joins the winner's primary at the same address")
+    expect(merged.snapshot.payload.jobs?.first { $0.id == linkedJob.id }?.propertyId == linkedJob.propertyId,
+           "a re-pointed job keeps its property link")
+    let mergeUpsert = merged.mutations.first { $0.table == "customers" && $0.op == .upsert }
+    if case let .object(payload)? = mergeUpsert?.payload, case let .array(list)? = payload["properties"] {
+        expect(list.count == mergedWinner?.properties?.count, "the winner upsert carries the merged properties")
+    } else {
+        expect(false, "the winner upsert carries the merged properties")
+    }
+
+    // A different-address loser: its primary becomes a property and its
+    // legacy jobs there link to it; undo restores everything exactly.
+    var farLoser = loser
+    farLoser.properties = nil
+    farLoser.address = "9 Far Rd"
+    var farWinner = winner
+    farWinner.address = "1 Main St"
+    var farJob = orphanJob
+    farJob.propertyId = nil
+    farJob.address = "9 far rd."
+    let farOriginal = Canonical.Snapshot(payload: .init(
+        invoices: [], jobs: [farJob], customers: [farWinner, farLoser], recurringJobs: [], recurringInvoices: []
+    ))
+    var nextID = 0
+    let far = try NativeCustomerIdentity.merge(
+        snapshot: farOriginal, winnerID: winner.id, loserID: loser.id,
+        makePropertyID: { nextID += 1; return "pr_far\(nextID)" }
+    )
+    let farMerged = far.snapshot.payload.customers?.first
+    expect(farMerged?.properties?.last?.address == "9 Far Rd" && farMerged?.properties?.last?.primary == nil,
+           "a different-address loser becomes a property at its address")
+    expect(far.snapshot.payload.jobs?.first?.propertyId == farMerged?.properties?.last?.id,
+           "the loser's unlinked job at that address links to it")
+    let farUndone = try NativeCustomerIdentity.undo(snapshot: far.snapshot, token: far.undo)
+    let farUndoneBytes = try wireEncoder.encode(farUndone.snapshot)
+    let farOriginalBytes = try wireEncoder.encode(farOriginal)
+    expect(farUndoneBytes == farOriginalBytes, "undo restores both customers and the job exactly")
 }
 
 do {

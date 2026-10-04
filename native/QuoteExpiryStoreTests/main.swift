@@ -646,12 +646,226 @@ func testExtensionAlertCopy() {
     expectEqual(newlyDated.message, "Valid until Nov 2, 2026.", "alert: plain change without a link")
 }
 
+// MARK: - 7. Review fixes (2026-10-03)
+
+/// Finding 1: every Phase 32 "today" runs in a Gregorian calendar in the
+/// device zone. The runner runs this test again with `-AppleLocale
+/// en_US@calendar=buddhist|japanese`, where `Calendar.current` itself carries
+/// another year (2569, or Reiwa 8), as on an iPhone with that Calendar setting.
+@MainActor
+func testDeviceCalendar() async throws {
+    let h = Harness(tag: "device-calendar")
+    defer { h.cleanup() }
+    if let expected = ProcessInfo.processInfo.environment["QUOTE_EXPIRY_DEVICE_CALENDAR"] {
+        expectEqual("\(Calendar.current.identifier)", expected, "calendar: the runner set Calendar.current")
+    }
+    let label = "calendar (\(Calendar.current.identifier))"
+    expectEqual(h.store.estimateValidityToday(now: now), today, "\(label): today is the Gregorian date")
+
+    // Mark as sent with the proposed date: the job stores a date the Worker
+    // and the customer page read as the same day.
+    guard let marked = pricedLead(h, label) else { return }
+    guard let draft = h.store.estimateReviewDraft(jobID: marked, now: now) else {
+        expect(false, "\(label): a lead opens for review"); return
+    }
+    expectEqual(draft.validUntil, todayPlus30, "\(label): the review proposes Gregorian today + 30")
+    expect(h.store.markEstimateSent(id: marked, from: .lead, validUntil: draft.validUntil, on: now),
+           "\(label): Mark as sent accepts the proposed date")
+    expectEqual(h.job(marked)?.estimateValidUntil, todayPlus30, "\(label): the job stores the Gregorian date")
+    expectEqual(h.store.estimateValidity(jobID: marked, now: now), .open(validUntil: todayPlus30, daysLeft: 30),
+                "\(label): job detail counts 30 days left")
+    let expiry = h.store.estimateFollowUpNotifications(now: now).first { $0.identifier == "est_exp_\(marked)" }
+    expectEqual(expiry?.fireDate, ISO8601DateFormatter().date(from: "2026-10-31T16:00:00Z"),
+                "\(label): the expiry reminder fires at 9:00 MST two days before the date")
+
+    // The approval link is minted with the Gregorian date, and the
+    // extension accepts one.
+    guard let linked = pricedLead(h, "\(label) link", title: "Linked") else { return }
+    guard let linkDraft = h.store.estimateReviewDraft(jobID: linked, now: now) else {
+        expect(false, "\(label): the link review opens"); return
+    }
+    let outcome = await h.store.createEstimateApprovalLink(for: linkDraft, on: now)
+    guard case .success(let link) = outcome else {
+        expect(false, "\(label): the approval link is created (\(outcome))"); return
+    }
+    expectEqual(h.links.calls.last?.snapshot.validUntil, todayPlus30, "\(label): the Worker receives the Gregorian date")
+    expectEqual(await h.store.extendEstimateValidity(jobID: linked, validUntil: "2026-12-01", now: now),
+                .extended(link: link.url), "\(label): an extension to a Gregorian date is accepted")
+    expectEqual(h.links.calls.last?.snapshot.validUntil, "2026-12-01", "\(label): and minted")
+
+    // The review sheet's picker bridge, with its default calendar.
+    let picked = NativeValidUntilPicker.date(from: "2026-12-15").map { NativeValidUntilPicker.ymd(from: $0) }
+    expectEqual(picked, "2026-12-15", "\(label): the date picker round-trips the Gregorian day")
+    guard let review = h.store.estimateReviewDraft(jobID: linked, now: now) else { return }
+    expectEqual(h.store.estimateReviewDraft(review, changingValidUntilTo: .date(picked ?? ""), now: now)?.validUntil,
+                "2026-12-15", "\(label): the review sheet accepts the picked date")
+}
+
+/// Finding 2: changing the date in an open review keeps the snapshot the
+/// owner reviewed. A newer price synced in meanwhile is not swapped in, and
+/// the send-time guard still preserves it.
+@MainActor
+func testDateChangeKeepsReviewedSnapshot() async throws {
+    let h = Harness(tag: "date-change")
+    defer { h.cleanup() }
+    guard let id = pricedLead(h, "date change") else { return }
+    guard let reviewed = h.store.estimateReviewDraft(jobID: id, now: now) else {
+        expect(false, "date change: the review opens"); return
+    }
+
+    // An unchanged estimate: only the date and its zone move.
+    guard let later = h.store.estimateReviewDraft(reviewed, changingValidUntilTo: .date("2026-12-15"), now: now) else {
+        expect(false, "date change: a new date is accepted"); return
+    }
+    expectEqual(later.validUntil, "2026-12-15", "date change: the draft has the new date")
+    expectEqual(later.snapshot.validUntilTimeZone, "America/Phoenix", "date change: with the device zone")
+    expect(CanonicalUIAdapters.estimateApprovalSnapshotsMatch(later.snapshot, reviewed.snapshot, ignoringValidity: true),
+           "date change: everything else in the snapshot is the reviewed one")
+    guard let undated = h.store.estimateReviewDraft(later, changingValidUntilTo: .doesNotExpire, now: now) else {
+        expect(false, "date change: Doesn't expire is accepted"); return
+    }
+    expect(undated.validUntil == nil && undated.snapshot.validUntilTimeZone == nil,
+           "date change: Doesn't expire drops the date and the zone")
+    h.store.migrationMessage = nil
+    expect(h.store.estimateReviewDraft(reviewed, changingValidUntilTo: .date("2026-10-02"), now: now) == nil,
+           "date change: yesterday is refused")
+    expectEqual(h.store.migrationMessage, NativeEstimateExtensionError.invalidDate.errorDescription,
+                "date change: the refusal explains itself")
+
+    // Another device's price change syncs in while the sheet is open.
+    guard var pricing = h.store.jobPricingDraft(jobID: id) else { return }
+    pricing.laborHours = 6
+    expect(h.store.saveJobPricing(pricing), "date change: the price changes under the open sheet")
+    let newerTotal = h.store.estimateReviewDraft(jobID: id, now: now)?.snapshot.total
+    expect(newerTotal != nil && newerTotal != reviewed.snapshot.total, "date change: the canonical total moved")
+
+    guard let changed = h.store.estimateReviewDraft(reviewed, changingValidUntilTo: .date("2026-12-15"), now: now) else {
+        expect(false, "date change: the date still changes after a price change"); return
+    }
+    expectEqual(changed.snapshot.total, reviewed.snapshot.total, "date change: the reviewed total stays")
+    expect(CanonicalUIAdapters.estimateApprovalSnapshotsMatch(changed.snapshot, reviewed.snapshot, ignoringValidity: true),
+           "date change: the newer pricing is not swapped in")
+    expectEqual(changed.expectedStatus, reviewed.expectedStatus, "date change: the expected status stays")
+    expectEqual(changed.customerEmail, reviewed.customerEmail, "date change: the reviewed recipient stays")
+    expectEqual(h.store.recordEstimateDelivery(for: changed, on: now), .preservedNewerState,
+                "date change: sending the stale review still preserves the newer estimate")
+    expectEqual(h.job(id)?.status, "lead", "date change: nothing was stamped")
+    expect(h.job(id)?.estimateValidUntil == nil, "date change: and no date was written")
+}
+
+/// Finding 3a: a failed "Update approval link" leaves the job on the date
+/// the customer's link still enforces; a retry that succeeds moves both.
+@MainActor
+func testFailedLinkUpdateKeepsLinkDate() async throws {
+    let h = Harness(tag: "failed-update")
+    defer { h.cleanup() }
+    guard let id = pricedLead(h, "failed update") else { return }
+    guard let first = h.store.estimateReviewDraft(jobID: id, now: now),
+          case .success(let link) = await h.store.createEstimateApprovalLink(for: first, on: now)
+    else { expect(false, "failed update: the first link is created"); return }
+    expectEqual(h.job(id)?.estimateValidUntil, todayPlus30, "failed update: the link and the job say Nov 2")
+
+    guard let moved = h.store.estimateReviewDraft(jobID: id, validUntil: .date("2026-12-01"), now: now) else {
+        expect(false, "failed update: the re-send review opens with Dec 1"); return
+    }
+    for failure in [NativeEstimateApprovalLinkError.rateLimited, .estimateRejected, .unavailable] {
+        h.links.failure = failure
+        let outcome = await h.store.createEstimateApprovalLink(for: moved, on: now)
+        expectEqual(outcome, .failure(failure), "failed update (\(failure)): the failure is reported")
+        expectEqual(h.job(id)?.estimateValidUntil, todayPlus30,
+                    "failed update (\(failure)): the job keeps the date the link enforces")
+        expectEqual(h.job(id)?.approval?.snapshot.validUntil, todayPlus30, "failed update (\(failure)): the link mirror is unchanged")
+        expectEqual(h.serverJob(id)?.estimateValidUntil, todayPlus30, "failed update (\(failure)): the server job keeps it too")
+        expectEqual(h.store.estimateValidity(jobID: id, now: now), .open(validUntil: todayPlus30, daysLeft: 30),
+                    "failed update (\(failure)): job detail shows the link's date")
+    }
+    h.links.failure = nil
+
+    let retried = await h.store.createEstimateApprovalLink(for: moved, on: now)
+    guard case .success(let again) = retried else {
+        expect(false, "failed update: the retry succeeds (\(retried))"); return
+    }
+    expectEqual(again.token, link.token, "failed update: the retry keeps the token")
+    expectEqual(h.job(id)?.estimateValidUntil, "2026-12-01", "failed update: the retry moves the job's date")
+    expectEqual(h.job(id)?.approval?.snapshot.validUntil, "2026-12-01", "failed update: and the link's")
+    expectEqual(h.serverJob(id)?.estimateValidUntil, "2026-12-01", "failed update: and the server's")
+}
+
+/// Finding 3b: when the job's date and the customer's undecided link
+/// disagree (a re-send recorded without updating the link, or an older
+/// failed update), saving the job's date in the job-detail editor is not a
+/// no-op: it refreshes the link.
+@MainActor
+func testEditorRepairsLinkDateMismatch() async throws {
+    let h = Harness(tag: "editor-repair")
+    defer { h.cleanup() }
+    guard let id = pricedLead(h, "editor repair") else { return }
+    guard let first = h.store.estimateReviewDraft(jobID: id, now: now),
+          case .success(let link) = await h.store.createEstimateApprovalLink(for: first, on: now)
+    else { expect(false, "editor repair: the link is created"); return }
+    expect(h.store.isEstimateValidityUnchanged(jobID: id, validUntil: todayPlus30),
+           "editor repair: in step, saving the same date is a no-op")
+    expect(!h.store.isEstimateValidityUnchanged(jobID: id, validUntil: "2026-12-01"),
+           "editor repair: a different date is a change")
+    expect(h.store.estimateLinkValidityNote(jobID: id) == nil, "editor repair: no note while in step")
+
+    // Re-sent by email with Dec 1 without tapping "Update approval link".
+    guard let resend = h.store.estimateReviewDraft(jobID: id, validUntil: .date("2026-12-01"), now: now) else { return }
+    expectEqual(h.store.recordEstimateDelivery(for: resend, on: now), .recorded, "editor repair: the re-send is recorded")
+    expectEqual(h.job(id)?.estimateValidUntil, "2026-12-01", "editor repair: the job says Dec 1")
+    expectEqual(h.job(id)?.approval?.snapshot.validUntil, todayPlus30, "editor repair: the link still says Nov 2")
+
+    expect(!h.store.isEstimateValidityUnchanged(jobID: id, validUntil: "2026-12-01"),
+           "editor repair: saving the job's own date is not a no-op while the link differs")
+    expectEqual(h.store.estimateLinkValidityNote(jobID: id),
+                "The customer’s approval link still shows Nov 2, 2026. Save to update the link to match.",
+                "editor repair: the editor says why")
+    let calls = h.links.calls.count
+    expectEqual(await h.store.extendEstimateValidity(jobID: id, validUntil: "2026-12-01", now: now),
+                .extended(link: link.url), "editor repair: Save refreshes the link")
+    expectEqual(h.links.calls.count, calls + 1, "editor repair: create-link was called")
+    expectEqual(h.job(id)?.approval?.snapshot.validUntil, "2026-12-01", "editor repair: the link now says Dec 1")
+    expect(h.store.isEstimateValidityUnchanged(jobID: id, validUntil: "2026-12-01"), "editor repair: back in step")
+    expect(h.store.estimateLinkValidityNote(jobID: id) == nil, "editor repair: the note is gone")
+
+    // An undated link against a dated job reads "no valid-until date".
+    guard let undated = h.store.estimateReviewDraft(jobID: id, validUntil: .doesNotExpire, now: now),
+          case .success = await h.store.createEstimateApprovalLink(for: undated, on: now),
+          let redated = h.store.estimateReviewDraft(jobID: id, validUntil: .date("2026-12-20"), now: now)
+    else { expect(false, "editor repair: the undated link is created"); return }
+    expectEqual(h.store.recordEstimateDelivery(for: redated, on: now), .recorded, "editor repair: re-sent dated")
+    expectEqual(h.store.estimateLinkValidityNote(jobID: id),
+                "The customer’s approval link still shows no valid-until date. Save to update the link to match.",
+                "editor repair: the undated link note")
+
+    // Without a link only the job's date counts.
+    guard let local = pricedLead(h, "editor repair local", title: "No link") else { return }
+    expect(h.store.markEstimateSent(id: local, from: .lead, validUntil: todayPlus30, on: now), "editor repair: sent without a link")
+    expect(h.store.isEstimateValidityUnchanged(jobID: local, validUntil: todayPlus30), "editor repair: no link, same date")
+    expect(!h.store.isEstimateValidityUnchanged(jobID: local, validUntil: nil), "editor repair: no link, Doesn't expire is a change")
+    expect(h.store.estimateLinkValidityNote(jobID: local) == nil, "editor repair: no link, no note")
+}
+
 // MARK: - Main
 
 @main
 struct QuoteExpiryStoreTests {
     @MainActor
     static func main() async throws {
+        // Review fix 2026-10-03: the runner's extra passes under a Buddhist
+        // and a Japanese `Calendar.current` run only the device-calendar test
+        // (the rest pin `estimateSentAt`, which the app-wide
+        // `Date.dateOnlyString` still writes in `Calendar.current`).
+        if ProcessInfo.processInfo.environment["QUOTE_EXPIRY_STORE_ONLY"] == "device-calendar" {
+            try await testDeviceCalendar()
+            if failures == 0 {
+                print("PASS: quote-expiry store tests, \(Calendar.current.identifier) device calendar (\(checks) checks)")
+            } else {
+                print("quote-expiry store tests (\(Calendar.current.identifier)): \(failures) of \(checks) checks FAILED")
+                exit(1)
+            }
+            return
+        }
         try testReviewDraftProposal()
         try await testSendStamps()
         try await testLinkFailsClosedOnPulledDate()
@@ -661,6 +875,10 @@ struct QuoteExpiryStoreTests {
         try await testExtendRefusedAfterPricingEdit()
         try await testExtendRefusedOnceDecided()
         testExtensionAlertCopy()
+        try await testDeviceCalendar()
+        try await testDateChangeKeepsReviewedSnapshot()
+        try await testFailedLinkUpdateKeepsLinkDate()
+        try await testEditorRepairsLinkDateMismatch()
         if failures == 0 {
             print("PASS: quote-expiry store tests (\(checks) checks)")
         } else {
