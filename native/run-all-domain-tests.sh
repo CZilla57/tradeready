@@ -56,6 +56,8 @@ sh "$ROOT_DIR/native/run-quote-options-store-tests.sh"
 sh "$ROOT_DIR/native/run-job-forms-tests.sh"
 # Phase 27: lead source tracking (normalizer, capture rules, report, coach block).
 sh "$ROOT_DIR/native/run-lead-source-tests.sh"
+# Phase 21: multi-property and equipment history (properties, merge, warranty insight).
+sh "$ROOT_DIR/native/run-properties-equipment-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-pdf-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-delivery-tests.sh"
 sh "$ROOT_DIR/native/run-estimate-message-draft-tests.sh"

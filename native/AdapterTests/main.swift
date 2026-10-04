@@ -111,6 +111,51 @@ run("customer lead source projects, edits and clears without touching siblings")
     expect(projected.leadSource == "yelp", "the UI projection carries the source")
 }
 
+// Phase 21 (spec 2026-10-02-properties-equipment-design.md §1-§3): customer
+// edits never touch the nested properties (the primary's address follows the
+// customer's), and the job editor's property pick writes through the merge.
+run("customer edits keep properties; job propertyId projects, edits and clears") {
+    let source: Canonical.Customer = try field("customer", rich)
+    let sourceFields = try object(source)
+    var edit = try CanonicalUIAdapters.edit(source)
+    edit.value.address = "99 New Rd"
+    edit.value.name = "Ada King"
+    let changed = try CanonicalUIAdapters.canonical(from: edit)
+    let changedFields = try object(changed)
+    expect(changedFields["properties"] == sourceFields["properties"], "a customer edit keeps properties byte-identical")
+    expect(changed.properties?.first?.address == nil, "the primary still stores no address after an address edit")
+
+    let job: Canonical.Job = try field("job", rich)
+    let jobFields = try object(job)
+    var jobEdit = try CanonicalUIAdapters.edit(job)
+    expect(jobEdit.value.propertyId == "pr1759500000000_home", "propertyId projects into the UI model")
+    jobEdit.value.propertyId = "pr_other"
+    var expected = jobFields
+    expected["propertyId"] = .string("pr_other")
+    let picked = try object(CanonicalUIAdapters.canonical(from: jobEdit))
+    expect(picked == expected, "a property pick writes propertyId and nothing else")
+    jobEdit.value.propertyId = nil
+    var withoutProperty = jobFields
+    withoutProperty.removeValue(forKey: "propertyId")
+    let cleared = try object(CanonicalUIAdapters.canonical(from: jobEdit))
+    expect(cleared == withoutProperty, "clearing the pick removes the key and keeps siblings")
+
+    var draft = Job(customerId: "c-42", customerName: "Ada", title: "New", address: "44 Elm St")
+    draft.propertyId = "pr_rental"
+    let created = try CanonicalUIAdapters.canonical(from: draft)
+    expect(created.propertyId == "pr_rental", "a new job's property is written")
+    let plainFields = try object(CanonicalUIAdapters.canonical(from: Job(title: "Plain")))
+    expect(plainFields["propertyId"] == nil, "a new job without a property has no key")
+
+    let duplicate = try CanonicalUIAdapters.duplicateJob(job, id: "dup", createdAt: Date(timeIntervalSince1970: 0))
+    expect(duplicate.canonicalTemplate.propertyId == job.propertyId, "Duplicate job keeps the property (whitelist)")
+    let rule = try CanonicalUIAdapters.recurringJob(
+        from: job, id: "rj", startDate: "2026-09-15", cadence: .monthly, endCondition: .never,
+        endCount: nil, endDate: nil, createdAt: "2026-09-01"
+    )
+    expect(rule.propertyId == job.propertyId, "Set up repeat keeps the property (whitelist)")
+}
+
 run("settings logo reference projects, edits and clears without touching siblings") {
     let source: Canonical.Settings = try field("settings", rich)
     var edit = try CanonicalUIAdapters.edit(source)

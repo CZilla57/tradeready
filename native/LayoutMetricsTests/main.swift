@@ -432,6 +432,10 @@ let scrollRootInventory: [String: Int] = [
     "NativePricebookEntryView.swift|NativePricebookEntryView|Form": 1,
     "NativePricebookView.swift|NativePricebookView|List": 1,
     "NativePricingCalculator.swift|NativePricingCalculatorView|Form": 1,
+    // Phase 21: property detail (pushed) and the property and equipment sheets.
+    "NativePropertiesViews.swift|NativePropertyDetailView|List": 1,
+    "NativePropertiesViews.swift|NativePropertyEditor|Form": 1,
+    "NativePropertiesViews.swift|NativeEquipmentEditor|Form": 1,
     // Phase 25: the quote-options sheet, its add-on editor and owner choice.
     "NativeQuoteOptionsView.swift|NativeQuoteOptionsView|Form": 1,
     "NativeQuoteOptionsView.swift|NativeQuoteAddOnEditorView|Form": 1,

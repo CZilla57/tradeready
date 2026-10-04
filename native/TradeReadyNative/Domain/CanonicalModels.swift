@@ -961,6 +961,10 @@ public extension Canonical {
         public var archivedAt: DateString?
         public var importBatchId: String?
         public var quoteOptions: QuoteOptions?
+        /// Phase 21: the customer property the job is at (spec §2, D3). The
+        /// job's own `address` stays the service address of record; an
+        /// absent or unresolvable id (P3) leaves that address standing alone.
+        public var propertyId: String?
         public var preservation: Preservation
 
         public init(from decoder: Decoder) throws {
@@ -982,6 +986,7 @@ public extension Canonical {
             approvalHistory = try o.optional("approvalHistory")
             changeOrders = try o.optional("changeOrders"); archivedAt = try o.optional("archivedAt")
             importBatchId = try o.optional("importBatchId"); quoteOptions = try o.optional("quoteOptions")
+            propertyId = try o.optional("propertyId")
             preservation = o.finish()
         }
 
@@ -1004,6 +1009,7 @@ public extension Canonical {
             try o.putOptional(approvalHistory, for: "approvalHistory")
             try o.putOptional(changeOrders, for: "changeOrders"); try o.putOptional(archivedAt, for: "archivedAt")
             try o.putOptional(importBatchId, for: "importBatchId"); try o.putOptional(quoteOptions, for: "quoteOptions")
+            try o.putOptional(propertyId, for: "propertyId")
             try o.encode(to: encoder)
         }
     }
@@ -1396,20 +1402,142 @@ public extension Canonical {
         /// Phase 27: how the customer first found the business (a preset key
         /// or custom label, `NativeLeadSource`). Absent means Unknown.
         public var leadSource: String?
+        /// Phase 21: the customer's service locations and their equipment
+        /// (spec `docs/superpowers/specs/2026-10-02-properties-equipment-design.md`
+        /// §2). Absent means one implicit primary property with no equipment;
+        /// when present it is non-empty with exactly one primary, whose
+        /// address is always `address` (never stored twice).
+        public var properties: [Property]?
         public var preservation: Preservation
         public init(from decoder: Decoder) throws {
             var o = try ObjectReader(decoder); id = try o.required("id"); name = try o.required("name")
             email = try o.required("email"); phone = try o.required("phone"); address = try o.required("address")
             notes = try o.required("notes"); createdAt = try o.optional("createdAt"); portal = try o.optional("portal")
             archivedAt = try o.optional("archivedAt"); importBatchId = try o.optional("importBatchId")
-            leadSource = try o.optional("leadSource"); preservation = o.finish()
+            leadSource = try o.optional("leadSource"); properties = try o.optional("properties")
+            preservation = o.finish()
         }
         public func encode(to encoder: Encoder) throws {
             var o = ObjectWriter(preservation); try o.put(id, for: "id"); try o.put(name, for: "name")
             try o.put(email, for: "email"); try o.put(phone, for: "phone"); try o.put(address, for: "address")
             try o.put(notes, for: "notes"); try o.putOptional(createdAt, for: "createdAt"); try o.putOptional(portal, for: "portal")
             try o.putOptional(archivedAt, for: "archivedAt"); try o.putOptional(importBatchId, for: "importBatchId")
-            try o.putOptional(leadSource, for: "leadSource"); try o.encode(to: encoder)
+            try o.putOptional(leadSource, for: "leadSource"); try o.putOptional(properties, for: "properties")
+            try o.encode(to: encoder)
+        }
+    }
+
+    /// Phase 21: one service location of a customer, nested in the customer
+    /// blob (spec §1, D1). `id` is `pr<ms>_<base36>`, random, so it stays
+    /// unique when two customers merge. Invariants (P1, P2) are checked by
+    /// `NativePropertiesEquipment.validate`, never at decode: a blob that
+    /// breaks one still decodes, so a customers pull never fails over it.
+    struct Property: Codable, Equatable {
+        public var id: String
+        /// `true` on exactly one property; absent (never `false`) otherwise.
+        public var primary: Bool?
+        /// 0..40, e.g. "Home", "Rental on Elm".
+        public var label: String?
+        /// Required (1..300) for a non-primary property; never stored on the
+        /// primary, whose address is the customer's.
+        public var address: String?
+        /// 0..1000: gate code, dog, shutoff location.
+        public var notes: String?
+        /// 0..50 items, archived ones included.
+        public var equipment: [Equipment]?
+        /// Non-primary only.
+        public var archivedAt: DateString?
+        public var preservation: Preservation
+        public init(
+            id: String,
+            primary: Bool? = nil,
+            label: String? = nil,
+            address: String? = nil,
+            notes: String? = nil,
+            equipment: [Equipment]? = nil,
+            archivedAt: DateString? = nil,
+            preservation: Preservation = .init()
+        ) {
+            self.id = id
+            self.primary = primary
+            self.label = label
+            self.address = address
+            self.notes = notes
+            self.equipment = equipment
+            self.archivedAt = archivedAt
+            self.preservation = preservation
+        }
+        public init(from decoder: Decoder) throws {
+            var o = try ObjectReader(decoder)
+            id = try o.required("id"); primary = try o.optional("primary"); label = try o.optional("label")
+            address = try o.optional("address"); notes = try o.optional("notes")
+            equipment = try o.optional("equipment"); archivedAt = try o.optional("archivedAt")
+            preservation = o.finish()
+        }
+        public func encode(to encoder: Encoder) throws {
+            var o = ObjectWriter(preservation)
+            try o.put(id, for: "id"); try o.putOptional(primary, for: "primary"); try o.putOptional(label, for: "label")
+            try o.putOptional(address, for: "address"); try o.putOptional(notes, for: "notes")
+            try o.putOptional(equipment, for: "equipment"); try o.putOptional(archivedAt, for: "archivedAt")
+            try o.encode(to: encoder)
+        }
+    }
+
+    /// Phase 21: one piece of equipment at a property. `type` stays a raw
+    /// string (a preset key or a custom label, `NativePropertiesEquipment`)
+    /// so a type added by a newer client decodes and round-trips. Removed or
+    /// replaced equipment is archived, never dropped: it is the history.
+    struct Equipment: Codable, Equatable {
+        /// `eq<ms>_<base36>`.
+        public var id: String
+        /// A preset key or a custom label, 1..40.
+        public var type: String
+        /// 0..80 each.
+        public var make, model, serial: String?
+        /// `YYYY-MM-DD` local calendar dates.
+        public var installDate, warrantyExpires: DateString?
+        /// 0..500.
+        public var notes: String?
+        public var archivedAt: DateString?
+        public var preservation: Preservation
+        public init(
+            id: String,
+            type: String,
+            make: String? = nil,
+            model: String? = nil,
+            serial: String? = nil,
+            installDate: DateString? = nil,
+            warrantyExpires: DateString? = nil,
+            notes: String? = nil,
+            archivedAt: DateString? = nil,
+            preservation: Preservation = .init()
+        ) {
+            self.id = id
+            self.type = type
+            self.make = make
+            self.model = model
+            self.serial = serial
+            self.installDate = installDate
+            self.warrantyExpires = warrantyExpires
+            self.notes = notes
+            self.archivedAt = archivedAt
+            self.preservation = preservation
+        }
+        public init(from decoder: Decoder) throws {
+            var o = try ObjectReader(decoder)
+            id = try o.required("id"); type = try o.required("type")
+            make = try o.optional("make"); model = try o.optional("model"); serial = try o.optional("serial")
+            installDate = try o.optional("installDate"); warrantyExpires = try o.optional("warrantyExpires")
+            notes = try o.optional("notes"); archivedAt = try o.optional("archivedAt")
+            preservation = o.finish()
+        }
+        public func encode(to encoder: Encoder) throws {
+            var o = ObjectWriter(preservation)
+            try o.put(id, for: "id"); try o.put(type, for: "type")
+            try o.putOptional(make, for: "make"); try o.putOptional(model, for: "model"); try o.putOptional(serial, for: "serial")
+            try o.putOptional(installDate, for: "installDate"); try o.putOptional(warrantyExpires, for: "warrantyExpires")
+            try o.putOptional(notes, for: "notes"); try o.putOptional(archivedAt, for: "archivedAt")
+            try o.encode(to: encoder)
         }
     }
 
@@ -1612,6 +1740,9 @@ public extension Canonical {
         public var nextDueDate: DateString
         public var isActive: Bool
         public var createdAt: DateString
+        /// Phase 21: the property every occurrence is at (copied onto each
+        /// generated job, spec §3).
+        public var propertyId: String?
         public var preservation: Preservation
         public init(from decoder: Decoder) throws {
             var o = try ObjectReader(decoder); id = try o.required("id"); customerId = try o.required("customerId")
@@ -1623,7 +1754,7 @@ public extension Canonical {
             endCondition = try o.required("endCondition"); endCount = try o.optional("endCount"); endDate = try o.optional("endDate")
             occurrenceCount = try o.required("occurrenceCount"); lastGeneratedDate = try o.optional("lastGeneratedDate")
             nextDueDate = try o.required("nextDueDate"); isActive = try o.required("isActive"); createdAt = try o.required("createdAt")
-            preservation = o.finish()
+            propertyId = try o.optional("propertyId"); preservation = o.finish()
         }
         public func encode(to encoder: Encoder) throws {
             var o = ObjectWriter(preservation); try o.put(id, for: "id"); try o.put(customerId, for: "customerId")
@@ -1635,7 +1766,7 @@ public extension Canonical {
             try o.put(endCondition, for: "endCondition"); try o.putOptional(endCount, for: "endCount"); try o.putOptional(endDate, for: "endDate")
             try o.put(occurrenceCount, for: "occurrenceCount"); try o.putOptional(lastGeneratedDate, for: "lastGeneratedDate")
             try o.put(nextDueDate, for: "nextDueDate"); try o.put(isActive, for: "isActive"); try o.put(createdAt, for: "createdAt")
-            try o.encode(to: encoder)
+            try o.putOptional(propertyId, for: "propertyId"); try o.encode(to: encoder)
         }
     }
 

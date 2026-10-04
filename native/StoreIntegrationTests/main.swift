@@ -1821,6 +1821,157 @@ struct StoreIntegrationTests {
                    "forms: every form row survives a relaunch")
         }
 
+        // MARK: - Phase 21: properties & equipment through AppStore
+
+        do {
+            func queuedCustomerValue(_ id: String) -> Canonical.Customer? {
+                guard let payload = pendingMutations(queueURL).last(where: { $0.table == "customers" && $0.recordId == id })?.payload,
+                      let data = try? JSONEncoder().encode(payload) else { return nil }
+                return try? JSONDecoder().decode(Canonical.Customer.self, from: data)
+            }
+            func queuedJobValue(_ id: String) -> Canonical.Job? {
+                guard let payload = pendingMutations(queueURL).last(where: { $0.table == "jobs" && $0.recordId == id })?.payload,
+                      let data = try? JSONEncoder().encode(payload) else { return nil }
+                return try? JSONDecoder().decode(Canonical.Job.self, from: data)
+            }
+            let owner = Customer(name: "Pat Property", phone: "555-0142", address: "12 Oak St")
+            expect(queueStore.upsert(owner), "properties: the customer saves")
+            let implicit = queueStore.customerProperties(customerID: owner.id)
+            expect(implicit.map(\.id) == [NativePropertiesEquipment.implicitPrimaryID] && implicit.first?.address == "12 Oak St",
+                   "properties: a customer starts with one implicit primary at their address")
+            expect(queueStore.canonicalCustomer(id: owner.id)?.properties == nil, "properties: nothing is stored yet")
+
+            // The first equipment action materializes the primary.
+            guard case let .success(furnace) = queueStore.addEquipment(
+                customerID: owner.id, propertyID: NativePropertiesEquipment.implicitPrimaryID,
+                draft: .init(type: "gas furnace", make: "Carrier", model: "59SC5", serial: "CAR-77",
+                             installDate: "2019-04-02", warrantyExpires: "2029-04-02")
+            ) else {
+                expect(false, "properties: equipment is added to the implicit primary")
+                throw StoreTestError.missingFixture
+            }
+            let materialized = queueStore.canonicalCustomer(id: owner.id)?.properties
+            expect(materialized?.count == 1 && materialized?.first?.primary == true && materialized?.first?.id == furnace.propertyID
+                   && materialized?.first?.address == nil, "properties: the primary is materialized with no stored address")
+            expect(queuedCustomerValue(owner.id)?.properties?.first?.equipment?.first?.type == "furnace",
+                   "properties: the change is queued as one customers upsert")
+
+            guard case let .success(rentalID) = queueStore.addProperty(
+                customerID: owner.id, draft: .init(label: "Rental on Elm", address: "44 Elm St", notes: "Lockbox 1234")
+            ) else {
+                expect(false, "properties: a property is added")
+                throw StoreTestError.missingFixture
+            }
+            expect(queueStore.customerProperties(customerID: owner.id).map(\.id) == [furnace.propertyID, rentalID],
+                   "properties: primary first, then the new property")
+            expect(queueStore.addProperty(customerID: owner.id, draft: .init(address: "44 elm st.")) == .failure(.duplicateAddress),
+                   "properties: a duplicate address is refused")
+            expect(queueStore.customerProperties(customerID: owner.id).count == 2, "properties: a refusal changes nothing")
+            expect(queueStore.addProperty(customerID: "missing", draft: .init(address: "1 A")) == .failure(.customerNotFound),
+                   "properties: an unknown customer is refused")
+            expect(queueStore.showsPropertyPicker(customerID: owner.id)
+                   && queueStore.propertyPickerOptions(customerID: owner.id).map(\.id) == [furnace.propertyID, rentalID],
+                   "properties: the job editor shows the picker for two properties")
+
+            // A customer edit (address included) keeps the nested properties;
+            // the primary's address follows.
+            var moved = queueStore.customers.first { $0.id == owner.id } ?? owner
+            moved.address = "14 Oak St"
+            expect(queueStore.upsert(moved), "properties: the customer edit saves")
+            expect(queueStore.canonicalCustomer(id: owner.id)?.properties?.count == 2
+                   && queueStore.customerProperty(customerID: owner.id, propertyID: furnace.propertyID)?.address == "14 Oak St",
+                   "properties: editing the customer keeps properties and moves the primary's address")
+
+            // "Add as a property" from a booking-style job at a new address.
+            let bookingJob = Job(customerId: owner.id, customerName: owner.name, title: "Leak at the cabin",
+                                 address: "9 Cabin Rd", estimateTotal: 250)
+            expect(queueStore.upsert(bookingJob), "properties: the job saves")
+            let before = queueStore.jobPropertyContext(jobID: bookingJob.id)
+            expect(before?.canAddAsProperty == true && before?.property == nil, "properties: a new address offers Add as a property")
+            expect(queueStore.estimateReviewDraft(jobID: bookingJob.id)?.serviceAddress == "9 Cabin Rd",
+                   "properties: the estimate shows the job's service address when it differs")
+            guard case let .success(cabinID) = queueStore.addJobAddressAsProperty(jobID: bookingJob.id) else {
+                expect(false, "properties: the job address becomes a property")
+                throw StoreTestError.missingFixture
+            }
+            let after = queueStore.jobPropertyContext(jobID: bookingJob.id)
+            expect(after?.linkedProperty?.id == cabinID && after?.canAddAsProperty == false,
+                   "properties: the job is linked and the offer is gone")
+            expect(queuedJobValue(bookingJob.id)?.propertyId == cabinID
+                   && queuedCustomerValue(owner.id)?.properties?.last?.address == "9 Cabin Rd",
+                   "properties: the job and the customer are queued together")
+            expect(queueStore.jobs.first { $0.id == bookingJob.id }?.propertyId == cabinID, "properties: the screen model carries the link")
+            expect(queueStore.propertyJobHistory(customerID: owner.id, propertyID: cabinID).map(\.id) == [bookingJob.id],
+                   "properties: the property's history lists the job")
+
+            // The job editor's pick writes through the normal job save.
+            var picked = queueStore.jobs.first { $0.id == bookingJob.id } ?? bookingJob
+            picked.propertyId = rentalID
+            expect(queueStore.upsert(picked) && queueStore.jobPropertyContext(jobID: bookingJob.id)?.linkedProperty?.id == rentalID,
+                   "properties: re-picking a property saves")
+            let atHome = Job(customerId: owner.id, customerName: owner.name, title: "Tune-up", address: "14 Oak St", estimateTotal: 90)
+            expect(queueStore.upsert(atHome), "properties: a job at the customer's address saves")
+            expect(queueStore.propertyJobHistory(customerID: owner.id, propertyID: furnace.propertyID).map(\.id) == [atHome.id],
+                   "properties: an unlinked job at the customer's address is in the primary's history")
+            expect(queueStore.estimateReviewDraft(jobID: atHome.id)?.serviceAddress == "",
+                   "properties: no service address at the customer's own address")
+
+            // Edits, archive and restore.
+            expect((try? queueStore.updateProperty(customerID: owner.id, propertyID: rentalID,
+                                                   draft: .init(label: "Elm duplex", address: "44 Elm St")).get())?
+                       .properties?.first { $0.id == rentalID }?.label == "Elm duplex",
+                   "properties: a property edit commits")
+            expect((try? queueStore.setPropertyArchived(customerID: owner.id, propertyID: rentalID, archived: true).get()) != nil
+                   && queueStore.jobPropertyContext(jobID: bookingJob.id)?.linkedProperty == nil,
+                   "properties: an archived property no longer resolves for its jobs (P3)")
+            expect(queueStore.jobs.first { $0.id == bookingJob.id }?.propertyId == rentalID,
+                   "properties: archiving never rewrites the job")
+            if case .failure(.primaryLocked) = queueStore.setPropertyArchived(
+                customerID: owner.id, propertyID: furnace.propertyID, archived: true
+            ) {} else {
+                expect(false, "properties: the primary can't be archived")
+            }
+            _ = queueStore.setPropertyArchived(customerID: owner.id, propertyID: rentalID, archived: false)
+            expect(queueStore.jobPropertyContext(jobID: bookingJob.id)?.linkedProperty?.id == rentalID, "properties: restore resolves again")
+            expect((try? queueStore.updateEquipment(customerID: owner.id, propertyID: furnace.propertyID, equipmentID: furnace.equipmentID,
+                                                    draft: .init(type: "furnace", serial: "CAR-78")).get()) != nil
+                   && queueStore.customerEquipmentSearchIndex[owner.id] == ["CAR-78"],
+                   "properties: an equipment edit commits and feeds search")
+            _ = queueStore.setEquipmentArchived(customerID: owner.id, propertyID: furnace.propertyID, equipmentID: furnace.equipmentID, archived: true)
+            expect(queueStore.customerProperty(customerID: owner.id, propertyID: furnace.propertyID)?.archivedEquipment.count == 1,
+                   "properties: Mark as removed keeps the item as past equipment")
+
+            // Delete + undo through the shared undo.
+            let snapshotBefore = queueStore.canonicalCustomer(id: owner.id)
+            expect(queueStore.deleteEquipment(customerID: owner.id, propertyID: furnace.propertyID, equipmentID: furnace.equipmentID),
+                   "properties: the equipment entry deletes")
+            expect(queueStore.pendingRecordDeleteUndo?.kind == .equipment
+                   && queuedCustomerValue(owner.id)?.properties?.first?.equipment == nil,
+                   "properties: the delete offers the shared undo and queues the customer")
+            queueStore.undoRecordDeletion()
+            let sortedEncoder = JSONEncoder()
+            sortedEncoder.outputFormatting = .sortedKeys
+            let restoredProperties = try sortedEncoder.encode(queueStore.canonicalCustomer(id: owner.id)?.properties)
+            let propertiesBefore = try sortedEncoder.encode(snapshotBefore?.properties)
+            expect(restoredProperties == propertiesBefore, "properties: undo restores the equipment exactly")
+            expect(queueStore.deleteProperty(customerID: owner.id, propertyID: cabinID), "properties: a property deletes")
+            expect(queueStore.pendingRecordDeleteUndo?.bannerMessage == "Deleted property 9 Cabin Rd",
+                   "properties: the property delete names its address")
+            queueStore.undoRecordDeletion()
+            expect(queueStore.customerProperty(customerID: owner.id, propertyID: cabinID) != nil, "properties: undo restores the property")
+            expect(!queueStore.deleteProperty(customerID: owner.id, propertyID: furnace.propertyID)
+                   && queueStore.customerProperties(customerID: owner.id).count == 3,
+                   "properties: the primary can't be deleted")
+
+            // Insight policy and durability.
+            expect(NativeInsightsCardPolicy.isMuteable(.warrantyExpiring) && NativeInsightsCardPolicy.snoozeDays(for: .warrantyExpiring) == 14,
+                   "properties: the warranty insight is muteable with a 14-day snooze")
+            let relaunched = AppStore(fileURL: queueURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
+            expect(relaunched.customerProperties(customerID: owner.id).map(\.id) == queueStore.customerProperties(customerID: owner.id).map(\.id)
+                   && relaunched.jobs.first { $0.id == bookingJob.id }?.propertyId == rentalID,
+                   "properties: properties and links survive a relaunch")
+        }
+
 
         // MARK: - Phase 8 task 8.08 canonical integration (S3, S4, B2-B4, P1, P3)
 

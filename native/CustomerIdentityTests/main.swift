@@ -475,6 +475,53 @@ do {
     expect(keptWinner == "google", "a winner source is never replaced by the loser's")
     let bothBlank = try mergedSource(winner: nil, loser: nil)
     expect(bothBlank == nil, "two blank sources stay blank")
+
+    // Phase 21 (spec 2026-10-02-properties-equipment-design.md §3): the rich
+    // winner and loser are copies of one fixture customer, so they share
+    // property and equipment ids. The winner keeps its properties; the
+    // loser's (at the backfilled, same address) merge in with fresh ids.
+    expect((try? NativePropertiesEquipment.validate(mergedWinner?.properties)) != nil,
+           "merged properties keep one primary and unique ids (P1, P2)")
+    expect(mergedWinner?.properties?.prefix(2).map(\.id) == winner.properties?.map(\.id),
+           "the winner keeps its own properties first")
+    expect(mergedWinner?.properties?.first?.equipment?.count == 4,
+           "the loser's primary equipment joins the winner's primary at the same address")
+    expect(merged.snapshot.payload.jobs?.first { $0.id == linkedJob.id }?.propertyId == linkedJob.propertyId,
+           "a re-pointed job keeps its property link")
+    let mergeUpsert = merged.mutations.first { $0.table == "customers" && $0.op == .upsert }
+    if case let .object(payload)? = mergeUpsert?.payload, case let .array(list)? = payload["properties"] {
+        expect(list.count == mergedWinner?.properties?.count, "the winner upsert carries the merged properties")
+    } else {
+        expect(false, "the winner upsert carries the merged properties")
+    }
+
+    // A different-address loser: its primary becomes a property and its
+    // legacy jobs there link to it; undo restores everything exactly.
+    var farLoser = loser
+    farLoser.properties = nil
+    farLoser.address = "9 Far Rd"
+    var farWinner = winner
+    farWinner.address = "1 Main St"
+    var farJob = orphanJob
+    farJob.propertyId = nil
+    farJob.address = "9 far rd."
+    let farOriginal = Canonical.Snapshot(payload: .init(
+        invoices: [], jobs: [farJob], customers: [farWinner, farLoser], recurringJobs: [], recurringInvoices: []
+    ))
+    var nextID = 0
+    let far = try NativeCustomerIdentity.merge(
+        snapshot: farOriginal, winnerID: winner.id, loserID: loser.id,
+        makePropertyID: { nextID += 1; return "pr_far\(nextID)" }
+    )
+    let farMerged = far.snapshot.payload.customers?.first
+    expect(farMerged?.properties?.last?.address == "9 Far Rd" && farMerged?.properties?.last?.primary == nil,
+           "a different-address loser becomes a property at its address")
+    expect(far.snapshot.payload.jobs?.first?.propertyId == farMerged?.properties?.last?.id,
+           "the loser's unlinked job at that address links to it")
+    let farUndone = try NativeCustomerIdentity.undo(snapshot: far.snapshot, token: far.undo)
+    let farUndoneBytes = try wireEncoder.encode(farUndone.snapshot)
+    let farOriginalBytes = try wireEncoder.encode(farOriginal)
+    expect(farUndoneBytes == farOriginalBytes, "undo restores both customers and the job exactly")
 }
 
 do {

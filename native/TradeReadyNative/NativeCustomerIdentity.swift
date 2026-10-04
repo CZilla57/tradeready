@@ -314,10 +314,16 @@ enum NativeCustomerIdentity {
     /// loss-preserving canonical records. Only blank winner contact fields are
     /// backfilled, loser references are re-pointed across all four dependent
     /// collections, and every record's preservation metadata stays attached.
+    ///
+    /// Phase 21: the loser's properties are unioned into the winner's
+    /// (`NativePropertiesEquipment.mergePlan`); re-pointed jobs and recurring
+    /// rules carry their `propertyId` through the plan. `makePropertyID`
+    /// mints ids for properties the merge creates.
     static func merge(
         snapshot source: Canonical.Snapshot,
         winnerID: String,
-        loserID: String
+        loserID: String,
+        makePropertyID: () -> String = { NativePropertiesEquipment.makePropertyID() }
     ) throws -> NativeCustomerMergeResult {
         guard winnerID != loserID else { throw NativeCustomerMergeError.sameCustomer }
         let customers = source.payload.customers ?? []
@@ -353,6 +359,11 @@ enum NativeCustomerIdentity {
            winnerAfter.createdAt == nil || loserCreatedAt < winnerAfter.createdAt! {
             winnerAfter.createdAt = loserCreatedAt
         }
+        // Phase 21: the winner keeps its properties and takes the loser's.
+        let propertyPlan = NativePropertiesEquipment.mergePlan(
+            winner: winnerAfter, loser: loserBefore, makeID: makePropertyID
+        )
+        winnerAfter.properties = propertyPlan.properties
 
         var result = source
         var mergedCustomers = customers
@@ -373,6 +384,7 @@ enum NativeCustomerIdentity {
             var updated = record
             updated.customerId = winnerID
             updated.customerName = winnerBefore.name
+            updated.propertyId = propertyPlan.propertyID(afterMerge: record.propertyId, address: record.address)
             return updated
         }
 
@@ -405,6 +417,7 @@ enum NativeCustomerIdentity {
             var updated = record
             updated.customerId = winnerID
             updated.customerName = winnerBefore.name
+            updated.propertyId = propertyPlan.propertyID(afterMerge: record.propertyId, address: record.address)
             return updated
         }
 

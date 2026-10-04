@@ -129,6 +129,55 @@ run("forms decode as typed fields and keep unknown data at both levels") {
            "a photo without a form stays without the keys")
 }
 
+// Phase 21 (spec 2026-10-02-properties-equipment-design.md §2): properties
+// nest in the customer blob; jobs and recurring rules carry `propertyId`.
+run("properties and equipment decode as typed fields and keep unknown data at every level") {
+    let customer: Canonical.Customer = try field("customer", from: rich)
+    guard let properties = customer.properties, properties.count == 2,
+          let equipment = properties[0].equipment, equipment.count == 2
+    else { throw NSError(domain: "CanonicalTests", code: 21, userInfo: [NSLocalizedDescriptionKey: "rich customer lost its properties"]) }
+    expect(customer.preservation.unknownFields["properties"] == nil, "properties are typed, not an unknown field")
+    expect(properties[0].primary == true && properties[0].address == nil && properties[0].label == "Home",
+           "the primary decodes without a stored address")
+    expect(properties[0].preservation.unknownFields["futurePropertyField"] == .string("kept"), "a property unknown field is retained")
+    expect(equipment[0].type == "furnace" && equipment[0].serial == "CAR-2219-0042"
+           && equipment[0].warrantyExpires == "2029-04-02" && equipment[0].installDate == "2019-04-02",
+           "equipment fields decode")
+    expect(equipment[0].preservation.unknownFields["futureEquipmentField"] != nil, "an equipment unknown field is retained")
+    expect(equipment[1].type == "Pool heater" && equipment[1].archivedAt == "2026-05-01" && equipment[1].make == nil,
+           "a custom type and removed equipment decode")
+    expect(properties[1].primary == nil && properties[1].address == "44 Elm St, Tucson AZ 85701"
+           && properties[1].archivedAt == "2026-09-01", "a non-primary property decodes")
+
+    var edited = customer
+    edited.properties?[0].equipment?[0].notes = "20x25x1 filter"
+    edited.name = "Ada King"
+    let encoded = try object(edited)
+    guard case let .array(list)? = encoded["properties"], case let .object(home) = list[0],
+          case let .array(items)? = home["equipment"], case let .object(pool) = items[1], case let .object(furnace) = items[0]
+    else { throw NSError(domain: "CanonicalTests", code: 22) }
+    expect(home["futurePropertyField"] == .string("kept") && furnace["futureEquipmentField"] != nil,
+           "editing keeps unknown fields at both nested levels")
+    expect(pool["make"] == .null, "an explicit nested null survives an edit elsewhere")
+    expect(furnace["notes"] == .string("20x25x1 filter"), "a nested edit is written")
+
+    let job: Canonical.Job = try field("job", from: rich)
+    let rule: Canonical.RecurringJob = try field("recurringJob", from: rich)
+    expect(job.propertyId == "pr1759500000000_home" && job.preservation.unknownFields["propertyId"] == nil,
+           "a job's propertyId is typed")
+    expect(rule.propertyId == "pr1759500000000_home" && rule.preservation.unknownFields["propertyId"] == nil,
+           "a recurring rule's propertyId is typed")
+
+    let legacyCustomer: Canonical.Customer = try field("customer", from: legacy)
+    let legacyJob: Canonical.Job = try field("job", from: legacy)
+    let legacyCustomerFields = try object(legacyCustomer)
+    let legacyJobFields = try object(legacyJob)
+    expect(legacyCustomer.properties == nil && legacyCustomerFields["properties"] == nil,
+           "a customer without properties stays without the key (one implicit primary)")
+    expect(legacyJob.propertyId == nil && legacyJobFields["propertyId"] == nil,
+           "a job without a property stays without the key")
+}
+
 run("quote options decode as typed fields") {
     let job: Canonical.Job = try field("quoteOptionsJob", from: rich)
     guard let options = job.quoteOptions, let approval = job.approval else {

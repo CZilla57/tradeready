@@ -22,6 +22,8 @@ public enum NativeInsightKind: String, Equatable, Hashable, Codable {
     case openSlot = "open_slot"
     case unscheduledApproved = "unscheduled_approved"
     case maintenanceDue = "maintenance_due"
+    /// Phase 21 (spec §4): one piece of equipment's warranty ends soon.
+    case warrantyExpiring = "warranty_expiring"
     case expenseAnomaly = "expense_anomaly"
 }
 
@@ -119,7 +121,7 @@ public enum NativeTodayInsights {
 
     // MARK: - Entry point
 
-    /// Concatenates all eight selectors, in the documented priority order.
+    /// Concatenates all nine selectors, in the documented priority order.
     /// Absent inputs suppress their rules instead of guessing:
     /// `customers`/`recurringJobs`/`expenses` default to empty arrays.
     public static func select(
@@ -141,6 +143,8 @@ public enum NativeTodayInsights {
         // Long-horizon, so it rides last — it must never crowd out today's-money
         // rows given the card's top-3 cap.
         out.append(contentsOf: selectMaintenanceDue(jobs: jobs, customers: customers, recurringJobs: recurringJobs, now: now))
+        // Phase 21 (spec §4): right after maintenance due, at most one row.
+        out.append(contentsOf: selectWarrantyExpiring(customers: customers, now: now))
         // Business-level spend trend — lowest priority.
         out.append(contentsOf: selectExpenseAnomaly(expenses: expenses, now: now))
         return out
@@ -462,6 +466,42 @@ public enum NativeTodayInsights {
             target: .customers,
             reason: "\(due.count) customers had their last delivered job over \(maintenanceDueMonths) months " +
                 "ago and have no upcoming work or active recurring plan. Snoozing hides this for 30 days."
+        )]
+    }
+
+    // MARK: - 7b. warranty_expiring (Phase 21)
+
+    /// Spec §4: the soonest active warranty ending within the next
+    /// `NativePropertiesEquipment.warrantyWindowDays` local days, today
+    /// included (ties: customer name, then equipment id). Today is
+    /// `NativeCashBasis.ymd(now)`, so the day boundary is the local one, and
+    /// the day count is civil-day arithmetic on the two dates (FA-039). The
+    /// id carries the expiry date, so a corrected date resurfaces after a
+    /// dismissal.
+    static func selectWarrantyExpiring(customers: [Canonical.Customer], now: Date) -> [NativeTodayInsight] {
+        let today = NativeCashBasis.ymd(now)
+        guard let hit = NativePropertiesEquipment.expiringWarranties(customers: customers, today: today).first
+        else { return [] }
+        let customer = hit.customer
+        let name = customer.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let firstName = name.split(separator: " ", omittingEmptySubsequences: true).first.map(String.init) ?? customer.name
+        let type = NativePropertiesEquipment.typeSentenceName(hit.equipment.type)
+        let date = NativePropertiesEquipment.displayDate(hit.expires)
+        let place = hit.property.isPrimary ? "" : " at \(hit.property.displayName)"
+        let when = hit.days == 0 ? "today" : hit.days == 1 ? "tomorrow" : "in \(hit.days) days"
+        let model = [hit.equipment.make, hit.equipment.model].compactMap { NativePropertiesEquipment.singleLine($0) }
+            .joined(separator: " ")
+        return [NativeTodayInsight(
+            kind: .warrantyExpiring,
+            id: "warranty_expiring:\(hit.equipment.id):\(hit.expires)",
+            title: "\(name)'s \(type) warranty ends \(date)",
+            detail: "A good time to offer a maintenance plan.",
+            target: .customer(customerId: customer.id),
+            reason: "The warranty on \(name)'s \(type)\(model.isEmpty ? "" : " (\(model))")\(place) ends " +
+                "\(hit.expires), \(when) (window: \(NativePropertiesEquipment.warrantyWindowDays) days). " +
+                "Only the soonest expiry is shown. Snoozing hides this for 14 days.",
+            coachPrompt: "\(firstName)'s \(type) warranty ends \(date). Draft a short, friendly text offering " +
+                "a maintenance plan before it runs out."
         )]
     }
 

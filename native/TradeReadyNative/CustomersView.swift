@@ -347,6 +347,7 @@ struct CustomerDetailView: View {
                             if let address = storedCustomer?.address, !address.isEmpty { Text(address) }
                         }
                     }
+                    if let storedCustomer { NativeCustomerPropertiesSection(customerID: storedCustomer.id) } // Phase 21
 
                     // Customer Portal section
                     Section("Customer Portal") {

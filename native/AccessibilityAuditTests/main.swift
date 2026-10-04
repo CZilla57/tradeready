@@ -847,6 +847,15 @@ let viewFileInventory: Set<String> = [
     // an owner-choice picker whose radio rows combine into one element with
     // the selected trait, and text alerts for every refusal.
     "N/NativeQuoteOptionsView.swift",
+    // Phase 21 (properties and equipment), reviewed: property and equipment
+    // rows combine into one VoiceOver element whose warranty state is spelled
+    // out ("Expires in 12 days", "Expired"; never color only), text-titled
+    // Add / Archive / Restore / Mark as removed rows, Delete property and
+    // Delete equipment through titled confirmation dialogs with
+    // `.nativeDestructiveText()`, Form sheets whose fields carry text labels
+    // and the Done bar, an "Add as a property" button that disables while it
+    // runs, and text alerts for every refusal.
+    "N/NativePropertiesViews.swift",
     "N/NativeAuthView.swift", "N/NativeBookingRequestsView.swift",
     "N/NativeBookingSettingsView.swift", "N/NativeCalendarView.swift", "N/NativeChangeOrdersView.swift",
     "N/NativeCoachComponents.swift", "N/NativeConfirmation.swift", "N/NativeCreateInvoiceFromJobView.swift",
@@ -977,6 +986,8 @@ let keyboardDoneBarCoverage: [String: String] = [
     "NativePricingCalculatorView": "NativePricingCalculatorView",
     "NativeQuoteTierTextFields": "NativeQuoteOptionsView",
     "NativeQuoteAddOnEditorView": "NativeQuoteAddOnEditorView",
+    "NativePropertyEditor": "NativePropertyEditor",
+    "NativeEquipmentEditor": "NativeEquipmentEditor",
     "NativeRecurringInvoiceEditor": "NativeRecurringInvoiceEditor",
     "NativeRecurringJobEditor": "NativeRecurringJobEditor",
     "NativeReviewRequestView": "NativeReviewRequestView",
@@ -1618,8 +1629,9 @@ func testSemanticColors(root: URL, sources: [SourceFile]) {
     }
     // 13: Phase 12 (12.00b.1, D3) adds the Discard button of each entry in
     // `NativeRejectedChangesView`. 14: the Remove logo button on Business Profile.
-    // 16: Phase 25's Delete option and Remove options rows.
-    expectEqual(inRowDestructive, 16, "in-row destructive buttons audited")
+    // 16: Phase 25's Delete option and Remove options rows. 18: Phase 21's
+    // Delete property and Delete equipment rows.
+    expectEqual(inRowDestructive, 18, "in-row destructive buttons audited")
     if let views = file(sources, "NativeAccessibilityViews.swift") {
         let raw = String(views.raw)
         expect(raw.contains("func nativeDestructiveText() -> some View {\n        modifier(NativeDestructiveText())"),

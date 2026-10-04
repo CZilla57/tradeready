@@ -20,6 +20,11 @@
 # Phase 20 (job forms): AppStore.swift uses `Domain/NativeJobForms.swift` (photo
 # capture from a form item), and `NativeJobFormsStore.swift` extends AppStore
 # with the forms API, so it follows AppStore.swift too.
+#
+# Phase 21 (properties & equipment): `Domain/NativePropertiesEquipment.swift` is
+# used by AppStore.swift, the customer merge, record deletion and the Today
+# insights; `NativePropertiesEquipmentStore.swift` extends AppStore with the
+# properties API, so it follows AppStore.swift.
 APPSTORE_TEST_SOURCES="
 $ROOT_DIR/native/HostTestSupport/HostInMemoryKeychain.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/FinancialDomain.swift
@@ -27,6 +32,7 @@ $ROOT_DIR/native/TradeReadyNative/Domain/BusinessRules.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/CanonicalModels.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeLeadSourceReport.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeLeadSource.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativePropertiesEquipment.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/CanonicalSnapshot.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/SnapshotRepository.swift
 $ROOT_DIR/native/TradeReadyNative/Models.swift
@@ -154,4 +160,5 @@ $ROOT_DIR/native/TradeReadyNative/NativeRunMarker.swift
 $ROOT_DIR/native/TradeReadyNative/AppStore.swift
 $ROOT_DIR/native/TradeReadyNative/NativeBookingOwnerResponses.swift
 $ROOT_DIR/native/TradeReadyNative/NativeJobFormsStore.swift
+$ROOT_DIR/native/TradeReadyNative/NativePropertiesEquipmentStore.swift
 "

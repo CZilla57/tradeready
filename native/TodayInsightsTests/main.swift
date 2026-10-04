@@ -611,6 +611,45 @@ do {
     expectEqual(insights.last?.kind, .expenseAnomaly, "expense_anomaly rides last")
 }
 
+// MARK: - warranty_expiring (Phase 21, spec 2026-10-02-properties-equipment-design.md §4)
+
+private func warrantyCustomer(_ id: String, _ name: String, expires: String, archived: Bool = false) -> Canonical.Customer {
+    let equipment = #"{"id":"eq_\#(id)","type":"water_heater","warrantyExpires":"\#(expires)"\#(archived ? #","archivedAt":"2026-07-01""# : "")}"#
+    return customer(#"{"id":"\#(id)","name":"\#(name)","properties":[{"id":"pr_\#(id)","primary":true,"equipment":[\#(equipment)]}]}"#)
+}
+
+do {
+    // Aug 4: the window is Aug 4 through Sep 2 (30 local days, today included).
+    let soon = select(customers: [warrantyCustomer("w1", "Ola Park", expires: "2026-08-20")])
+    expectEqual(soon.map(\.kind), [.warrantyExpiring], "warranty_expiring fires inside the window")
+    expectEqual(soon.first?.id, "warranty_expiring:eq_w1:2026-08-20", "warranty_expiring id")
+    expectEqual(soon.first?.title, "Ola Park's water heater warranty ends Aug 20, 2026", "warranty_expiring copy")
+    expectEqual(soon.first?.target, .customer(customerId: "w1"), "warranty_expiring target")
+    expectEqual(select(customers: [warrantyCustomer("w1", "Ola Park", expires: "2026-09-02")]).count, 1, "day 29 is in")
+    expectEqual(select(customers: [warrantyCustomer("w1", "Ola Park", expires: "2026-09-03")]).count, 0, "day 30 is out")
+    expectEqual(select(customers: [warrantyCustomer("w1", "Ola Park", expires: "2026-08-03")]).count, 0, "an expired warranty is silent")
+    expectEqual(select(customers: [warrantyCustomer("w1", "Ola Park", expires: "2026-08-04", archived: true)]).count, 0,
+                "removed equipment is silent")
+
+    let both = select(customers: [
+        warrantyCustomer("w2", "Zed Young", expires: "2026-08-10"),
+        warrantyCustomer("w1", "Ola Park", expires: "2026-08-10"),
+        warrantyCustomer("w3", "Abe Lane", expires: "2026-08-30"),
+    ])
+    expectEqual(both.map(\.id), ["warranty_expiring:eq_w1:2026-08-10"], "one row: the soonest expiry, ties by customer name")
+}
+
+do {
+    // Priority: after maintenance_due, before expense_anomaly.
+    let insights = select(
+        jobs: [historyJob()],
+        customers: [customer(), warrantyCustomer("w1", "Ola Park", expires: "2026-08-20")],
+        expenses: priorEven + [expense(#"{"id":"m","date":"2026-08-02","amount":1600}"#)]
+    )
+    expectEqual(insights.map(\.kind), [.maintenanceDue, .warrantyExpiring, .expenseAnomaly],
+                "warranty_expiring runs after maintenance_due and before expense_anomaly")
+}
+
 // MARK: - month/date pure helpers (FA-039 guards)
 
 expectEqual(NativeTodayInsights.monthsBetween(from: "2026-02-04", now: now), 6, "monthsBetween: exact boundary")

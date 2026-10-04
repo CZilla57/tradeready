@@ -139,6 +139,14 @@ enum EstimatePDFTests {
                "customer contact fields are carried into the document")
         expect(document.businessEmail == "hello@example.test" && document.businessAddress == "20 Trade Ave",
                "business contact fields are carried into the document")
+        // Phase 21 (spec 2026-10-02-properties-equipment-design.md §3): the
+        // "Service address" line, computed by the store, rides on the draft.
+        expect(document.serviceAddress.isEmpty, "Phase 21: no service address unless the draft carries one")
+        var atRental = review
+        atRental.serviceAddress = "  44 Elm St, Unit B  "
+        let rentalDocument = NativeEstimatePDFDocument(review: atRental, issuedAt: issuedAt, calendar: calendar)
+        expect(rentalDocument.serviceAddress == "44 Elm St, Unit B" && rentalDocument.customerAddress == "10 Main St",
+               "Phase 21: the service address prints beside, not instead of, the customer address")
         expect(document.lineItems.count == 3 && document.lineItems[1].amount == 50,
                "all reviewed customer-visible line items remain exact")
         expect(document.total == 325 && document.currency == "USD",

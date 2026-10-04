@@ -14,15 +14,17 @@ enum NativeInsightsCardPolicy {
 
     /// `MUTEABLE_KINDS` — long-horizon conditions that can't self-clear.
     /// The other five kinds deliberately have no dismiss/snooze affordance;
-    /// they disappear on their own as their condition resolves.
+    /// they disappear on their own as their condition resolves. Phase 21's
+    /// `warranty_expiring` is muteable (spec §4).
     static let muteableKinds: Set<NativeInsightKind> = [
-        .lowMarginEstimate, .maintenanceDue, .expenseAnomaly,
+        .lowMarginEstimate, .maintenanceDue, .warrantyExpiring, .expenseAnomaly,
     ]
 
-    /// `SNOOZE_DAYS` — only `maintenance_due` offers "Snooze"; the other two
+    /// `SNOOZE_DAYS` — `maintenance_due` (30 days) and Phase 21's
+    /// `warranty_expiring` (14 days, spec §4) offer "Snooze"; the other two
     /// muteable kinds are dismiss-only (their ids are already time/price
     /// scoped, so a plain dismiss naturally expires).
-    static let snoozeDaysByKind: [NativeInsightKind: Int] = [.maintenanceDue: 30]
+    static let snoozeDaysByKind: [NativeInsightKind: Int] = [.maintenanceDue: 30, .warrantyExpiring: 14]
 
     static func isMuteable(_ kind: NativeInsightKind) -> Bool {
         muteableKinds.contains(kind)
@@ -44,6 +46,7 @@ enum NativeInsightsCardPolicy {
         case .openSlot: return "calendar.badge.clock"
         case .unscheduledApproved: return "calendar"
         case .maintenanceDue: return "wrench.and.screwdriver"
+        case .warrantyExpiring: return "shield.lefthalf.filled"
         case .expenseAnomaly: return "chart.line.uptrend.xyaxis"
         }
     }

@@ -86,6 +86,9 @@ struct Job: Identifiable, Codable, Hashable {
     var invoiceId: String?
     var createdAt = Date()
     var archivedAt: String?
+    /// Phase 21: the customer property the job is at (`Canonical.Job.propertyId`).
+    /// `address` stays the service address of record.
+    var propertyId: String?
 }
 
 extension Job {

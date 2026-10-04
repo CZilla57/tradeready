@@ -13,6 +13,7 @@ swiftc \
   "$ROOT_DIR/native/TradeReadyNative/Domain/CanonicalModels.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeLeadSourceReport.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeLeadSource.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativePropertiesEquipment.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/BusinessRules.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/FinancialDomain.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/CanonicalSnapshot.swift" \

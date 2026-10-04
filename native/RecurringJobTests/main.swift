@@ -249,6 +249,22 @@ struct RecurringJobTests {
             expect(plain.newJobs[0].jobCosts == nil, "rules without direct costs stay without them")
         }
 
+        // Phase 21 (spec 2026-10-02-properties-equipment-design.md §3): every
+        // occurrence is at the rule's property; a rule without one stays
+        // without, and occurrences still start with fresh preservation.
+        do {
+            var atProperty = try rule()
+            atProperty.propertyId = "pr1759500000000_rental"
+            let linked = run(rules: [atProperty], today: "2026-07-22")
+            expect(!linked.newJobs.isEmpty && linked.newJobs.allSatisfy { $0.propertyId == "pr1759500000000_rental" },
+                   "occurrences carry the rule's propertyId")
+            expectEqual(linked.updatedRules.first?.propertyId, "pr1759500000000_rental", "the advanced rule keeps its property")
+            let unlinked = run(rules: [try rule()], today: "2026-07-08")
+            expect(unlinked.newJobs[0].propertyId == nil, "a rule without a property generates unlinked jobs")
+            expect(linked.newJobs.allSatisfy { $0.preservation.unknownFields.isEmpty },
+                   "occurrences still start with fresh preservation")
+        }
+
         if failures == 0 {
             print("RecurringJobTests: PASS")
         } else {

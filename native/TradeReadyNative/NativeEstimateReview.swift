@@ -85,6 +85,7 @@ struct NativeEstimateReviewView: View {
                 Section("Estimate") {
                     Text(draft.snapshot.jobTitle).font(.headline)
                     LabeledContent("Customer", value: draft.snapshot.customerName)
+                    if !draft.serviceAddress.isEmpty { LabeledContent("Service address", value: draft.serviceAddress) }
                     if let options = draft.snapshot.options {
                         optionRows(options)
                     } else {

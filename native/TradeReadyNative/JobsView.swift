@@ -358,7 +358,7 @@ struct JobDetailView: View {
             } else {
                 Text("Needs scheduling").foregroundStyle(.secondary)
             }
-            if !job.address.isEmpty { Label(job.address, systemImage: "mappin.and.ellipse") }
+            NativeJobAddressRow(job: job) // Phase 21: property label + the job's own address
             if job.scheduledAt != nil && [.approved, .scheduled, .inProgress].contains(job.status) {
                 Button { store.requestAppointmentConfirmationReview(jobID: job.id, fromNotification: false) } label: {
                     Label("Send confirmation", systemImage: "checkmark.message")
@@ -368,6 +368,7 @@ struct JobDetailView: View {
                 }
             }
         }
+        NativeJobPropertySection(jobID: job.id) // Phase 21
         let quoteOptions = store.quoteOptionsState(jobID: job.id)
         let optionsUndecided = quoteOptions.map { $0.hasOptions && $0.acceptance == nil } ?? false
         Section("Estimate") {
@@ -667,7 +668,8 @@ struct JobEditor: View {
                         Text("Choose a customer").tag("")
                         ForEach(store.customers) { Text($0.name).tag($0.id) }
                     }
-                    .onChange(of: job.customerId) { _, id in if let c = store.customers.first(where: { $0.id == id }) { job.customerName = c.name; if job.address.isEmpty { job.address = c.address } } }
+                    .onChange(of: job.customerId) { _, id in job.propertyId = nil; if let c = store.customers.first(where: { $0.id == id }) { job.customerName = c.name; if job.address.isEmpty { job.address = c.address } } }
+                    NativeJobPropertyPicker(job: $job) // Phase 21
                 }
                 Section("Work") {
                     LabeledField(label: "Job title") { TextField("Replace kitchen faucet", text: $job.title) }

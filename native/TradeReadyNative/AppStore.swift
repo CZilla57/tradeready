@@ -1279,7 +1279,10 @@ final class AppStore: ObservableObject {
                 businessEmail: settings.email,
                 businessAddress: settings.address,
                 businessLogoReference: snapshot.payload.settings?.logoPhoto,
-                jobDescription: job.description
+                jobDescription: job.description,
+                serviceAddress: NativePropertiesEquipment.serviceAddressLine(
+                    jobAddress: job.address, customerAddress: customer?.address ?? ""
+                ) ?? ""
             )
         } catch {
             migrationMessage = "The estimate could not be prepared. Nothing was changed."
@@ -4470,6 +4473,113 @@ final class AppStore: ObservableObject {
             return false
         } catch {
             migrationMessage = "The form could not be deleted safely. Nothing was changed."
+            return false
+        }
+    }
+
+    // MARK: - Properties & equipment (Phase 21) primitives
+    //
+    // The API lives in `NativePropertiesEquipmentStore.swift`. Only what needs
+    // this file's private state (the snapshot, repository, queue and deletion
+    // undo) lives here.
+
+    var canonicalRecurringJobs: [Canonical.RecurringJob] { snapshot.payload.recurringJobs ?? [] }
+
+    /// Durably commits one customer whose `properties` changed, plus any jobs
+    /// linked in the same step, then enqueues them as one batch (customers
+    /// first). Every record must still be stored: a pull that removed one
+    /// meanwhile refuses the whole change. A list that fails
+    /// `NativePropertiesEquipment.validate` is refused before anything is
+    /// written.
+    func commitPropertyChange(
+        customer: Canonical.Customer,
+        jobs changedJobs: [Canonical.Job] = []
+    ) -> Result<Canonical.Customer, NativePropertiesEquipment.PropertyError> {
+        do { try NativePropertiesEquipment.validate(customer.properties) } catch {
+            return .failure((error as? NativePropertiesEquipment.PropertyError) ?? .notSaved)
+        }
+        guard ensurePersistenceWritable() else { return .failure(.notSaved) }
+        var updated = snapshot
+        var customers = updated.payload.customers ?? []
+        guard let customerIndex = customers.firstIndex(where: { $0.id == customer.id }) else {
+            return .failure(.customerNotFound)
+        }
+        customers[customerIndex] = customer
+        updated.payload.customers = customers
+        var jobRecords = updated.payload.jobs ?? []
+        for job in changedJobs {
+            guard let index = jobRecords.firstIndex(where: { $0.id == job.id }) else { return .failure(.jobNotFound) }
+            jobRecords[index] = job
+        }
+        if !changedJobs.isEmpty { updated.payload.jobs = jobRecords }
+        let drafts: [Canonical.MutationDraft]
+        do {
+            drafts = try [Canonical.MutationDraft(
+                table: "customers", op: .upsert, recordId: customer.id, payload: Self.mutationPayload(customer)
+            )] + changedJobs.map {
+                Canonical.MutationDraft(table: "jobs", op: .upsert, recordId: $0.id, payload: try Self.mutationPayload($0))
+            }
+            try repository.save(updated)
+            try apply(updated)
+        } catch {
+            migrationMessage = "The property change could not be saved. Nothing was changed."
+            return .failure(.notSaved)
+        }
+        do {
+            try mutationQueue.enqueueBatch(drafts)
+            scheduleSyncAfterLocalChange()
+        } catch {
+            print("TradeReadyMutationQueue stage=enqueue table=customers")
+            recordLocalSyncFailure("queue/enqueue-properties")
+        }
+        return .success(customer)
+    }
+
+    /// Deletes a non-primary property (a customer upsert) with the shared
+    /// 8 s undo. Jobs linked to it keep their own address (P3).
+    @discardableResult
+    func deleteProperty(customerID: String, propertyID: String) -> Bool {
+        commitNestedDeletion("property") {
+            try NativeRecordDeletion.deleteProperty(
+                snapshot: snapshot, customerID: customerID, propertyID: propertyID,
+                primaryID: newPrimaryPropertyID(customerID: customerID)
+            )
+        }
+    }
+
+    /// Deletes one equipment entry made by mistake, with the shared 8 s undo.
+    /// Removed or replaced equipment is archived instead (history).
+    @discardableResult
+    func deleteEquipment(customerID: String, propertyID: String, equipmentID: String) -> Bool {
+        commitNestedDeletion("equipment") {
+            try NativeRecordDeletion.deleteEquipment(
+                snapshot: snapshot, customerID: customerID, propertyID: propertyID, equipmentID: equipmentID,
+                primaryID: newPrimaryPropertyID(customerID: customerID)
+            )
+        }
+    }
+
+    /// A fresh id for a primary the next write may have to materialize.
+    func newPrimaryPropertyID(customerID: String, now: Date = .now) -> String {
+        let customer = canonicalCustomers.first { $0.id == customerID }
+        return NativePropertiesEquipment.makeUniqueID(
+            prefix: "pr", now: now, existingIDs: customer.map(NativePropertiesEquipment.allIDs(in:)) ?? []
+        )
+    }
+
+    private func commitNestedDeletion(_ noun: String, _ plan: () throws -> NativeRecordDeletionResult) -> Bool {
+        guard ensurePersistenceWritable() else { return false }
+        do {
+            let result = try plan()
+            try commitRecordDeletion(result)
+            pendingCustomerMergeUndo = nil
+            pendingRecordDeleteUndo = result.undo
+            scheduleRecordDeleteUndoExpiration(id: result.undo.id)
+            return true
+        } catch NativeRecordDeletionError.recordNotFound {
+            return false
+        } catch {
+            migrationMessage = "The \(noun) could not be deleted safely. Nothing was changed."
             return false
         }
     }
@@ -9852,6 +9962,9 @@ final class AppStore: ObservableObject {
         // Phase 20: form and form-item keys (key names only, never values).
         "kind", "jobId", "templateId", "items", "label", "required", "photoRequired",
         "checked", "result", "text", "photoIds", "completedAt", "archivedAt", "formId", "formItemId",
+        // Phase 21: property and equipment keys (key names only, never values).
+        "properties", "propertyId", "primary", "equipment", "type", "make", "model", "serial",
+        "installDate", "warrantyExpires",
         "id", "name", "email", "phone", "address", "notes", "createdAt",
         "customerId", "customerName", "customer", "title", "description",
         "status", "scheduledAt", "scheduledEnd", "estimateTotal", "laborHours",
