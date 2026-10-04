@@ -501,7 +501,7 @@ final class NativeCalendarSyncCoordinator {
         beginBusy()
         defer { endBusy() }
         let schedule = host.calendarSyncSchedule()
-        let built = buildSnapshots(schedule: schedule)
+        let built = buildSnapshots(schedule: schedule, owner: owner)
         let sharing = built.share != nil && schedule.bookableSlotsEnabled
         let result = await push(owner: owner, snapshot: sharing ? built.share : nil, takeOver: true, credentials: credentials)
         guard case .ok = result else {
@@ -605,7 +605,7 @@ final class NativeCalendarSyncCoordinator {
             return
         }
         let schedule = scheduleOverride ?? host.calendarSyncSchedule()
-        let built = buildSnapshots(schedule: schedule)
+        let built = buildSnapshots(schedule: schedule, owner: owner)
         overlay = built.overlay
         // Access granted but no calendars readable (for example, protected
         // data not yet available): keep the last snapshot and let it age out
@@ -630,8 +630,9 @@ final class NativeCalendarSyncCoordinator {
 
     /// The share snapshot (nil unless the owner zone is valid and access is
     /// granted) and the overlay windows, from one EventKit read. `readable`
-    /// is false when access is granted but no calendar can be read.
-    private func buildSnapshots(schedule: NativeSchedule.ResolvedSchedule)
+    /// is false when access is granted but no calendar can be read. Only
+    /// `owner`'s own mirrored jobs are left out (by their marker's tag).
+    private func buildSnapshots(schedule: NativeSchedule.ResolvedSchedule, owner: NativeCalendarSyncOwner)
         -> (share: NativeCalendarBusy.Snapshot?, overlay: [NativeAvailability.BusyWindow], readable: Bool) {
         guard let access, access.authorization.isUsable else { return (nil, [], false) }
         guard !access.calendars().isEmpty else { return (nil, [], false) }
@@ -644,7 +645,8 @@ final class NativeCalendarSyncCoordinator {
         let samples = NativeCalendarBusy.busySamples(
             access.samples(start: overlayWindow.start, end: overlayWindow.end),
             excludedCalendarIDs: Set(state.excludedCalendarIDs),
-            mirrorCalendarID: state.mirrorCalendarID)
+            mirrorCalendarID: state.mirrorCalendarID,
+            mirrorOwnerTag: NativeCalendarMirror.ownerTag16(subject: owner.subject))
         let calendar = deviceCalendar()
         let overlaySnapshot = NativeCalendarBusy.makeSnapshot(samples: samples, window: overlayWindow, computedAt: current, calendar: calendar)
         let nowMillis = Int64((current.timeIntervalSince1970 * 1000).rounded(.down))

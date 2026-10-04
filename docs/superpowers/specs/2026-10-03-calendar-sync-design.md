@@ -746,3 +746,7 @@ No compiler warning points at a Phase 26 file. None of these runners touched rea
 - The built `Info.plist` has `NSCalendarsFullAccessUsageDescription` with the §5 text, and no write-only key.
 
 **Still owed:** the `sh native/run-all-domain-tests.sh` aggregate, which includes the three prompt-bound runners, and device evidence (§7, deferred to Phase 12).
+
+### 11.6 Review fixes
+
+- **A loose `tradeready-job:` no longer hides busy time (parser differential).** The busy rules dropped any event, in any calendar, whose notes merely contained `tradeready-job:`, so an invite or pasted note could make a busy period bookable. Outside the mirror calendar, an event is now left out only when `NativeCalendarMirror.parseMarker` accepts its notes and the tag equals this account's `ownerTag16` (reconcile's own test). `Sample` keeps only the parsed tag, and `countsAsBusy`/`busySamples` take `mirrorOwnerTag`, which the coordinator derives from the owner's server user id. Tests are in `native/CalendarSyncTests` (free text, malformed and foreign markers stay busy; this account's marker in another calendar is skipped; the other exclusions hold) and in the `native/StoreIntegrationTests` Phase 26 section (what is pushed).

@@ -62,12 +62,15 @@ public enum NativeCalendarBusy {
         /// The current user is an attendee who declined.
         public var ownerDeclined: Bool
         public var calendarID: String
-        /// The notes carry a `tradeready-job:` marker (a mirrored job).
-        public var hasMirrorMarker: Bool
+        /// The owner tag of a well-formed mirror marker line in the event's
+        /// notes, or nil. Parsed from `notes` with the mirror's own parser
+        /// (`NativeCalendarMirror.parseMarker`), so busy rules and reconcile
+        /// agree on what a mirrored event is; the notes are not kept.
+        public var markerOwnerTag: String?
 
         public init(start: Date, end: Date, isAllDay: Bool = false, availability: Availability = .busy,
                     status: Status = .confirmed, ownerDeclined: Bool = false, calendarID: String,
-                    hasMirrorMarker: Bool = false) {
+                    notes: String? = nil) {
             self.start = start
             self.end = end
             self.isAllDay = isAllDay
@@ -75,7 +78,7 @@ public enum NativeCalendarBusy {
             self.status = status
             self.ownerDeclined = ownerDeclined
             self.calendarID = calendarID
-            self.hasMirrorMarker = hasMirrorMarker
+            self.markerOwnerTag = NativeCalendarMirror.parseMarker(notes)?.ownerTag
         }
     }
 
@@ -83,10 +86,18 @@ public enum NativeCalendarBusy {
     /// or notSupported; all-day events only when busy or unavailable, so
     /// birthdays and holidays never wipe out a day (vacations belong in
     /// Schedule › Time off).
-    public static func countsAsBusy(_ sample: Sample, excludedCalendarIDs: Set<String>, mirrorCalendarID: String?) -> Bool {
+    ///
+    /// An event outside the mirror calendar is skipped as a mirrored job only
+    /// when its marker parses and carries this account's `mirrorOwnerTag`
+    /// (`NativeCalendarMirror.ownerTag16`), the same test reconcile uses. A
+    /// loose `tradeready-job:` substring (an invite's or a pasted note's free
+    /// text), a malformed marker or another owner's tag still counts, so a
+    /// really busy period is never shown as free. A nil tag skips none.
+    public static func countsAsBusy(_ sample: Sample, excludedCalendarIDs: Set<String>, mirrorCalendarID: String?,
+                                    mirrorOwnerTag: String?) -> Bool {
         if excludedCalendarIDs.contains(sample.calendarID) { return false }
         if let mirrorCalendarID, sample.calendarID == mirrorCalendarID { return false }
-        if sample.hasMirrorMarker { return false }
+        if isOwnMirrorEvent(sample, mirrorOwnerTag: mirrorOwnerTag) { return false }
         if sample.status == .canceled || sample.ownerDeclined { return false }
         if sample.end <= sample.start { return false }
         if sample.isAllDay {
@@ -95,8 +106,18 @@ public enum NativeCalendarBusy {
         return sample.availability != .free
     }
 
-    public static func busySamples(_ samples: [Sample], excludedCalendarIDs: Set<String>, mirrorCalendarID: String?) -> [Sample] {
-        samples.filter { countsAsBusy($0, excludedCalendarIDs: excludedCalendarIDs, mirrorCalendarID: mirrorCalendarID) }
+    public static func busySamples(_ samples: [Sample], excludedCalendarIDs: Set<String>, mirrorCalendarID: String?,
+                                   mirrorOwnerTag: String?) -> [Sample] {
+        samples.filter {
+            countsAsBusy($0, excludedCalendarIDs: excludedCalendarIDs, mirrorCalendarID: mirrorCalendarID,
+                         mirrorOwnerTag: mirrorOwnerTag)
+        }
+    }
+
+    /// A job this account mirrored (its marker carries `mirrorOwnerTag`).
+    public static func isOwnMirrorEvent(_ sample: Sample, mirrorOwnerTag: String?) -> Bool {
+        guard let mirrorOwnerTag, !mirrorOwnerTag.isEmpty, let tag = sample.markerOwnerTag else { return false }
+        return tag == mirrorOwnerTag
     }
 
     // MARK: - Window (§2.2)

@@ -5354,6 +5354,29 @@ struct StoreIntegrationTests {
                 expect(transport.puts.count == before, "26: unreadable calendars never push an empty (all-free) snapshot")
             }
 
+            // Review fix: only this account's parsed mirror marker hides an event;
+            // a loose "tradeready-job:" or another account's marker stays busy.
+            do {
+                let (store, _, access, transport, _, _) = try calendarStore(schedule: slotsOn, tag: "marker")
+                let ours = NativeCalendarMirror.marker(ownerTag: NativeCalendarMirror.ownerTag16(subject: "user-cal"), jobID: "j1")
+                let theirs = NativeCalendarMirror.marker(ownerTag: NativeCalendarMirror.ownerTag16(subject: "user-other"), jobID: "j1")
+                access.samplesValue = [
+                    NativeCalendarBusy.Sample(start: at("2026-10-06T15:00:00Z"), end: at("2026-10-06T16:00:00Z"),
+                                              calendarID: "cal-work", notes: "Agenda: the tradeready-job: export"),
+                    NativeCalendarBusy.Sample(start: at("2026-10-07T15:00:00Z"), end: at("2026-10-07T16:00:00Z"),
+                                              calendarID: "cal-home", notes: "Status: Scheduled\n\(theirs)"),
+                    NativeCalendarBusy.Sample(start: at("2026-10-08T15:00:00Z"), end: at("2026-10-08T16:00:00Z"),
+                                              calendarID: "cal-work", notes: "Status: Scheduled\n\(ours)"),
+                ]
+                _ = await store.calendarSync.enableChecks()
+                let body = transport.puts.first?.snapshotJSON ?? ""
+                expect(body.contains("[\"2026-10-06T15:00:00Z\",\"2026-10-06T16:00:00Z\"]")
+                           && body.contains("[\"2026-10-07T15:00:00Z\",\"2026-10-07T16:00:00Z\"]"),
+                       "26: an invite with a loose tradeready-job: and another account's marker are shared as busy")
+                expect(!body.contains("2026-10-08T15:00:00Z"),
+                       "26: this account's mirrored job (tag of the server user id) is left out, outside the mirror calendar too")
+            }
+
             // A null snapshot while slots are off; push-before-enable ordering.
             do {
                 let (store, dir, _, transport, _, _) = try calendarStore(schedule: slotsOff, tag: "null")

@@ -137,7 +137,7 @@ final class NativeEventKitCalendarAccess: NativeCalendarAccess {
                 start: startDate, end: endDate, isAllDay: event.isAllDay,
                 availability: Self.map(event.availability), status: Self.map(event.status),
                 ownerDeclined: declined, calendarID: event.calendar?.calendarIdentifier ?? "",
-                hasMirrorMarker: event.notes?.contains(NativeCalendarBusy.mirrorMarkerPrefix) ?? false)
+                notes: event.notes)
         }
     }
 

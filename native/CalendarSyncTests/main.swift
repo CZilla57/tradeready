@@ -2,7 +2,8 @@ import Foundation
 
 // Roadmap Phase 26 (calendar sync), the pure half: spec
 // docs/superpowers/specs/2026-10-03-calendar-sync-design.md §2.2, §2.5, §4.1,
-// §7 "New Swift suite". Busy rules (every §4.1 row), the wire snapshot
+// §7 "New Swift suite". Busy rules (every §4.1 row, and the strict
+// mirrored-job marker test: only this account's parsed marker is skipped), the wire snapshot
 // (clipping, minute floor/ceil, merging, truncation at 500, all-day dates
 // under injected Phoenix and Auckland calendars, exact JSON, digest), the
 // status copy, and the mirror planner (create/update/delete, convergence,
@@ -11,14 +12,17 @@ import Foundation
 // vectors run in native/AvailabilityTests against the same JSON as Jest.
 
 private var failures = 0
+private var checks = 0
 
 private func expect(_ actual: @autoclosure () -> Bool, _ label: String) {
+    checks += 1
     if actual() { return }
     failures += 1
     print("FAIL: \(label)")
 }
 
 private func expectEqual<T: Equatable>(_ actual: @autoclosure () -> T, _ expected: T, _ label: String) {
+    checks += 1
     let value = actual()
     if value != expected {
         failures += 1
@@ -42,15 +46,25 @@ private func calendar(_ zone: String) -> Calendar {
 
 private typealias Busy = NativeCalendarBusy
 
-private func sample(_ start: String, _ end: String, allDay: Bool = false, availability: Busy.Availability = .busy,
-                    status: Busy.Status = .confirmed, declined: Bool = false, calendar: String = "cal-work",
-                    marker: Bool = false) -> Busy.Sample {
-    Busy.Sample(start: at(start), end: at(end), isAllDay: allDay, availability: availability, status: status,
-                ownerDeclined: declined, calendarID: calendar, hasMirrorMarker: marker)
+/// This account's mirror tag, and another account's.
+private let ownTag = NativeCalendarMirror.ownerTag16(subject: "user-1")
+private let otherTag = NativeCalendarMirror.ownerTag16(subject: "someone-else")
+
+/// Notes exactly as the mirror writes them for `tag`.
+private func mirrorNotes(_ tag: String, job: String = "job-1") -> String {
+    "Status: Scheduled\n\(NativeCalendarMirror.managedNote)\n\(NativeCalendarMirror.marker(ownerTag: tag, jobID: job))"
 }
 
-private func counts(_ s: Busy.Sample, excluded: Set<String> = [], mirror: String? = "cal-tradeready") -> Bool {
-    Busy.countsAsBusy(s, excludedCalendarIDs: excluded, mirrorCalendarID: mirror)
+private func sample(_ start: String, _ end: String, allDay: Bool = false, availability: Busy.Availability = .busy,
+                    status: Busy.Status = .confirmed, declined: Bool = false, calendar: String = "cal-work",
+                    notes: String? = nil) -> Busy.Sample {
+    Busy.Sample(start: at(start), end: at(end), isAllDay: allDay, availability: availability, status: status,
+                ownerDeclined: declined, calendarID: calendar, notes: notes)
+}
+
+private func counts(_ s: Busy.Sample, excluded: Set<String> = [], mirror: String? = "cal-tradeready",
+                    ownerTag: String? = ownTag) -> Bool {
+    Busy.countsAsBusy(s, excludedCalendarIDs: excluded, mirrorCalendarID: mirror, mirrorOwnerTag: ownerTag)
 }
 
 // MARK: - Busy rules (§4.1)
@@ -67,7 +81,7 @@ do {
     expect(!counts(sample(timed.0, timed.1, declined: true)), "an event the owner declined never counts")
     expect(!counts(sample(timed.0, timed.1), excluded: ["cal-work"]), "an excluded calendar is skipped")
     expect(!counts(sample(timed.0, timed.1, calendar: "cal-tradeready")), "the TradeReady mirror calendar is always skipped")
-    expect(!counts(sample(timed.0, timed.1, marker: true)), "a tradeready-job marker in any calendar is skipped")
+    expect(!counts(sample(timed.0, timed.1, notes: mirrorNotes(ownTag))), "this account's mirrored job in any calendar is skipped")
     expect(!counts(sample(timed.0, timed.0)), "zero duration never counts")
     expect(!counts(sample(timed.1, timed.0)), "negative duration never counts")
 
@@ -80,7 +94,93 @@ do {
 
     let all = [sample(timed.0, timed.1), sample(timed.0, timed.1, availability: .free),
                sample(day.0, day.1, allDay: true, availability: .free)]
-    expectEqual(Busy.busySamples(all, excludedCalendarIDs: [], mirrorCalendarID: nil).count, 1, "busySamples filters by the same rules")
+    expectEqual(Busy.busySamples(all, excludedCalendarIDs: [], mirrorCalendarID: nil, mirrorOwnerTag: ownTag).count, 1,
+                "busySamples filters by the same rules")
+}
+
+// MARK: - Busy rules: mirrored-job markers (review fix)
+//
+// An event is skipped as "ours" only when NativeCalendarMirror.parseMarker
+// accepts its notes and the tag is this account's: the test reconcile uses.
+// A loose "tradeready-job:" substring used to hide any event, in any
+// calendar, from the booking page (a parser differential).
+
+do {
+    let timed = ("2026-10-06T15:00:00Z", "2026-10-06T16:00:00Z")
+    let day = ("2026-10-10T07:00:00Z", "2026-10-11T07:00:00Z")
+
+    // 1. Free text or another owner's marker in a normal calendar still counts.
+    let stillBusy: [(String, String)] = [
+        ("Agenda: sync on the tradeready-job: export", "free text mid-line"),
+        ("tradeready-job:", "a bare prefix line"),
+        ("tradeready-job: call Sam about the deck", "a prefix line with no tag:job"),
+        ("Pasted from TradeReady: tradeready-job:\(ownTag):job-1", "this account's marker inside a sentence"),
+        ("TRADEREADY-JOB:\(ownTag):job-1", "a marker in other letter case"),
+        ("tradeready-job:\(ownTag):", "a marker with an empty job id"),
+        ("tradeready-job::job-1", "a marker with an empty tag"),
+        (mirrorNotes(otherTag), "another account's well-formed marker"),
+        ("tradeready-job:\(ownTag)x:job-1", "a tag that only starts with this account's"),
+    ]
+    for (notes, label) in stillBusy {
+        expect(counts(sample(timed.0, timed.1, notes: notes)), "timed, \(label): still counts as busy")
+        expect(counts(sample(day.0, day.1, allDay: true, calendar: "cal-home", notes: notes)),
+               "all-day busy, \(label): still counts as busy")
+    }
+    expect(counts(sample(timed.0, timed.1, notes: mirrorNotes(ownTag)), ownerTag: nil),
+           "with no owner tag, no marker is trusted (fails toward busy)")
+    expect(counts(sample(timed.0, timed.1, notes: mirrorNotes(ownTag)), ownerTag: ""),
+           "an empty owner tag trusts no marker")
+    expect(counts(sample(timed.0, timed.1, notes: mirrorNotes(otherTag)), mirror: nil),
+           "another account's marker counts with the mirror off too")
+    expect(Busy.isOwnMirrorEvent(sample(timed.0, timed.1, notes: mirrorNotes(otherTag)), mirrorOwnerTag: ownTag) == false,
+           "isOwnMirrorEvent rejects another account's tag")
+
+    // What the booking page receives: the invite's block is in the snapshot.
+    let invite = sample(timed.0, timed.1, notes: "Join: tradeready-job: planning")
+    let foreign = sample("2026-10-07T15:00:00Z", "2026-10-07T16:00:00Z", calendar: "cal-home", notes: mirrorNotes(otherTag))
+    let ours = sample("2026-10-08T15:00:00Z", "2026-10-08T16:00:00Z", notes: mirrorNotes(ownTag))
+    let window = Busy.window(now: at("2026-10-03T14:05:00Z"), timeZoneID: "America/Chicago", days: 14)!
+    let shared = Busy.makeSnapshot(
+        samples: Busy.busySamples([invite, foreign, ours], excludedCalendarIDs: [], mirrorCalendarID: "cal-tradeready",
+                                  mirrorOwnerTag: ownTag),
+        window: window, computedAt: at("2026-10-03T14:05:00Z"), calendar: calendar("America/Phoenix"))
+    expectEqual(shared.timed, [
+        ["2026-10-06T15:00:00Z", "2026-10-06T16:00:00Z"],
+        ["2026-10-07T15:00:00Z", "2026-10-07T16:00:00Z"],
+    ], "the invite and the foreign-tagged event reach the booking page as busy; this account's mirrored job does not")
+
+    // 2. This account's correctly tagged mirror event outside the mirror
+    //    calendar is still skipped (its job already blocks the slot).
+    expect(!counts(sample(timed.0, timed.1, calendar: "cal-home", notes: mirrorNotes(ownTag))),
+           "this account's mirrored job copied to another calendar is skipped")
+    expect(!counts(sample(day.0, day.1, allDay: true, notes: mirrorNotes(ownTag, job: "job:with:colons"))),
+           "an all-day mirrored job (job id with colons) outside the mirror calendar is skipped")
+    expect(!counts(sample(timed.0, timed.1, notes: "  tradeready-job:\(ownTag):job-1  \nmore notes")),
+           "a marker line with surrounding spaces parses, as reconcile parses it")
+    expect(!counts(sample(timed.0, timed.1, notes: mirrorNotes(ownTag)), mirror: nil),
+           "this account's mirrored job is skipped with no mirror calendar id")
+    expectEqual(sample(timed.0, timed.1, notes: mirrorNotes(ownTag)).markerOwnerTag, ownTag,
+                "the sample keeps the parsed tag")
+    expectEqual(sample(timed.0, timed.1, notes: "Join: tradeready-job: planning").markerOwnerTag, nil,
+                "free text yields no tag")
+    expect(sample(timed.0, timed.1, notes: mirrorNotes(ownTag)) == sample(timed.0, timed.1, notes: mirrorNotes(ownTag, job: "job-2")),
+           "only the tag is kept, never the notes")
+
+    // 3. The other exclusions are unchanged, whatever the notes say.
+    expect(!counts(sample(timed.0, timed.1, calendar: "cal-tradeready", notes: mirrorNotes(otherTag))),
+           "the mirror calendar is skipped even with another account's marker")
+    expect(!counts(sample(timed.0, timed.1, calendar: "cal-tradeready", notes: "Join: tradeready-job: planning")),
+           "the mirror calendar is skipped even with free text")
+    expect(!counts(sample(timed.0, timed.1, calendar: "cal-tradeready")), "the mirror calendar is skipped with no notes")
+    expect(!counts(sample(timed.0, timed.1, notes: mirrorNotes(otherTag)), excluded: ["cal-work"]),
+           "an excluded calendar is skipped whatever the notes")
+    expect(!counts(sample(timed.0, timed.1, status: .canceled, notes: "tradeready-job: x")), "canceled still never counts")
+    expect(!counts(sample(timed.0, timed.1, declined: true, notes: mirrorNotes(otherTag))), "declined still never counts")
+    expect(!counts(sample(timed.0, timed.1, availability: .free, notes: "tradeready-job: x")), "free still never counts")
+    expect(!counts(sample(timed.0, timed.0, notes: mirrorNotes(otherTag))), "zero duration still never counts")
+    expect(!counts(sample(day.0, day.1, allDay: true, availability: .tentative, notes: mirrorNotes(otherTag))),
+           "all-day tentative still never counts")
+    expect(counts(sample(timed.0, timed.1, notes: "Dentist, bring forms")), "ordinary notes change nothing")
 }
 
 // MARK: - Window (§2.2)
@@ -422,8 +522,8 @@ do {
 }
 
 if failures == 0 {
-    print("PASS: native calendar sync tests")
+    print("PASS: native calendar sync tests (\(checks) checks)")
 } else {
-    print("FAILED: \(failures) native calendar sync test(s)")
+    print("FAILED: \(failures) of \(checks) native calendar sync checks")
     exit(1)
 }
