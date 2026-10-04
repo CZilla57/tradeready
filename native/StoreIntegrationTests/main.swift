@@ -1821,6 +1821,224 @@ struct StoreIntegrationTests {
                    "forms: every form row survives a relaunch")
         }
 
+        // MARK: - Phase 33: tags, the opt-out and campaigns through AppStore
+
+        do {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tradeready-phase33-\(UUID().uuidString)", isDirectory: true)
+            let backupDir = dir.appendingPathComponent("backups", isDirectory: true)
+            try FileManager.default.createDirectory(at: backupDir, withIntermediateDirectories: true)
+            defer {
+                try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: backupDir.path)
+                try? FileManager.default.removeItem(at: dir)
+            }
+            let url = dir.appendingPathComponent("store.json")
+            let repository = Canonical.SnapshotRepository(
+                primaryURL: url, backupURL: backupDir.appendingPathComponent("store.json.backup")
+            )
+            let loader = CoachTestLoader()
+            let store = AppStore(
+                fileURL: url, seedIfMissing: false, repository: repository,
+                subscriptionService: StoreSubscriptionServiceStub(),
+                coachTransport: NativeCoachTransport(backendBaseURL: URL(string: "https://backend.invalid")!, loader: loader),
+                secureSettingsStore: hostTestSecureSettingsStore()
+            )
+            func queued(_ table: String, _ id: String) -> Canonical.MutationItem? {
+                pendingMutations(url).last { $0.table == table && $0.recordId == id }
+            }
+            func queuedObject(_ table: String, _ id: String) -> [String: Canonical.JSONValue]? {
+                guard case let .object(fields)? = queued(table, id)?.payload else { return nil }
+                return fields
+            }
+            func queuedCampaign(_ id: String) -> Canonical.Campaign? {
+                guard let payload = queued("campaigns", id)?.payload, let data = try? JSONEncoder().encode(payload) else { return nil }
+                return try? JSONDecoder().decode(Canonical.Campaign.self, from: data)
+            }
+            store.settings.businessName = "Saguaro Heating"
+            store.settings.contactName = "Rafa"
+            store.settings.address = "PO Box 12, Mesa, AZ 85201"
+            let dana = Customer(name: "Dana Ortiz", phone: "602-555-0101")
+            let sam = Customer(name: "Sam Lee", email: "sam@example.com")
+            let lee = Customer(name: "Lee Park", phone: "480-555-0102")
+            expect(store.upsert(dana) && store.upsert(sam) && store.upsert(lee), "campaigns: customers save")
+            let served = Calendar.current.date(byAdding: .month, value: -8, to: .now) ?? .now
+            var leeJobID = ""
+            for (customer, title) in [(dana, "Furnace tune-up"), (sam, "AC repair"), (lee, "Water heater")] {
+                let job = Job(customerId: customer.id, customerName: customer.name, title: title, status: .paid, scheduledAt: served)
+                if customer.id == lee.id { leeJobID = job.id }
+                expect(store.upsert(job), "campaigns: a delivered job saves (\(title))")
+            }
+
+            // Tags (spec §3.2): normalized, enqueued, projected; missing customers refused.
+            expect(store.setCustomerTags(customerID: dana.id, tags: ["#VIP", "ac", "vip"]), "tags: set")
+            expect(store.canonicalCustomer(id: dana.id)?.tags == ["ac", "VIP"], "tags: stored normalized and sorted")
+            expect(queuedObject("customers", dana.id)?["tags"] == .array([.string("ac"), .string("VIP")]),
+                   "tags: the customer upsert is enqueued with the tags")
+            expect(store.customers.first { $0.id == dana.id }?.tags == ["ac", "VIP"], "tags: the UI projection carries them")
+            expect(store.customerTagVocabulary.map(\.key) == ["ac", "vip"], "tags: the vocabulary is derived from customers")
+            expect(!store.setCustomerTags(customerID: "missing", tags: ["x"]), "tags: a missing customer is refused")
+            expect(store.setCustomerTags(customerID: dana.id, tags: []), "tags: clearing succeeds")
+            expect(store.canonicalCustomer(id: dana.id)?.tags == nil && queuedObject("customers", dana.id)?["tags"] == nil,
+                   "tags: clearing removes the key from the record and the queued upsert")
+            _ = store.setCustomerTags(customerID: dana.id, tags: ["VIP"])
+
+            // The opt-out toggle (spec §4.1): today's local date and the reason.
+            let optDay = NativeCashBasis.localDate(year: 2026, month: 9, day: 3, hour: 9)
+            expect(store.setMarketingOptOut(customerID: lee.id, via: .textStop, on: optDay), "opt-out: set")
+            expect(queuedObject("customers", lee.id)?["marketingOptOutOn"] == .string("2026-10-03")
+                   && queuedObject("customers", lee.id)?["marketingOptOutVia"] == .string("text_stop"),
+                   "opt-out: the customer upsert carries the local date and the reason")
+            expect(store.customerOptedOutOfMarketing(jobID: leeJobID), "opt-out: the review-request line sees it")
+            expect(store.clearMarketingOptOut(customerID: lee.id)
+                   && store.canonicalCustomer(id: lee.id)?.isMarketingOptedOut == false
+                   && queuedObject("customers", lee.id)?["marketingOptOutOn"] == nil,
+                   "opt-out: turning it off clears both fields and enqueues")
+            _ = store.setMarketingOptOut(customerID: lee.id, via: .asked)
+
+            // Campaign drafts (spec §5.4, §7.1).
+            let campaignsBefore = store.campaignRecords.count
+            var draft = store.makeCampaignDraft(preset: .everyoneServed)
+            expect(store.campaignRecords.count == campaignsBefore && store.campaign(id: draft.id) == nil,
+                   "draft: making one stores nothing until it is saved")
+            expect(draft.id.hasPrefix("cmp_") && draft.id.count == 40 && NativeAttributionCode.isValid(draft.code)
+                   && draft.status == "draft", "draft: a cmp_ UUID id, a valid ?c= code, draft status")
+            draft.message.text = "Hi {firstName}, it's {ownerName}. Time for a check-up?"
+            draft.message.emailSubject = "Check-up time"
+            draft.message.emailBody = "Hi {firstName},\nTime for a check-up?"
+            guard case let .success(saved) = store.saveCampaignDraft(draft) else {
+                expect(false, "draft: saving succeeds")
+                throw StoreTestError.missingFixture
+            }
+            expect(queued("campaigns", saved.id)?.op == .upsert && queuedCampaign(saved.id)?.message.text == draft.message.text,
+                   "draft: saving enqueues one campaigns upsert")
+            let audience = store.campaignAudience(for: saved)
+            expect(audience.recipients.map(\.customerID) == [dana.id, sam.id], "audience: by name, the opted-out customer left out")
+            expect(audience.exclusions.first { $0.customerID == lee.id }?.reason == .optedOut, "audience: the opt-out is the reason")
+            expect(audience.recipients.last?.channel == .email, "audience: email reaches the email-only customer once the address is set")
+            guard case let .success(frozen) = store.startCampaignSending(id: saved.id, bookingLink: .off) else {
+                expect(false, "send: Start sending freezes the audience")
+                throw StoreTestError.missingFixture
+            }
+            expect(frozen.status == "sending" && frozen.recipients?.map(\.customerId) == [dana.id, sam.id]
+                   && queuedCampaign(saved.id)?.status == "sending" && queuedCampaign(saved.id)?.recipients?.count == 2,
+                   "send: the frozen campaign persists and enqueues")
+            var tampered = frozen
+            tampered.message.text = "Changed"
+            expect(store.updateCampaignDraft(tampered) == .failure(.messageLocked), "send: a started campaign's message cannot change")
+
+            // The queue (spec §7.3): live check, one outcome per write, the lock.
+            guard case .success(.ready(let contact)) = store.prepareCampaignRecipient(campaignID: saved.id, customerID: dana.id) else {
+                expect(false, "send: the live check passes for Dana")
+                throw StoreTestError.missingFixture
+            }
+            expect(contact == "602-555-0101", "send: the composer gets the live phone")
+            let rendered = store.renderCampaignMessage(frozen, kind: .text, customerID: dana.id, fallbackName: "Dana",
+                                                        bookingLink: .off)
+            expect(rendered.body == "Hi Dana, it's Rafa. Time for a check-up?\n\nReply STOP to opt out.",
+                   "send: the rendered text carries the opt-out line")
+            guard case let .success(sentOutcome) = store.recordCampaignOutcome(
+                campaignID: saved.id, customerID: dana.id, outcome: .sent, autoAdvance: true
+            ) else {
+                expect(false, "send: a .sent outcome is recorded")
+                throw StoreTestError.missingFixture
+            }
+            expect(sentOutcome.advances, "send: auto-advance after a send")
+            let afterSend = queuedCampaign(saved.id)
+            expect(afterSend?.recipients?.first?.status == "sent" && afterSend?.recipients?.first?.sentAt != nil
+                   && afterSend?.message.lockedAt != nil, "send: the sent recipient and the lock persist and enqueue")
+            if case .success = store.recordCampaignOutcome(campaignID: saved.id, customerID: sam.id, outcome: .cancelled, autoAdvance: true) {
+                expect(store.campaign(id: saved.id)?.recipients?[1].status == "pending", "send: a cancel keeps the recipient pending")
+            } else { expect(false, "send: a cancel is accepted") }
+
+            // "They asked to stop": the opt-out and the skip in one commit.
+            guard case let .success(stopped) = store.campaignRecipientAskedToStop(campaignID: saved.id, customerID: sam.id) else {
+                expect(false, "send: They asked to stop succeeds")
+                throw StoreTestError.missingFixture
+            }
+            expect(store.canonicalCustomer(id: sam.id)?.isMarketingOptedOut == true
+                   && queuedObject("customers", sam.id)?["marketingOptOutVia"] == .string("asked"),
+                   "stop: the customer is opted out and enqueued")
+            expect(stopped.recipients?[1].skipReason == "opted_out" && stopped.status == "done"
+                   && queuedCampaign(saved.id)?.status == "done", "stop: the recipient is skipped and the campaign is done")
+            expect(store.campaignResults(stopped).sent == 1, "results: one sent")
+
+            // Live re-validation skips an archived customer, persisted.
+            var second = store.makeCampaignDraft(preset: .everyoneServed)
+            second.segment.excludeContactedWithinDays = 0
+            second.message.text = "Hi {firstName}"
+            _ = store.saveCampaignDraft(second)
+            guard case let .success(secondFrozen) = store.startCampaignSending(id: second.id, bookingLink: .off),
+                  secondFrozen.recipients?.map(\.customerId) == [dana.id] else {
+                expect(false, "live: the second campaign freezes with Dana only")
+                throw StoreTestError.missingFixture
+            }
+            store.setCustomerArchived(id: dana.id, archived: true)
+            let archivedCheck = store.prepareCampaignRecipient(campaignID: second.id, customerID: dana.id)
+            expect(archivedCheck == .success(.skip(.archived)), "live: an archived customer is skipped before the composer")
+            expect(queuedCampaign(second.id)?.recipients?.first?.skipReason == "archived", "live: the skip persists and enqueues")
+            store.setCustomerArchived(id: dana.id, archived: false)
+
+            // A .sent that cannot be saved is reported and changes nothing.
+            var third = store.makeCampaignDraft(preset: .everyoneServed)
+            third.segment.excludeContactedWithinDays = 0
+            third.message.text = "Hi {firstName}"
+            _ = store.saveCampaignDraft(third)
+            _ = store.startCampaignSending(id: third.id, bookingLink: .off)
+            try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: backupDir.path)
+            let unsaved = store.recordCampaignOutcome(campaignID: third.id, customerID: dana.id, outcome: .sent, autoAdvance: true)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: backupDir.path)
+            expect(unsaved == .failure(.notSaved), "persist: a .sent that fails to save surfaces .notSaved (the screen's notice)")
+            expect(store.campaign(id: third.id)?.recipients?.first?.status == "pending",
+                   "persist: nothing changes in memory, so the composer never re-presents on its own")
+
+            // AI drafting (spec §6.2): only Settings and the brief reach the provider.
+            store.coachAdvisoryAnthropicKeyOverride = ""
+            store.coachAdvisoryGroqKeyOverride = "gsk-test-key"
+            loader.status = 200
+            loader.responseData = Data(#"{"choices":[{"message":{"content":"BODY: Hi {FirstName}! Our $79 tune-up is back."}}]}"#.utf8)
+            let brief = NativeCampaignDrafting.Brief(goal: .tuneUp, tone: .friendly, kind: .text, details: "$89 furnace tune-up")
+            let drafted = await store.draftCampaignMessage(brief: brief, bookingLinkReady: false)
+            expect(drafted.source == .ai && drafted.draft.body == "Hi {firstName}! Our $79 tune-up is back.",
+                   "draft AI: the parsed reply is used")
+            expect(drafted.warnings == ["The draft mentions $79. Your details said $89. Check it before sending."],
+                   "draft AI: the fact check warns")
+            let sentBody = String(data: loader.lastRequest?.httpBody ?? Data(), encoding: .utf8) ?? ""
+            for value in ["Dana", "Ortiz", "Sam Lee", "Lee Park", "602-555-0101", "480-555-0102", "sam@example.com", "PO Box"] {
+                expect(!sentBody.contains(value), "draft AI: no customer data or address reaches the provider (\(value))")
+            }
+            expect(sentBody.contains("Saguaro Heating") && sentBody.contains("$89 furnace tune-up")
+                   && !sentBody.contains("BUSINESS DATA"), "draft AI: the business name and brief go, the coach data block does not")
+            let request = store.campaignDraftRequest(brief: brief, bookingLinkReady: false)
+            expect(sentBody.contains("Seasonal tune-up") && request.systemPrompt.contains("Saguaro Heating"),
+                   "draft AI: the request is the dedicated campaign prompt")
+            loader.status = 500
+            loader.responseData = Data()
+            let fallback = await store.draftCampaignMessage(brief: brief, bookingLinkReady: false)
+            expect(fallback.source == .template && fallback.notice == NativeCampaignDrafting.fallbackNotice,
+                   "draft AI: a provider failure starts from the template with the notice")
+            store.coachAdvisoryGroqKeyOverride = nil
+            store.coachAdvisoryAnthropicKeyOverride = nil
+
+            // Duplicate, delete and undo; durable across a relaunch.
+            guard case let .success(copy) = store.duplicateCampaign(id: saved.id) else {
+                expect(false, "duplicate: succeeds")
+                throw StoreTestError.missingFixture
+            }
+            expect(copy.status == "draft" && copy.recipients == nil && copy.message.lockedAt == nil && copy.code != saved.code
+                   && queued("campaigns", copy.id)?.op == .upsert, "duplicate: an editable draft copy is enqueued")
+            expect(store.deleteCampaign(id: copy.id) && queued("campaigns", copy.id)?.op == .delete
+                   && store.pendingRecordDeleteUndo?.kind == .campaign, "delete: a campaigns tombstone with the shared undo")
+            store.undoRecordDeletion()
+            expect(store.campaign(id: copy.id) == copy && queued("campaigns", copy.id)?.op == .upsert, "delete: undo restores the copy")
+            let relaunched = AppStore(fileURL: url, seedIfMissing: false, repository: repository,
+                                      subscriptionService: StoreSubscriptionServiceStub(),
+                                      secureSettingsStore: hostTestSecureSettingsStore())
+            expect(relaunched.campaign(id: saved.id) == store.campaign(id: saved.id)
+                   && relaunched.canonicalCustomer(id: dana.id)?.tags == ["VIP"]
+                   && relaunched.canonicalCustomer(id: sam.id)?.isMarketingOptedOut == true,
+                   "durable: campaigns, tags and opt-outs survive a relaunch")
+        }
+
 
         // MARK: - Phase 8 task 8.08 canonical integration (S3, S4, B2-B4, P1, P3)
 

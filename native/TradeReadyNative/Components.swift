@@ -98,6 +98,7 @@ struct NativeUndoBanner: View {
         case .invoice: "doc.text.fill"
         case .customer: "person.fill"
         case .form: "checklist"
+        case .campaign: "megaphone.fill"
         }
     }
 

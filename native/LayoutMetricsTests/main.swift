@@ -436,6 +436,15 @@ let scrollRootInventory: [String: Int] = [
     "NativeQuoteOptionsView.swift|NativeQuoteOptionsView|Form": 1,
     "NativeQuoteOptionsView.swift|NativeQuoteAddOnEditorView|Form": 1,
     "NativeQuoteOptionsView.swift|NativeQuoteOwnerChoiceView|Form": 1,
+    // Phase 33: tags, the list filter's tag picker and the campaign screens.
+    "NativeCustomerTagsSheet.swift|NativeCustomerTagsSheet|Form": 1,
+    "NativeCustomerMarketingViews.swift|NativeCustomerTagFilterSheet|List": 1,
+    "NativeCampaignListView.swift|NativeCampaignListView|List": 1,
+    "NativeCampaignBuilderView.swift|NativeCampaignBuilderView|Form": 1,
+    "NativeCampaignBuilderView.swift|NativeCampaignExclusionsSheet|List": 1,
+    "NativeCampaignBuilderView.swift|NativeCampaignPreviewSheet|List": 1,
+    "NativeCampaignSendView.swift|NativeCampaignSendView|List": 1,
+    "NativeCampaignDetailView.swift|NativeCampaignDetailView|List": 1,
     "NativeRecurringInvoicesView.swift|NativeRecurringInvoicesView|List": 1,
     "NativeRecurringInvoicesView.swift|NativeRecurringInvoiceEditor|Form": 1,
     "NativeRecurringJobsView.swift|NativeRecurringJobsView|List": 1,
@@ -463,6 +472,8 @@ let horizontalChipRows: [String: Int] = [
     "JobsView.swift": 1, "MoneyView.swift": 1, "NativeExpenseEditor.swift": 2,
     "NativeExportDataView.swift": 1, "NativeImportView.swift": 1, "NativeJobPhotosView.swift": 1,
     "NativeMileageLogView.swift": 1, "NativeInvoiceOutreachView.swift": 1, "NativeTripEditor.swift": 1,
+    // Phase 33: the one shared tag-chip scroller (`NativeTagChipRow`).
+    "NativeCustomerTagsSheet.swift": 1,
 ]
 
 /// Every `SettingsPage` screen shares the capped `SettingsPage` Form.

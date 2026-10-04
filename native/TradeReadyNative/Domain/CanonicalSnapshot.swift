@@ -21,6 +21,8 @@ public extension Canonical {
         /// Phase 20: custom form templates and job form instances. Absent in
         /// every snapshot written before Phase 20, which reads as empty.
         public var forms: [Form]?
+        /// Phase 33: past-customer campaigns. Absent before Phase 33 (empty).
+        public var campaigns: [Campaign]?
 
         /// Additive fields unknown to this client are emitted unchanged.
         public private(set) var unknownFields: [String: JSONValue]
@@ -40,6 +42,7 @@ public extension Canonical {
             bookingRequests: [BookingRequest]? = nil,
             jobPhotos: [JobPhoto]? = nil,
             forms: [Form]? = nil,
+            campaigns: [Campaign]? = nil,
             unknownFields: [String: JSONValue] = [:]
         ) {
             self.invoices = invoices
@@ -55,6 +58,7 @@ public extension Canonical {
             self.bookingRequests = bookingRequests
             self.jobPhotos = jobPhotos
             self.forms = forms
+            self.campaigns = campaigns
             self.unknownFields = unknownFields
             self.explicitNullFields = []
         }
@@ -75,6 +79,7 @@ public extension Canonical {
             bookingRequests = try Self.take("bookingRequests", from: &fields, nulls: &explicitNullFields)
             jobPhotos = try Self.take("jobPhotos", from: &fields, nulls: &explicitNullFields)
             forms = try Self.take("forms", from: &fields, nulls: &explicitNullFields)
+            campaigns = try Self.take("campaigns", from: &fields, nulls: &explicitNullFields)
             unknownFields = fields
         }
 
@@ -93,6 +98,7 @@ public extension Canonical {
             try Self.put(bookingRequests, key: "bookingRequests", into: &fields, nulls: explicitNullFields)
             try Self.put(jobPhotos, key: "jobPhotos", into: &fields, nulls: explicitNullFields)
             try Self.put(forms, key: "forms", into: &fields, nulls: explicitNullFields)
+            try Self.put(campaigns, key: "campaigns", into: &fields, nulls: explicitNullFields)
             try fields.encode(to: encoder)
         }
 

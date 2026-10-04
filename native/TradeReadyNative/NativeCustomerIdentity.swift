@@ -155,6 +155,12 @@ enum NativeCustomerIdentity {
         // Phase 27: "google ads" typed into Other… is stored as `google`;
         // blank is nil (Unknown).
         prepared.leadSource = NativeLeadSource.normalize(candidate.leadSource)
+        // Phase 33: tags in their stored form; a blank opt-out date is no
+        // opt-out (and carries no reason).
+        prepared.tags = NativeCustomerTags.normalizeList(candidate.tags)
+        let optOutOn = (candidate.marketingOptOutOn ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        prepared.marketingOptOutOn = optOutOn.isEmpty ? nil : optOutOn
+        prepared.marketingOptOutVia = optOutOn.isEmpty ? nil : candidate.marketingOptOutVia
 
         guard !prepared.name.isEmpty else {
             return .init(customer: prepared, issue: .nameRequired)
@@ -344,6 +350,15 @@ enum NativeCustomerIdentity {
         if isBlank(winnerAfter.leadSource ?? ""), !isBlank(loserBefore.leadSource ?? "") {
             winnerAfter.leadSource = loserBefore.leadSource
         }
+        // Phase 33 (campaigns spec §4.4): tags union (the winner's first) and
+        // a sticky opt-out (either record's, the earlier date and its reason).
+        winnerAfter.tags = NativeCustomerTags.merged(winner: winnerBefore.tags, loser: loserBefore.tags)
+        let optOut = NativeMarketingOptOut.merged(
+            winner: (winnerBefore.marketingOptOutOn, winnerBefore.marketingOptOutVia),
+            loser: (loserBefore.marketingOptOutOn, loserBefore.marketingOptOutVia)
+        )
+        winnerAfter.marketingOptOutOn = optOut.on
+        winnerAfter.marketingOptOutVia = optOut.via
         let winnerNotes = winnerBefore.notes.trimmingCharacters(in: .whitespacesAndNewlines)
         let loserNotes = loserBefore.notes.trimmingCharacters(in: .whitespacesAndNewlines)
         if !loserNotes.isEmpty, loserNotes != winnerNotes {

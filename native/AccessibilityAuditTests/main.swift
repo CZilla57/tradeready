@@ -847,6 +847,19 @@ let viewFileInventory: Set<String> = [
     // an owner-choice picker whose radio rows combine into one element with
     // the selected trait, and text alerts for every refusal.
     "N/NativeQuoteOptionsView.swift",
+    // Phase 33 (campaigns and customer tags), reviewed: text-titled chips and
+    // buttons (each removable or toggleable chip is a Button with its own
+    // "Remove tag …" / "Include customers tagged …" label and the selected
+    // trait), read-only chip rows combined into one "Tags: …" element, the
+    // "No marketing" badge as text (never color alone), text styles and
+    // Dynamic Type throughout (no fixed frames or fonts), the builder's
+    // multi-line fields under its one Done bar, confirmation dialogs for
+    // Delete, End, Mark as sent and They asked to stop (system-drawn), the
+    // in-row Delete draft / Delete campaign through `.nativeDestructiveText()`,
+    // async buttons disabled while working, and text alerts for every error.
+    "N/NativeCustomerTagsSheet.swift", "N/NativeCustomerMarketingViews.swift",
+    "N/NativeCampaignListView.swift", "N/NativeCampaignBuilderView.swift",
+    "N/NativeCampaignSendView.swift", "N/NativeCampaignDetailView.swift",
     "N/NativeAuthView.swift", "N/NativeBookingRequestsView.swift",
     "N/NativeBookingSettingsView.swift", "N/NativeCalendarView.swift", "N/NativeChangeOrdersView.swift",
     "N/NativeCoachComponents.swift", "N/NativeConfirmation.swift", "N/NativeCreateInvoiceFromJobView.swift",
@@ -977,6 +990,8 @@ let keyboardDoneBarCoverage: [String: String] = [
     "NativePricingCalculatorView": "NativePricingCalculatorView",
     "NativeQuoteTierTextFields": "NativeQuoteOptionsView",
     "NativeQuoteAddOnEditorView": "NativeQuoteAddOnEditorView",
+    // Phase 33: the campaign builder's brief and message editors.
+    "NativeCampaignBuilderView": "NativeCampaignBuilderView",
     "NativeRecurringInvoiceEditor": "NativeRecurringInvoiceEditor",
     "NativeRecurringJobEditor": "NativeRecurringJobEditor",
     "NativeReviewRequestView": "NativeReviewRequestView",
@@ -1619,7 +1634,8 @@ func testSemanticColors(root: URL, sources: [SourceFile]) {
     // 13: Phase 12 (12.00b.1, D3) adds the Discard button of each entry in
     // `NativeRejectedChangesView`. 14: the Remove logo button on Business Profile.
     // 16: Phase 25's Delete option and Remove options rows.
-    expectEqual(inRowDestructive, 16, "in-row destructive buttons audited")
+    // 18: Phase 33's Delete draft (builder) and Delete campaign (detail) rows.
+    expectEqual(inRowDestructive, 18, "in-row destructive buttons audited")
     if let views = file(sources, "NativeAccessibilityViews.swift") {
         let raw = String(views.raw)
         expect(raw.contains("func nativeDestructiveText() -> some View {\n        modifier(NativeDestructiveText())"),

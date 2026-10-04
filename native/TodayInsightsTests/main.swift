@@ -478,7 +478,24 @@ do {
     expectEqual(insights.count, 1, "several due customers collapse to one row")
     expectEqual(insights.first?.id, "maintenance_due:all", "maintenance_due aggregate id")
     expectEqual(insights.first?.title, "2 customers haven't been serviced in 6+ months", "maintenance_due aggregate title")
-    expectEqual(insights.first?.target, .customers, "maintenance_due aggregate target")
+    // Phase 33 (campaigns spec §5.5): the aggregate row opens the campaign
+    // builder already filtered; the single-customer row keeps `.customer`.
+    expectEqual(insights.first?.target, .newCampaign(preset: "due_for_maintenance"), "maintenance_due aggregate target is the campaign builder")
+}
+
+// Phase 33 (campaigns spec §4.3): a customer who opted out of marketing is
+// skipped, because the row's "Ask coach" drafts a check-in text.
+do {
+    let optedOut = customer(#"{"marketingOptOutOn":"2026-07-01","marketingOptOutVia":"asked"}"#)
+    expectEqual(select(jobs: [historyJob()], customers: [optedOut]).count, 0, "an opted-out customer is skipped")
+    expectEqual(select(jobs: [historyJob()], customers: [customer(#"{"marketingOptOutOn":""}"#)]).count, 1,
+                "a blank opt-out date is not an opt-out")
+    let mixed = select(
+        jobs: [historyJob(), historyJob(#"{"id":"h2","customerId":"c2","scheduledDate":"2025-11-01"}"#)],
+        customers: [customer(), customer(#"{"id":"c2","name":"Bob Reyes","marketingOptOutOn":"2026-01-02"}"#)]
+    )
+    expectEqual(mixed.first?.id, "maintenance_due:c1", "with one of two opted out, the single row remains")
+    expectEqual(mixed.first?.target, .customer(customerId: "c1"), "the single row keeps its customer target")
 }
 
 do {

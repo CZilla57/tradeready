@@ -18,6 +18,7 @@ swiftc \
   "$ROOT_DIR/native/TradeReadyNative/NativeTimeTracking.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeChangeOrders.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeEstimateFollowUp.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeServiceHistory.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeTodayInsights.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeMutationQueue.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeBookingIntake.swift" \

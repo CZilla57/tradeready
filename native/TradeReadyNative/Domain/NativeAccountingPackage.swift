@@ -178,7 +178,13 @@ enum NativeAccountingPackage {
     /// Phase 27 (lead source, spec §7) appends `Lead source` after RN's seven
     /// columns: the display name, custom labels verbatim, empty when unknown.
     /// It is the one deliberate divergence from the RN package bytes.
-    static let customersHeader = ["Name", "Email", "Phone", "Address", "Notes", "Created", "Archived", "Lead source"]
+    /// Phase 33 (campaigns spec §3.4) appends `Tags` (labels joined with
+    /// "; ") and `Marketing opt-out` (the local date, or blank). Both headers
+    /// are import synonyms, so a customer list round-trips.
+    static let customersHeader = [
+        "Name", "Email", "Phone", "Address", "Notes", "Created", "Archived", "Lead source",
+        "Tags", "Marketing opt-out",
+    ]
 
     static func buildCustomersCsv(_ customers: [Canonical.Customer]) -> String {
         let rows = NativeCSVExport.stableSorted(customers) {
@@ -188,6 +194,8 @@ enum NativeAccountingPackage {
                 customer.name, customer.email, customer.phone, customer.address,
                 customer.notes, customer.createdAt ?? "", customer.archivedAt ?? "",
                 NativeLeadSource.exportLabel(customer.leadSource),
+                (customer.tags ?? []).joined(separator: "; "),
+                customer.isMarketingOptedOut ? (customer.marketingOptOutOn ?? "") : "",
             ]
         }
         return NativeCSVExport.toCsv(customersHeader, rows)

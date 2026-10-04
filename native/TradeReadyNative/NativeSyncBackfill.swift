@@ -37,7 +37,7 @@ public extension Canonical {
         static let collectionTables = [
             "jobs", "invoices", "customers", "expenses", "pricebook",
             "recurringJobs", "recurringInvoices", "trips", "bookingRequests", "jobPhotos",
-            "forms"
+            "forms", "campaigns"
         ]
 
         init(stateURL: URL, fileManager: FileManager = .default) {
@@ -98,6 +98,7 @@ public extension Canonical {
             try enqueueCollection("bookingRequests", payload.bookingRequests)
             try enqueueCollection("jobPhotos", payload.jobPhotos)
             try enqueueCollection("forms", payload.forms)
+            try enqueueCollection("campaigns", payload.campaigns)
 
             if let settings = payload.settings {
                 let value = try Self.jsonValue(settings)

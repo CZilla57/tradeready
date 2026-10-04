@@ -119,12 +119,25 @@ private func testBuilders() {
         customer(#"{"id":"c4","name":"Dot","email":"","phone":"","address":"","notes":""}"#),
     ]
     let sourcedCsv = NativeAccountingPackage.buildCustomersCsv(sourced).components(separatedBy: "\r\n")
-    expectEqual(sourcedCsv[0], "Name,Email,Phone,Address,Notes,Created,Archived,Lead source", "customers header gains a trailing Lead source")
-    expectEqual(sourcedCsv[1], "Acme,,,,,2026-01-01,,Thumbtack / Angi", "preset key exports its display name")
-    expectEqual(sourcedCsv[2], "Bree,,,,,,,\"Home show, spring\"", "custom label verbatim (normalized, CSV-escaped)")
-    expectEqual(sourcedCsv[3], "Cole,,,,,,2026-02-01,", "a blank source exports empty")
-    expectEqual(sourcedCsv[4], "Dot,,,,,,,", "no source exports empty")
+    // Phase 33 (campaigns spec §3.4) appends `Tags` and `Marketing opt-out`
+    // after `Lead source`; both are empty for these customers.
+    expectEqual(sourcedCsv[0], "Name,Email,Phone,Address,Notes,Created,Archived,Lead source,Tags,Marketing opt-out",
+                "customers header gains a trailing Lead source, then Tags and Marketing opt-out")
+    expectEqual(sourcedCsv[1], "Acme,,,,,2026-01-01,,Thumbtack / Angi,,", "preset key exports its display name")
+    expectEqual(sourcedCsv[2], "Bree,,,,,,,\"Home show, spring\",,", "custom label verbatim (normalized, CSV-escaped)")
+    expectEqual(sourcedCsv[3], "Cole,,,,,,2026-02-01,,,", "a blank source exports empty")
+    expectEqual(sourcedCsv[4], "Dot,,,,,,,,,", "no source exports empty")
     expectEqual(sourcedCsv.count, 6, "header + 4 rows + trailing CRLF")
+
+    // Phase 33: tags joined with "; " (CSV-escaped like any field) and the
+    // local opt-out date; a blank opt-out date exports empty.
+    let marketing = [
+        customer(#"{"id":"m1","name":"Ana","email":"","phone":"","address":"","notes":"","tags":["AC","VIP"],"marketingOptOutOn":"2026-02-03","marketingOptOutVia":"asked"}"#),
+        customer(#"{"id":"m2","name":"Ben","email":"","phone":"","address":"","notes":"","tags":["Gate, side"],"marketingOptOutOn":" "}"#),
+    ]
+    let marketingCsv = NativeAccountingPackage.buildCustomersCsv(marketing).components(separatedBy: "\r\n")
+    expectEqual(marketingCsv[1], "Ana,,,,,,,,AC; VIP,2026-02-03", "tags and the opt-out date export")
+    expectEqual(marketingCsv[2], "Ben,,,,,,,,\"Gate, side\",", "a tag with a comma is escaped; a blank opt-out is empty")
 
     let mapping = NativeAccountingPackage.buildCategoryMappingCsv().components(separatedBy: "\r\n")
     expectEqual(mapping.count, 10, "category mapping: header + 8 + trailing")
@@ -217,13 +230,18 @@ private func testSummaryAndPackage() {
     // (12 bytes) plus one empty field per customer row (1 byte each). The
     // stored ZIP's headers are fixed-width, so the archive grows by exactly
     // that; the CRC-32 is re-pinned to the native bytes.
+    // Phase 33 (campaigns spec §3.4) appends `,Tags,Marketing opt-out` the
+    // same way (23 header bytes plus two empty fields, 2 bytes, per row).
     let leadSourceHeaderBytes = ",Lead source".utf8.count
-    expectEqual(first.bytes.count, 3931 + leadSourceHeaderBytes + 1, "package byte length is the RN oracle plus the lead-source column")
-    expectEqual(NativeZipArchive.crc32(first.bytes), 2_615_559_630, "package CRC-32 (RN oracle + lead-source column)")
+    let marketingHeaderBytes = ",Tags,Marketing opt-out".utf8.count
+    expectEqual(first.bytes.count, 3931 + leadSourceHeaderBytes + 1 + marketingHeaderBytes + 2,
+                "package byte length is the RN oracle plus the lead-source and Phase 33 columns")
+    expectEqual(NativeZipArchive.crc32(first.bytes), 3_228_594_093, "package CRC-32 (RN oracle + lead-source and Phase 33 columns)")
 
     let emptyPackage = NativeAccountingPackage.buildAccountingPackage(NativePackageInput(), start: jan1, end: dec31)
-    expectEqual(emptyPackage.bytes.count, 3626 + leadSourceHeaderBytes, "empty package byte length is the RN oracle plus the lead-source header")
-    expectEqual(NativeZipArchive.crc32(emptyPackage.bytes), 3_621_479_273, "empty package CRC-32 (RN oracle + lead-source header)")
+    expectEqual(emptyPackage.bytes.count, 3626 + leadSourceHeaderBytes + marketingHeaderBytes,
+                "empty package byte length is the RN oracle plus the lead-source and Phase 33 headers")
+    expectEqual(NativeZipArchive.crc32(emptyPackage.bytes), 3_533_428_405, "empty package CRC-32 (RN oracle + lead-source and Phase 33 headers)")
 
     let expectedOrder = [
         "invoices.csv", "invoice-line-items.csv", "active-payments.csv", "payment-activity.csv",

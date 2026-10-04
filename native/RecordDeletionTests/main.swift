@@ -157,6 +157,31 @@ struct RecordDeletionTests {
             expect(false, "deleting a form from a snapshot without forms must fail closed")
         } catch NativeRecordDeletionError.recordNotFound {}
 
+        // Phase 33: a campaign deletes and restores exactly (recipients and
+        // unknown keys included); jobs it booked keep their campaignId.
+        let richCampaign: Canonical.Campaign = try field("campaign")
+        var withCampaign = original
+        withCampaign.payload.campaigns = [richCampaign]
+        let deletedCampaign = try NativeRecordDeletion.deleteCampaign(snapshot: withCampaign, recordID: richCampaign.id)
+        expect(deletedCampaign.snapshot.payload.campaigns == [], "campaign deletion removes the campaign")
+        expect(deletedCampaign.mutation.table == "campaigns" && deletedCampaign.mutation.op == .delete
+               && deletedCampaign.mutation.recordId == richCampaign.id && deletedCampaign.mutation.payload == nil,
+               "campaign deletion plans one campaigns tombstone")
+        expect(deletedCampaign.undo.kind == .campaign && deletedCampaign.undo.bannerMessage == "Deleted campaign Fall furnace tune-up",
+               "campaign deletion offers the shared undo with the campaign name")
+        expect(deletedCampaign.snapshot.payload.jobs?.map(\.id) == withCampaign.payload.jobs?.map(\.id),
+               "campaign deletion leaves jobs untouched")
+        let restoredCampaign = try NativeRecordDeletion.undo(snapshot: deletedCampaign.snapshot, token: deletedCampaign.undo)
+        expect(restoredCampaign.snapshot.payload.campaigns == withCampaign.payload.campaigns,
+               "campaign undo restores the exact campaign")
+        expect(restoredCampaign.mutation.table == "campaigns" && restoredCampaign.mutation.op == .upsert
+               && restoredCampaign.mutation.payload == deletedCampaign.undo.preservedRecord,
+               "campaign undo plans the exact preserved upsert")
+        do {
+            _ = try NativeRecordDeletion.deleteCampaign(snapshot: original, recordID: richCampaign.id)
+            expect(false, "deleting a missing campaign must fail closed")
+        } catch NativeRecordDeletionError.recordNotFound {}
+
         if failures == 0 { print("PASS: native record deletion and undo tests") }
         else { fatalError("\(failures) record deletion test(s) failed") }
     }

@@ -111,6 +111,58 @@ run("customer lead source projects, edits and clears without touching siblings")
     expect(projected.leadSource == "yelp", "the UI projection carries the source")
 }
 
+// Phase 33 (campaigns spec §2): the editor sets tags and the opt-out through
+// the edit merge; a job's campaignId is canonical-only and survives edits.
+run("customer tags and opt-out round-trip through the editor; campaignId survives") {
+    let source: Canonical.Customer = try field("customer", rich)
+    let sourceFields = try object(source)
+    var edit = try CanonicalUIAdapters.edit(source)
+    expect(edit.value.tags == nil && edit.value.marketingOptOutOn == nil, "nothing projects when absent")
+    let untouched = try object(CanonicalUIAdapters.canonical(from: edit))
+    expect(untouched == sourceFields, "an untouched edit invents no tags or opt-out keys")
+
+    edit.value.tags = ["AC", "VIP"]
+    edit.value.marketingOptOutOn = "2026-03-04"
+    edit.value.marketingOptOutVia = "asked"
+    let tagged = try CanonicalUIAdapters.canonical(from: edit)
+    var expected = sourceFields
+    expected["tags"] = .array([.string("AC"), .string("VIP")])
+    expected["marketingOptOutOn"] = .string("2026-03-04")
+    expected["marketingOptOutVia"] = .string("asked")
+    let taggedFields = try object(tagged)
+    expect(taggedFields == expected, "tags and the opt-out are written and nothing else changes")
+
+    var reEdit = try CanonicalUIAdapters.edit(tagged)
+    expect(reEdit.value.tags == ["AC", "VIP"] && reEdit.value.marketingOptOutOn == "2026-03-04"
+           && reEdit.value.marketingOptOutVia == "asked", "tags and the opt-out project back into the editor")
+    let unchanged = try object(CanonicalUIAdapters.canonical(from: reEdit))
+    expect(unchanged == expected, "an unchanged re-edit keeps the bytes")
+    reEdit.value.tags = nil
+    reEdit.value.marketingOptOutOn = nil
+    reEdit.value.marketingOptOutVia = nil
+    let cleared = try object(CanonicalUIAdapters.canonical(from: reEdit))
+    expect(cleared == sourceFields, "clearing removes the keys and keeps siblings")
+
+    var draft = Customer(name: "New Tagged")
+    draft.tags = ["Pool"]
+    draft.marketingOptOutOn = "2026-03-05"
+    draft.marketingOptOutVia = "asked"
+    let created = try object(CanonicalUIAdapters.canonical(from: draft))
+    expect(created["tags"] == .array([.string("Pool")]) && created["marketingOptOutOn"] == .string("2026-03-05")
+           && created["marketingOptOutVia"] == .string("asked"), "a new customer writes tags and the opt-out")
+    let plainCreated = try object(CanonicalUIAdapters.canonical(from: Customer(name: "Plain")))
+    expect(plainCreated["tags"] == nil && plainCreated["marketingOptOutOn"] == nil, "a plain new customer has no keys")
+
+    guard case var .object(jobFields)? = rich["job"] else { throw NSError(domain: "AdapterTests", code: 33) }
+    jobFields["campaignId"] = .string("cmp_1")
+    let campaignJob = try decoder.decode(Canonical.Job.self, from: encoder.encode(Canonical.JSONValue.object(jobFields)))
+    var jobEdit = try CanonicalUIAdapters.edit(campaignJob)
+    jobEdit.value.title = "Renamed after booking"
+    let editedJob = try CanonicalUIAdapters.canonical(from: jobEdit)
+    expect(editedJob.campaignId == "cmp_1" && editedJob.title == "Renamed after booking",
+           "a canonical-only campaignId survives a job editor save")
+}
+
 run("settings logo reference projects, edits and clears without touching siblings") {
     let source: Canonical.Settings = try field("settings", rich)
     var edit = try CanonicalUIAdapters.edit(source)

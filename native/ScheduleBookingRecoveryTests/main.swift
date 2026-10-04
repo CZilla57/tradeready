@@ -3187,6 +3187,47 @@ struct ScheduleBookingRecoveryTests {
                     "\(id) [Phase 27]: a customer sourced meanwhile keeps it")
         expect(unchanged?.drafts.contains { $0.table == "customers" } == false,
                "\(id) [Phase 27]: …and is not queued")
+
+        // Phase 33 (campaigns spec §9.2): the recheck commits the plan's lead
+        // job, so a resolved campaign code's `campaignId` is carried; a
+        // matched customer's blank source is never filled by a campaign, and
+        // an unresolvable code changes nothing.
+        let campaigns = [Canonical.Campaign(id: "cmp_fall", name: "Fall", code: "04hmasw9nf6yy41j",
+                                            createdAt: "2026-10-01T00:00:00.000Z")]
+        func coded(_ code: String) -> Canonical.BookingRequest? {
+            var booking = workerBooking()
+            booking["campaignCode"] = code
+            guard let data = try? JSONSerialization.data(withJSONObject: booking) else { return nil }
+            return try? JSONDecoder().decode(Canonical.BookingRequest.self, from: data)
+        }
+        guard let campaignRequest = coded("04hmasw9nf6yy41j"), let unknownRequest = coded("zzzzzzzzzzzzzzzz") else {
+            expect(false, "\(id): fixture: the coded bookings decode")
+            return
+        }
+        let campaignPlan = NativeBookingIntake.plan(
+            requests: [campaignRequest], jobs: [], customers: [complete], campaigns: campaigns, settings: settings,
+            makeCustomerID: { "c-new" }, nowISO: { writeStamp })
+        let campaignRecheck = NativeScheduleBookingPolicy.recheckedIntakePlan(
+            campaignPlan, currentRequests: [campaignRequest], currentJobs: [], currentCustomers: [complete])
+        expectEqual(campaignRecheck?.jobs.first { $0.id == leadJobID }?.campaignId, "cmp_fall",
+                    "\(id) [Phase 33]: the recheck applies the same campaignId to the lead job")
+        expect(campaignRecheck?.drafts.contains { draft in
+            guard draft.table == "jobs", case let .object(fields)? = draft.payload else { return false }
+            return fields["campaignId"] == .string("cmp_fall")
+        } == true, "\(id) [Phase 33]: …and the queued lead job carries it")
+        expectEqual(customer(campaignRecheck)?.leadSource, nil,
+                    "\(id) [Phase 33]: a matched customer's blank source is never filled by a campaign")
+        expect(campaignRecheck?.drafts.contains { $0.table == "customers" } == false,
+               "\(id) [Phase 33]: …so the complete customer is not queued")
+        let unknownPlan = NativeBookingIntake.plan(
+            requests: [unknownRequest], jobs: [], customers: [complete], campaigns: campaigns, settings: settings,
+            makeCustomerID: { "c-new" }, nowISO: { writeStamp })
+        let unknownRecheck = NativeScheduleBookingPolicy.recheckedIntakePlan(
+            unknownPlan, currentRequests: [unknownRequest], currentJobs: [], currentCustomers: [complete])
+        expectEqual(unknownRecheck?.jobs.first { $0.id == leadJobID }?.campaignId, nil,
+                    "\(id) [Phase 33]: an unresolvable code stamps nothing")
+        expectEqual(customer(unknownRecheck)?.leadSource, "booking_link",
+                    "\(id) [Phase 33]: …and Phase 27's blank fill applies")
     }
 
     /// K6: the account changes while the foreground refresh's pull is in its

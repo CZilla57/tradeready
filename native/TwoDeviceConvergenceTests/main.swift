@@ -466,6 +466,46 @@ struct TwoDeviceConvergenceTests {
         try await sync(fb)
         expect(form(fb, "fm2_only_b") == nil, "Phase 20: a form delete propagates to the other device")
 
+        // Phase 33: one campaign sent from both devices converges by
+        // whole-blob last-writer-wins (spec §14's accepted residual).
+        func campaignBlob(sent: [String]) -> Canonical.JSONValue {
+            guard case var .object(fields)? = rich["campaign"] else { return .null }
+            fields["id"] = .string("cmp_shared")
+            fields["recipients"] = .array(["c_1", "c_2", "c_3"].map { id in
+                .object(["customerId": .string(id), "name": .string(id), "channel": .string("text"),
+                         "status": .string(sent.contains(id) ? "sent" : "pending")])
+            })
+            return .object(fields)
+        }
+        func upsertCampaign(_ device: Device, sent: [String]) throws {
+            let blob = campaignBlob(sent: sent)
+            let record = try decoded(Canonical.Campaign.self, blob)
+            var campaigns = device.snapshot.payload.campaigns ?? []
+            if let idx = campaigns.firstIndex(where: { $0.id == record.id }) { campaigns[idx] = record } else { campaigns.append(record) }
+            device.snapshot.payload.campaigns = campaigns
+            try device.queue.enqueue(table: "campaigns", op: .upsert, recordId: record.id, payload: blob)
+        }
+        func campaign(_ device: Device) -> Canonical.Campaign? {
+            device.snapshot.payload.campaigns?.first { $0.id == "cmp_shared" }
+        }
+        try upsertCampaign(fa, sent: [])
+        try await sync(fa)
+        try await sync(fb)
+        expect(campaign(fb)?.recipients?.count == 3, "Phase 33: B pulls A's frozen campaign")
+        try upsertCampaign(fa, sent: ["c_1"])
+        try upsertCampaign(fb, sent: ["c_2"])
+        try await sync(fa)
+        try await sync(fb)
+        try await sync(fa)
+        let statusesA = campaign(fa)?.recipients?.map(\.status)
+        expect(statusesA == ["pending", "sent", "pending"] && campaign(fb)?.recipients?.map(\.status) == statusesA,
+               "Phase 33: the same campaign converges to the last writer on both devices (LWW)")
+        expect((fa.snapshot.payload.campaigns ?? []).filter { $0.id == "cmp_shared" }.count == 1,
+               "Phase 33: a concurrently edited campaign never duplicates")
+        expect(campaign(fa)?.segment.preservation.unknownFields["futureSegmentField"] != nil,
+               "Phase 33: unknown campaign keys survive the round trip")
+        expect(server.liveRowCount(table: "campaigns", userID: subject) == 1, "Phase 33: one live campaign row server-side")
+
         if failures == 0 { print("PASS: native and mixed-client convergence tests") }
         else { exit(1) }
     }

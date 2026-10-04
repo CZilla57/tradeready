@@ -89,6 +89,9 @@ expectEqual(NativeTodayBriefing.destination(for: .selectDate(date: "2026-07-04")
 expectEqual(NativeTodayBriefing.destination(for: .customer(customerId: "c1")), .customer(customerId: "c1"), "target customer")
 expectEqual(NativeTodayBriefing.destination(for: .customers), .customers, "target customers")
 expectEqual(NativeTodayBriefing.destination(for: .money), .money, "target money")
+// Phase 33: the maintenance_due:all row opens the campaign builder with its preset.
+expectEqual(NativeTodayBriefing.destination(for: .newCampaign(preset: "due_for_maintenance")),
+            .newCampaign(preset: "due_for_maintenance"), "target newCampaign")
 
 // MARK: - Header: greeting cutoffs (§1.4), pinned to dateHelpers.test.js
 

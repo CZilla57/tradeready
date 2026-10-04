@@ -20,6 +20,11 @@
 # Phase 20 (job forms): AppStore.swift uses `Domain/NativeJobForms.swift` (photo
 # capture from a form item), and `NativeJobFormsStore.swift` extends AppStore
 # with the forms API, so it follows AppStore.swift too.
+#
+# Phase 33 (campaigns and customer tags): customer merge and CSV import use
+# `Domain/NativeCustomerTags.swift`, the Today insights use
+# `Domain/NativeServiceHistory.swift`, and `NativeCampaignsStore.swift`
+# extends AppStore with the campaigns API over the campaign Domain files.
 APPSTORE_TEST_SOURCES="
 $ROOT_DIR/native/HostTestSupport/HostInMemoryKeychain.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/FinancialDomain.swift
@@ -27,6 +32,7 @@ $ROOT_DIR/native/TradeReadyNative/Domain/BusinessRules.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/CanonicalModels.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeLeadSourceReport.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeLeadSource.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeCustomerTags.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/CanonicalSnapshot.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/SnapshotRepository.swift
 $ROOT_DIR/native/TradeReadyNative/Models.swift
@@ -140,7 +146,13 @@ $ROOT_DIR/native/TradeReadyNative/NativeWidgetOwnerGate.swift
 $ROOT_DIR/native/TradeReadyNative/NativeDeepLinkRouting.swift
 $ROOT_DIR/native/TradeReadyNative/NativeWidgetActionReplay.swift
 $ROOT_DIR/native/TradeReadyNative/BuildEnvironment.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeServiceHistory.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeTodayInsights.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeAttributionCode.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeCampaignMessage.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeCampaignDrafting.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeCampaignSegments.swift
+$ROOT_DIR/native/TradeReadyNative/Domain/NativeCampaignResults.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeInsightsCardPolicy.swift
 $ROOT_DIR/native/TradeReadyNative/Domain/NativeTodayBriefing.swift
 $ROOT_DIR/native/TradeReadyNative/NativeErrorRedaction.swift
@@ -154,4 +166,5 @@ $ROOT_DIR/native/TradeReadyNative/NativeRunMarker.swift
 $ROOT_DIR/native/TradeReadyNative/AppStore.swift
 $ROOT_DIR/native/TradeReadyNative/NativeBookingOwnerResponses.swift
 $ROOT_DIR/native/TradeReadyNative/NativeJobFormsStore.swift
+$ROOT_DIR/native/TradeReadyNative/NativeCampaignsStore.swift
 "

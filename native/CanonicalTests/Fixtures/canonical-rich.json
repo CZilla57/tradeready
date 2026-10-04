@@ -62,5 +62,27 @@
   "formPhoto": {
     "id": "p1759420900000_abc", "jobId": "j_20260812_precision", "createdAt": "2026-10-02T16:01:40.000Z", "customerVisible": false,
     "formId": "fm1759420800000_k3x9", "formItemId": "fi_2"
+  },
+  "campaign": {
+    "id": "cmp_3f6c2a10-8d4e-4b7a-9c1d-2e5f6a7b8c9d", "name": "Fall furnace tune-up", "code": "04hmasw9nf6yy41j",
+    "createdAt": "2026-10-03T15:00:00.000Z", "status": "sending", "channelPlan": "text_first", "frozenOn": "2026-10-03",
+    "endedAt": null, "manualExclusions": ["c_removed"], "futureCampaignField": { "kept": [1, "two"] },
+    "segment": {
+      "service": "served", "minMonthsSinceService": 6, "maxMonthsSinceService": null, "jobKeywords": ["furnace"],
+      "tagsAny": ["vip"], "tagsNone": [], "leadSources": ["google", "unknown"], "referral": "any",
+      "excludeOpenWork": true, "excludeMaintenancePlans": false, "excludeContactedWithinDays": 30,
+      "futureSegmentField": "retain-me"
+    },
+    "message": {
+      "goal": "tune_up", "brief": "$89 furnace tune-up, book by Nov 15", "text": "Hi {firstName}, it's {ownerName}. {bookingLink}",
+      "emailSubject": "Furnace tune-up time", "emailBody": "Hi {firstName},\n\nTune-up time.", "aiDrafted": true,
+      "lockedAt": "2026-10-03T15:10:00.000Z", "futureMessageField": { "tone": "friendly" }
+    },
+    "recipients": [
+      { "customerId": "c_1", "name": "Dana Ortiz", "channel": "text", "status": "sent", "sentAt": "2026-10-03T15:10:00.000Z",
+        "repliedOn": "2026-10-04", "futureRecipientField": [true] },
+      { "customerId": "c_2", "name": "Sam Lee", "channel": "email", "status": "skipped", "skipReason": "opted_out", "manual": null },
+      { "customerId": "c_3", "name": "Pat Ng", "channel": "text", "status": "pending" }
+    ]
   }
 }

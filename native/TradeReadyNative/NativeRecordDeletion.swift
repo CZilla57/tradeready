@@ -6,6 +6,8 @@ enum NativeRecordDeletionKind: String, Equatable {
     case customer
     /// Phase 20: a form instance or custom template (`forms`).
     case form
+    /// Phase 33: a past-customer campaign (`campaigns`).
+    case campaign
 
     var table: String {
         switch self {
@@ -13,6 +15,7 @@ enum NativeRecordDeletionKind: String, Equatable {
         case .invoice: "invoices"
         case .customer: "customers"
         case .form: "forms"
+        case .campaign: "campaigns"
         }
     }
 }
@@ -37,6 +40,7 @@ struct NativeRecordDeleteUndo: Identifiable {
         case .invoice: "Deleted invoice \(displayName)"
         case .customer: "Deleted customer \(displayName)"
         case .form: "Deleted form \(displayName)"
+        case .campaign: "Deleted campaign \(displayName)"
         }
     }
 }
@@ -157,6 +161,34 @@ enum NativeRecordDeletion {
         )
     }
 
+    /// Phase 33: removes one `campaigns` row. Jobs it booked keep their
+    /// `campaignId` (results are derived, so they simply stop showing).
+    static func deleteCampaign(
+        snapshot: Canonical.Snapshot,
+        recordID: String,
+        undoID: UUID = UUID()
+    ) throws -> NativeRecordDeletionResult {
+        var updated = snapshot
+        guard var records = updated.payload.campaigns,
+              let index = records.firstIndex(where: { $0.id == recordID })
+        else { throw NativeRecordDeletionError.recordNotFound }
+        let record = records.remove(at: index)
+        let preserved = try encodedValue(record)
+        updated.payload.campaigns = records
+        return .init(
+            snapshot: updated,
+            undo: .init(
+                id: undoID,
+                kind: .campaign,
+                recordID: recordID,
+                displayName: displayName(record.name, fallback: "Untitled campaign"),
+                originalIndex: index,
+                preservedRecord: preserved
+            ),
+            mutation: .init(table: "campaigns", op: .delete, recordId: recordID, payload: nil)
+        )
+    }
+
     static func undo(
         snapshot: Canonical.Snapshot,
         token: NativeRecordDeleteUndo
@@ -199,6 +231,15 @@ enum NativeRecordDeletion {
             else { throw NativeRecordDeletionError.invalidPreservedRecord }
             records.insert(restored, at: min(token.originalIndex, records.count))
             updated.payload.forms = records
+        case .campaign:
+            var records = updated.payload.campaigns ?? []
+            guard !records.contains(where: { $0.id == token.recordID })
+            else { throw NativeRecordDeletionError.undoConflict }
+            let restored: Canonical.Campaign = try decodedRecord(token)
+            guard restored.id == token.recordID
+            else { throw NativeRecordDeletionError.invalidPreservedRecord }
+            records.insert(restored, at: min(token.originalIndex, records.count))
+            updated.payload.campaigns = records
         }
         return .init(
             snapshot: updated,

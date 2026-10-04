@@ -86,6 +86,99 @@ run("rich record families") {
     try roundTrip(Canonical.Form.self, field: "form", fixture: rich)
     try roundTrip(Canonical.Form.self, field: "formTemplate", fixture: rich)
     try roundTrip(Canonical.JobPhoto.self, field: "formPhoto", fixture: rich)
+    // Phase 33: a campaign with unknown keys at every level.
+    try roundTrip(Canonical.Campaign.self, field: "campaign", fixture: rich)
+}
+
+// Phase 33 (campaigns spec §2): campaigns, customer tags and the opt-out, a
+// job's campaignId and a booking request's campaignCode are typed fields, and
+// unknown data survives inside segment, message and every recipient.
+run("campaigns decode as typed fields and keep unknown data at every level") {
+    let campaign: Canonical.Campaign = try field("campaign", from: rich)
+    expect(campaign.status == "sending" && campaign.channelPlan == "text_first" && campaign.code == "04hmasw9nf6yy41j"
+           && campaign.frozenOn == "2026-10-03" && campaign.endedAt == nil && campaign.manualExclusions == ["c_removed"],
+           "campaign header decodes")
+    expect(campaign.preservation.unknownFields["futureCampaignField"] != nil, "campaign unknown field retained")
+    expect(campaign.segment.minMonthsSinceService == 6 && campaign.segment.maxMonthsSinceService == nil
+           && campaign.segment.jobKeywords == ["furnace"] && campaign.segment.leadSources == ["google", "unknown"]
+           && !campaign.segment.excludeMaintenancePlans
+           && campaign.segment.preservation.unknownFields["futureSegmentField"] == .string("retain-me"),
+           "segment decodes with its unknown field")
+    expect(campaign.message.goal == "tune_up" && campaign.message.aiDrafted == true
+           && campaign.message.lockedAt == "2026-10-03T15:10:00.000Z"
+           && campaign.message.preservation.unknownFields["futureMessageField"] != nil,
+           "message decodes with its unknown field")
+    expect(campaign.recipients?.map(\.status) == ["sent", "skipped", "pending"]
+           && campaign.recipients?[0].repliedOn == "2026-10-04"
+           && campaign.recipients?[0].preservation.unknownFields["futureRecipientField"] != nil
+           && campaign.recipients?[1].skipReason == "opted_out",
+           "recipients decode with their unknown fields")
+
+    var edited = campaign
+    edited.recipients?[2].status = "sent"
+    edited.recipients?[2].sentAt = "2026-10-03T16:00:00.000Z"
+    edited.segment.jobKeywords.append("boiler")
+    let encoded = try object(edited)
+    guard case let .object(segment)? = encoded["segment"], case let .object(message)? = encoded["message"],
+          case let .array(recipients)? = encoded["recipients"], recipients.count == 3,
+          case let .object(first) = recipients[0], case let .object(second) = recipients[1]
+    else { throw NSError(domain: "CanonicalTests", code: 33) }
+    expect(encoded["endedAt"] == .null && encoded["futureCampaignField"] != nil, "an edit keeps the explicit null and unknown field")
+    expect(segment["futureSegmentField"] == .string("retain-me") && segment["maxMonthsSinceService"] == .null,
+           "an edit keeps the segment's unknown field and explicit null")
+    expect(message["futureMessageField"] != nil, "an edit keeps the message's unknown field")
+    expect(first["futureRecipientField"] != nil && second["manual"] == .null, "an edit keeps recipient unknown fields and nulls")
+
+    // A minimal row written by an older or newer client decodes with defaults.
+    let minimal = try decoder.decode(Canonical.Campaign.self, from: Data(#"{"id":"cmp_x","name":"X","code":"c","createdAt":"t","status":"draft"}"#.utf8))
+    let minimalEncoded = try object(minimal)
+    expect(minimal.segment == Canonical.Campaign.Segment() && minimal.channelPlan == "text_first"
+           && minimalEncoded["segment"] == nil && minimalEncoded["message"] == nil && minimalEncoded["channelPlan"] == nil,
+           "absent segment, message and plan decode as defaults and stay absent")
+}
+
+run("customer tags, opt-out, job campaignId and booking campaignCode are typed") {
+    guard case var .object(customerFields)? = rich["customer"], case var .object(jobFields)? = rich["job"],
+          case var .object(requestFields)? = rich["bookingRequest"]
+    else { throw NSError(domain: "CanonicalTests", code: 34) }
+    let plain: Canonical.Customer = try field("customer", from: rich)
+    let plainFields = try object(plain)
+    expect(plain.tags == nil && plain.marketingOptOutOn == nil && !plain.isMarketingOptedOut
+           && plainFields["tags"] == nil && plainFields["marketingOptOutOn"] == nil && plainFields["marketingOptOutVia"] == nil,
+           "a customer without tags or an opt-out stays without the keys")
+    customerFields["tags"] = .array([.string("AC"), .string("VIP")])
+    customerFields["marketingOptOutOn"] = .string("2026-03-04")
+    customerFields["marketingOptOutVia"] = .string("text_stop")
+    let tagged = try decoder.decode(Canonical.Customer.self, from: encoder.encode(Canonical.JSONValue.object(customerFields)))
+    expect(tagged.tags == ["AC", "VIP"] && tagged.marketingOptOutOn == "2026-03-04" && tagged.marketingOptOutVia == "text_stop"
+           && tagged.isMarketingOptedOut && tagged.preservation.unknownFields["tags"] == nil
+           && tagged.preservation.unknownFields["marketingOptOutOn"] == nil,
+           "tags and the opt-out decode as typed fields (merge copies them)")
+    let taggedJSON = try json(tagged)
+    expect(taggedJSON == .object(customerFields), "a tagged, opted-out customer round-trips exactly")
+    var cleared = tagged
+    cleared.tags = nil
+    cleared.marketingOptOutOn = nil
+    cleared.marketingOptOutVia = nil
+    let clearedFields = try object(cleared)
+    expect(clearedFields["tags"] == nil && clearedFields["marketingOptOutOn"] == nil, "clearing removes the keys")
+
+    jobFields["campaignId"] = .string("cmp_1")
+    let campaignJob = try decoder.decode(Canonical.Job.self, from: encoder.encode(Canonical.JSONValue.object(jobFields)))
+    expect(campaignJob.campaignId == "cmp_1" && campaignJob.preservation.unknownFields["campaignId"] == nil,
+           "a job's campaignId is typed")
+    let campaignJobJSON = try json(campaignJob)
+    expect(campaignJobJSON == .object(jobFields), "a campaign job round-trips exactly")
+    let plainJob: Canonical.Job = try field("job", from: rich)
+    let plainJobFields = try object(plainJob)
+    expect(plainJob.campaignId == nil && plainJobFields["campaignId"] == nil, "a job without a campaign stays without the key")
+
+    requestFields["campaignCode"] = .string("04hmasw9nf6yy41j")
+    let coded = try decoder.decode(Canonical.BookingRequest.self, from: encoder.encode(Canonical.JSONValue.object(requestFields)))
+    expect(coded.campaignCode == "04hmasw9nf6yy41j" && coded.preservation.unknownFields["campaignCode"] == nil,
+           "a booking request's campaignCode is typed")
+    let codedJSON = try json(coded)
+    expect(codedJSON == .object(requestFields), "a coded booking request round-trips exactly")
 }
 
 run("forms decode as typed fields and keep unknown data at both levels") {

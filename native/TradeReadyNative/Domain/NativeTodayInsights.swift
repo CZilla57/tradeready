@@ -39,6 +39,11 @@ public enum NativeInsightTarget: Equatable, Hashable {
     case customer(customerId: String)
     case customers
     case money
+    /// Phase 33: the campaign builder, preset applied (`due_for_maintenance`).
+    case newCampaign(preset: String)
+
+    /// The `maintenance_due:all` row's preset key (`NativeCampaignSegments.Preset`).
+    public static let dueForMaintenancePreset = "due_for_maintenance"
 }
 
 /// One proactive insight row. `id` is the stable dedup identity the mute
@@ -90,7 +95,7 @@ public enum NativeTodayInsights {
     /// Minimum free gap worth surfacing, in minutes.
     public static let minGapMinutes = 120
     /// Fixed cadence for the maintenance-due rule — a constant, not a setting.
-    public static let maintenanceDueMonths = 6
+    public static let maintenanceDueMonths = NativeServiceHistory.maintenanceDueMonths
     /// Month-to-date spend must exceed this multiple of the prior-3-month
     /// average to surface.
     public static let expenseAnomalyMult = 1.5
@@ -101,10 +106,8 @@ public enum NativeTodayInsights {
 
     private static let overrunStatuses: Set<String> = ["approved", "scheduled", "in_progress"]
     private static let lowMarginStatuses: Set<String> = ["lead", "estimate_sent"]
-    private static let serviceHistoryStatuses: Set<String> = ["complete", "invoiced", "paid"]
-    private static let activePipelineStatuses: Set<String> = [
-        "lead", "estimate_sent", "approved", "scheduled", "in_progress",
-    ]
+    // Phase 33: the delivered and active-pipeline status sets moved to
+    // `NativeServiceHistory` with the maintenance_due rule.
 
     private static let expenseCategoryLabels: [String: String] = [
         "materials": "Materials",
@@ -388,13 +391,11 @@ public enum NativeTodayInsights {
     // MARK: - 7. maintenance_due
 
     /// Whole calendar months elapsed from a local `YYYY-MM-DD` to `now` —
-    /// pure component math, never Date-parsing the string (FA-039).
+    /// pure component math, never Date-parsing the string (FA-039). Phase 33:
+    /// the one implementation lives in `NativeServiceHistory`, shared with
+    /// campaign segments.
     static func monthsBetween(from: String, now: Date) -> Int {
-        guard let (y, m, d) = NativeSchedule.parseDateComponents(from) else { return 0 }
-        let (ny, nmZeroBased, nd) = NativeCashBasis.localComponents(now)
-        var months = (ny - y) * 12 + (nmZeroBased + 1 - m)
-        if nd < d { months -= 1 }
-        return months
+        NativeServiceHistory.monthsBetween(from: from, now: now)
     }
 
     private struct MaintenanceDue {
@@ -411,27 +412,25 @@ public enum NativeTodayInsights {
         now: Date
     ) -> [NativeTodayInsight] {
         var due: [MaintenanceDue] = []
+        // Phase 33 (spec §5.3): the last-service rule and its guards come from
+        // `NativeServiceHistory`, shared with the "Due for maintenance"
+        // campaign preset, so the two always agree.
+        let jobsByCustomer = NativeServiceHistory.jobsByCustomer(jobs)
         for customer in customers {
             guard !customer.id.isEmpty, !isArchived(customer.archivedAt) else { continue }
+            // Phase 33 (§4.3): the row's "Ask coach" drafts a check-in text,
+            // so a customer who opted out of marketing is skipped.
+            guard !customer.isMarketingOptedOut else { continue }
             let hasContact = !customer.phone.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !customer.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             guard hasContact else { continue }
-            let theirJobs = jobs.filter { $0.customerId == customer.id }
-            if theirJobs.contains(where: { activePipelineStatuses.contains($0.status) && !isArchived($0.archivedAt) }) { continue }
-            if recurringJobs.contains(where: { $0.isActive && $0.customerId == customer.id }) { continue }
-            var lastDate = ""
-            var lastTitle = ""
-            for job in theirJobs {
-                guard serviceHistoryStatuses.contains(job.status), let scheduledDate = job.scheduledDate, !scheduledDate.isEmpty else { continue }
-                if scheduledDate > lastDate {
-                    lastDate = scheduledDate
-                    lastTitle = job.title
-                }
-            }
-            guard !lastDate.isEmpty else { continue }
-            let months = monthsBetween(from: lastDate, now: now)
+            if NativeServiceHistory.hasOpenWork(customerID: customer.id, jobsByCustomer: jobsByCustomer) { continue }
+            if NativeServiceHistory.hasActiveMaintenancePlan(customerID: customer.id, recurringJobs: recurringJobs) { continue }
+            guard let last = NativeServiceHistory.lastService(customerID: customer.id, jobsByCustomer: jobsByCustomer)
+            else { continue }
+            let months = monthsBetween(from: last.date, now: now)
             if months >= maintenanceDueMonths {
-                due.append(MaintenanceDue(customer: customer, months: months, lastDate: lastDate, lastTitle: lastTitle))
+                due.append(MaintenanceDue(customer: customer, months: months, lastDate: last.date, lastTitle: last.title))
             }
         }
         if due.isEmpty { return [] }
@@ -459,7 +458,9 @@ public enum NativeTodayInsights {
             kind: .maintenanceDue,
             id: "maintenance_due:all",
             title: "\(due.count) customers haven't been serviced in \(maintenanceDueMonths)+ months",
-            target: .customers,
+            // Phase 33 (§5.5): opens the campaign builder already filtered to
+            // the same set ("Due for maintenance").
+            target: .newCampaign(preset: NativeInsightTarget.dueForMaintenancePreset),
             reason: "\(due.count) customers had their last delivered job over \(maintenanceDueMonths) months " +
                 "ago and have no upcoming work or active recurring plan. Snoozing hides this for 30 days."
         )]

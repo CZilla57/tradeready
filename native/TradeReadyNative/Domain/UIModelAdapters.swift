@@ -170,6 +170,9 @@ enum CanonicalUIAdapters {
         ]
         if let archivedAt = value.archivedAt { fields["archivedAt"] = .string(archivedAt) }
         if let leadSource = value.leadSource { fields["leadSource"] = .string(leadSource) }
+        if let tags = value.tags { fields["tags"] = .array(tags.map { .string($0) }) }
+        if let optOut = value.marketingOptOutOn { fields["marketingOptOutOn"] = .string(optOut) }
+        if let via = value.marketingOptOutVia { fields["marketingOptOutVia"] = .string(via) }
         return try decode(fields)
     }
 
@@ -815,6 +818,9 @@ enum CanonicalUIAdapters {
         if edit.value.createdAt != original.createdAt { fields["createdAt"] = .string(timestamp(edit.value.createdAt)) }
         updateOptional(&fields, "archivedAt", edit.value.archivedAt, original.archivedAt)
         updateOptional(&fields, "leadSource", edit.value.leadSource, original.leadSource)
+        updateOptionalStringArray(&fields, "tags", edit.value.tags, original.tags)
+        updateOptional(&fields, "marketingOptOutOn", edit.value.marketingOptOutOn, original.marketingOptOutOn)
+        updateOptional(&fields, "marketingOptOutVia", edit.value.marketingOptOutVia, original.marketingOptOutVia)
         return try decode(fields)
     }
 
@@ -968,7 +974,8 @@ enum CanonicalUIAdapters {
         Customer(id: value.id, name: value.name, email: value.email, phone: value.phone,
                  address: value.address, notes: value.notes,
                  createdAt: try parsed(value.createdAt ?? "1970-01-01", field: "customer.createdAt", calendar: calendar),
-                 archivedAt: value.archivedAt, leadSource: value.leadSource)
+                 archivedAt: value.archivedAt, leadSource: value.leadSource, tags: value.tags,
+                 marketingOptOutOn: value.marketingOptOutOn, marketingOptOutVia: value.marketingOptOutVia)
     }
 
     static func job(from value: Canonical.Job, calendar: Calendar = .current) throws -> Job {
@@ -1091,6 +1098,12 @@ private extension CanonicalUIAdapters {
     }
     static func updateOptional(_ fields: inout [String: Canonical.JSONValue], _ key: String, _ value: String?, _ old: String?) {
         guard value != old else { return }; if let value { fields[key] = .string(value) } else { fields.removeValue(forKey: key) }
+    }
+    /// Phase 33 (tags): like `updateOptional`, for a string array. An
+    /// unchanged value keeps the baseline bytes; `nil` removes the key.
+    static func updateOptionalStringArray(_ fields: inout [String: Canonical.JSONValue], _ key: String, _ value: [String]?, _ old: [String]?) {
+        guard value != old else { return }
+        if let value { fields[key] = .array(value.map { .string($0) }) } else { fields.removeValue(forKey: key) }
     }
     static func updateNumber(_ fields: inout [String: Canonical.JSONValue], _ key: String, _ value: Double, _ old: Double) {
         if value != old { fields[key] = .number(Decimal(string: String(value)) ?? 0) }

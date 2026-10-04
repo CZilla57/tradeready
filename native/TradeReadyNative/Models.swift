@@ -67,6 +67,11 @@ struct Customer: Identifiable, Codable, Hashable {
     /// Phase 27: the stored lead source (preset key or custom label), first
     /// touch. `nil` is Unknown.
     var leadSource: String?
+    /// Phase 33: normalized tags (`NativeCustomerTags`); `nil` when none.
+    var tags: [String]?
+    /// Phase 33: "Do not contact for marketing" date and reason (O1).
+    var marketingOptOutOn: String?
+    var marketingOptOutVia: String?
 }
 
 struct Job: Identifiable, Codable, Hashable {

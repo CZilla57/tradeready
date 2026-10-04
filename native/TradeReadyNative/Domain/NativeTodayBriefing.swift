@@ -55,6 +55,9 @@ public enum NativeTodayDestination: Equatable, Hashable {
     case newJob
     /// First-action hero "Add Your First Customer": Customers → AddCustomer.
     case newCustomer
+    /// Phase 33: the `maintenance_due:all` row opens the campaign builder
+    /// with a segment preset (`NativeCampaignSegments.Preset` raw value).
+    case newCampaign(preset: String)
 }
 
 public enum NativeTodayHeroKind: String, Equatable {
@@ -146,6 +149,8 @@ public enum NativeTodayBriefing {
             return .customers
         case .money:
             return .money
+        case .newCampaign(let preset):
+            return .newCampaign(preset: preset)
         }
     }
 

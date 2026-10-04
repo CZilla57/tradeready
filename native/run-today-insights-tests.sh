@@ -16,6 +16,7 @@ swiftc \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeCalendar.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeTimeTracking.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeChangeOrders.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeServiceHistory.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeTodayInsights.swift" \
   "$ROOT_DIR/native/TodayInsightsTests/main.swift" \
   -o "$OUTPUT_PATH"

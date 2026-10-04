@@ -4474,6 +4474,106 @@ final class AppStore: ObservableObject {
         }
     }
 
+    // MARK: - Campaigns (Phase 33) primitives
+    //
+    // The campaigns, tags and opt-out API lives in `NativeCampaignsStore.swift`.
+    // Only what needs this file's private state (the snapshot, the repository,
+    // the queue, the deletion undo and the AI transport) lives here.
+
+    /// Every stored `campaigns` row.
+    var campaignRecords: [Canonical.Campaign] { snapshot.payload.campaigns ?? [] }
+
+    enum CampaignCommitMode {
+        /// A new campaign: refused when the id is already stored.
+        case insert
+        /// A changed campaign: refused when a pull removed it meanwhile.
+        case replace
+    }
+
+    /// Durably commits changed customers and at most one campaign in one save,
+    /// then enqueues their upserts as one batch (customers first): durable
+    /// save, then publish, then the queue (a queue failure never rolls back
+    /// the save). A customer that is no longer stored, or a campaign that does
+    /// not fit `mode`, is refused before anything is written.
+    func commitMarketingRecords(
+        customers changed: [Canonical.Customer],
+        campaign: Canonical.Campaign?,
+        mode: CampaignCommitMode = .replace
+    ) -> Bool {
+        guard ensurePersistenceWritable() else { return false }
+        var updated = snapshot
+        var customers = updated.payload.customers ?? []
+        for record in changed {
+            guard let index = customers.firstIndex(where: { $0.id == record.id }) else { return false }
+            customers[index] = record
+        }
+        if !changed.isEmpty { updated.payload.customers = customers }
+        if let campaign {
+            var records = updated.payload.campaigns ?? []
+            switch (mode, records.firstIndex(where: { $0.id == campaign.id })) {
+            case (.insert, nil): records.append(campaign)
+            case let (.replace, index?): records[index] = campaign
+            default: return false
+            }
+            updated.payload.campaigns = records
+        }
+        var drafts: [Canonical.MutationDraft] = []
+        do {
+            for record in changed {
+                drafts.append(.init(table: "customers", op: .upsert, recordId: record.id, payload: try Self.mutationPayload(record)))
+            }
+            if let campaign {
+                drafts.append(.init(table: "campaigns", op: .upsert, recordId: campaign.id, payload: try Self.mutationPayload(campaign)))
+            }
+            try repository.save(updated)
+            try apply(updated)
+        } catch {
+            return false
+        }
+        do {
+            try mutationQueue.enqueueBatch(drafts)
+            scheduleSyncAfterLocalChange()
+        } catch {
+            print("TradeReadyMutationQueue stage=enqueue table=campaigns")
+            recordLocalSyncFailure("queue/enqueue-campaigns")
+        }
+        return true
+    }
+
+    /// Deletes one campaign through the normal `campaigns` delete, with the
+    /// shared 8 s undo. Jobs it booked keep their `campaignId`.
+    @discardableResult
+    func deleteCampaign(id: String) -> Bool {
+        guard ensurePersistenceWritable() else { return false }
+        do {
+            let result = try NativeRecordDeletion.deleteCampaign(snapshot: snapshot, recordID: id)
+            try commitRecordDeletion(result)
+            pendingCustomerMergeUndo = nil
+            pendingRecordDeleteUndo = result.undo
+            scheduleRecordDeleteUndoExpiration(id: result.undo.id)
+            return true
+        } catch NativeRecordDeletionError.recordNotFound {
+            return false
+        } catch {
+            migrationMessage = "The campaign could not be deleted safely. Nothing was changed."
+            return false
+        }
+    }
+
+    /// Campaign drafting (spec §6.2): the coach transport with a dedicated
+    /// system prompt, never `sendCoachMessage`, so no BUSINESS DATA block is
+    /// sent. Provider order and auth are the coach's (user key, else the
+    /// backend `/api/ai-chat`); no new provider or model.
+    func sendCampaignDraftRequest(systemPrompt: String, userMessage: String) async throws -> String {
+        try await coachTransport.sendMessage(
+            messages: [NativeCoachMessage(role: .user, text: userMessage)],
+            systemPrompt: systemPrompt,
+            anthropicKey: effectiveAdvisoryAnthropicKey ?? "",
+            groqKey: effectiveAdvisoryGroqKey ?? "",
+            sessionBytes: scheduleBookingSessionBytes(explicit: nil)
+        )
+    }
+
     /// Applies only the direct, one-step lifecycle actions whose dependent
     /// screen work is already complete. The expected status is an exact stale-
     /// UI guard, so a delayed tap cannot overwrite a newer sync transition.
@@ -9307,6 +9407,7 @@ final class AppStore: ObservableObject {
         if let v = try rebase("bookingRequests", \Canonical.BookingRequest.id, b.bookingRequests, p.bookingRequests, l.bookingRequests) { result.payload.bookingRequests = v }
         if let v = try rebase("jobPhotos", \Canonical.JobPhoto.id, b.jobPhotos, p.jobPhotos, l.jobPhotos) { result.payload.jobPhotos = v }
         if let v = try rebase("forms", \Canonical.Form.id, b.forms, p.forms, l.forms) { result.payload.forms = v }
+        if let v = try rebase("campaigns", \Canonical.Campaign.id, b.campaigns, p.campaigns, l.campaigns) { result.payload.campaigns = v }
 
         // Settings and customer notes have no cursor: every pass refetches them.
         if try protectedKeys.contains("settings/\(settingsMutationRecordID)") || !sameEncoding(l.settings, b.settings) {
@@ -9417,6 +9518,7 @@ final class AppStore: ObservableObject {
             + (payload.bookingRequests?.count ?? 0)
             + (payload.jobPhotos?.count ?? 0)
             + (payload.forms?.count ?? 0)
+            + (payload.campaigns?.count ?? 0)
     }
 
     private static func performanceOutcome(_ result: NativeSyncPullResult) -> NativePerformanceOutcome {
@@ -9852,6 +9954,10 @@ final class AppStore: ObservableObject {
         // Phase 20: form and form-item keys (key names only, never values).
         "kind", "jobId", "templateId", "items", "label", "required", "photoRequired",
         "checked", "result", "text", "photoIds", "completedAt", "archivedAt", "formId", "formItemId",
+        // Phase 33: campaign and customer marketing keys (key names only).
+        "campaigns", "code", "segment", "channelPlan", "message", "recipients", "frozenOn",
+        "manualExclusions", "endedAt", "channel", "skipReason", "sentAt", "tags",
+        "marketingOptOutOn", "marketingOptOutVia", "campaignId", "campaignCode",
         "id", "name", "email", "phone", "address", "notes", "createdAt",
         "customerId", "customerName", "customer", "title", "description",
         "status", "scheduledAt", "scheduledEnd", "estimateTotal", "laborHours",
@@ -10431,6 +10537,7 @@ extension AppStore {
             requests: requests,
             jobs: snapshot.payload.jobs ?? [],
             customers: snapshot.payload.customers ?? [],
+            campaigns: snapshot.payload.campaigns ?? [],
             settings: settings,
             makeCustomerID: makeCustomerID ?? Self.intakeCustomerID,
             nowISO: { stamp }
@@ -13348,6 +13455,8 @@ extension AppStore {
         case presentCalendar
         case presentSearch
         case presentSettings
+        /// Phase 33: the campaign builder with a segment preset.
+        case presentNewCampaign(preset: String)
         case none
     }
 
@@ -13436,6 +13545,8 @@ extension AppStore {
             return .presentNewJobEditor
         case .newCustomer:
             return .presentNewCustomerEditor
+        case .newCampaign(let preset):
+            return .presentNewCampaign(preset: preset)
         }
     }
 

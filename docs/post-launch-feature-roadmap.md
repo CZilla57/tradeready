@@ -78,7 +78,7 @@ This is the current order for everything not yet built. It **supersedes** earlie
 | 30 | ACH / bank payments | 🔥 | Med | Stripe payment links + webhook, payment ledger (#3) | **Out of scope (2026-10-02)** · staged 2026-10-02 — prompt ready (webhook gap, see Why) |
 | 31 | Card-fee surcharge / convenience fee | 🔥 | Med (compliance-gated) | Payment links, invoice PDF | **Out of scope (2026-10-02)** · staged 2026-10-02 — evaluate-first |
 | 32 | Quote expiration dates | 🔥 | Low | Estimate approval loop (#1), estimate follow-up | **Build #3** · staged 2026-10-02 — prompt ready |
-| 33 | Past-customer campaigns (+ customer tags) | 🔥🔥 | Med–High | Outreach, AI layer, lead source (#27) | **Build #9** · staged 2026-10-02 — prompt ready (send channel evaluate-first) |
+| 33 | Past-customer campaigns (+ customer tags) | 🔥🔥 | Med–High | Outreach, AI layer, lead source (#27) | **Build #9** · Stage 1 native built 2026-10-03 on `feat/campaigns` (spec `docs/superpowers/specs/2026-10-03-campaigns-tags-design.md` §16); Worker §9.1 and `book.html` §9.3 pending; Stage 2 needs owner approval |
 | 34 | Referral program | 🔥 | Med | Booking link (#9/#11), lead source (#27), review requests | **Build #6** · staged 2026-10-02 — prompt ready (after #27) |
 
 ---

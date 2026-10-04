@@ -40,6 +40,11 @@ struct NativeReviewRequestView: View {
                 if let draft {
                     Section("Recipient") {
                         Text(draft.customerName).font(.headline)
+                        // Phase 33 (§4.3): informational only; a review request isn't marketing.
+                        if store.customerOptedOutOfMarketing(jobID: jobID) {
+                            Label("\(draft.customerName) asked not to get marketing messages.", systemImage: "info.circle")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
                         Picker("Channel", selection: $channel) {
                             Text("Text").tag(NativeAppointmentMessageChannel.sms)
                             Text("Email").tag(NativeAppointmentMessageChannel.email)

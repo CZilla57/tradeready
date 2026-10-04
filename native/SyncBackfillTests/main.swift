@@ -37,7 +37,8 @@ struct SyncBackfillTests {
             pricebook: [try model(Canonical.PricebookEntry.self, "pricebookEntry")],
             bookingRequests: [try model(Canonical.BookingRequest.self, "bookingRequest")],
             jobPhotos: [try model(Canonical.JobPhoto.self, "jobPhoto")],
-            forms: [try model(Canonical.Form.self, "form")]
+            forms: [try model(Canonical.Form.self, "form")],
+            campaigns: [try model(Canonical.Campaign.self, "campaign")]
         ))
 
         let fileManager = FileManager.default
@@ -61,10 +62,10 @@ struct SyncBackfillTests {
         let count = try backfill.backfillIfNeeded(subject: subject, snapshot: snapshot, queue: queue)
 
         let items = queue.load()
-        // 11 collection rows (one each, Phase 20 adds forms) + settings + 2
-        // customer notes = 14.
-        expect(count == 14, "the backfill reports every enqueued item (got \(count))")
-        expect(items.count == 14, "every local record is enqueued once (got \(items.count))")
+        // 12 collection rows (one each, Phase 20 adds forms, Phase 33
+        // campaigns) + settings + 2 customer notes = 15.
+        expect(count == 15, "the backfill reports every enqueued item (got \(count))")
+        expect(items.count == 15, "every local record is enqueued once (got \(items.count))")
         expect(items.allSatisfy { $0.op == .upsert }, "a backfill enqueues only upserts")
         expect(backfill.isCompleted(subject: subject), "the subject is stamped complete after a backfill")
 
@@ -74,6 +75,14 @@ struct SyncBackfillTests {
         }
         expect(tables.contains("settings"), "settings are backfilled")
         expect(Canonical.NativeSyncBackfill.collectionTables.contains("forms"), "forms is a backfilled collection (Phase 20)")
+        expect(Canonical.NativeSyncBackfill.collectionTables.contains("campaigns"), "campaigns is a backfilled collection (Phase 33)")
+        if let campaignItem = items.first(where: { $0.table == "campaigns" }),
+           case let .object(fields)? = campaignItem.payload {
+            expect(campaignItem.recordId == "cmp_3f6c2a10-8d4e-4b7a-9c1d-2e5f6a7b8c9d" && fields["futureCampaignField"] != nil,
+                   "a campaign is enqueued under its id with its unknown keys")
+        } else {
+            expect(false, "a campaign row is present in the backfill")
+        }
         if let formItem = items.first(where: { $0.table == "forms" }) {
             expect(formItem.recordId == "fm1759420800000_k3x9" && formItem.op == .upsert, "a form is enqueued under its id")
             if case let .object(fields)? = formItem.payload {
@@ -138,7 +147,7 @@ struct SyncBackfillTests {
         expect(!backfill.isCompleted(subject: otherSubject), "a different subject is not yet backfilled")
         let otherQueue = makeQueue("queue-2")
         let otherCount = try backfill.backfillIfNeeded(subject: otherSubject, snapshot: snapshot, queue: otherQueue)
-        expect(otherCount == 14, "a second account runs its own backfill")
+        expect(otherCount == 15, "a second account runs its own backfill")
 
         // removeAll clears the flag so a re-created account re-runs (account-scrub
         // boundary): the queue itself is cleared separately.
@@ -146,7 +155,7 @@ struct SyncBackfillTests {
         expect(!backfill.isCompleted(subject: subject), "removeAll clears completion flags")
         let rerunQueue = makeQueue("queue-3")
         let rerun = try backfill.backfillIfNeeded(subject: subject, snapshot: snapshot, queue: rerunQueue)
-        expect(rerun == 14, "after removeAll the backfill runs again")
+        expect(rerun == 15, "after removeAll the backfill runs again")
 
         // Records with no usable id are skipped rather than enqueued unsendable.
         let idlessSnapshot = Canonical.Snapshot(payload: .init(

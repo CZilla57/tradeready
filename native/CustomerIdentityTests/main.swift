@@ -256,6 +256,21 @@ do {
     expect(savedSource("nextdoor") == "nextdoor", "a picked preset key saves unchanged")
     expect(savedSource(" Home   Show ") == "Home Show", "a custom label saves trimmed and collapsed")
     expect(savedSource("   ") == nil && savedSource(nil) == nil, "a blank source saves as Not set")
+
+    // Phase 33: the editor saves tags in their stored form; a blank opt-out
+    // date is no opt-out and drops its reason.
+    var tagDraft = customer(id: "new-tags", name: "Tag Draft")
+    tagDraft.tags = ["#vip", "VIP", " pool ", ""]
+    tagDraft.marketingOptOutOn = "  "
+    tagDraft.marketingOptOutVia = "asked"
+    let tagPlan = NativeCustomerIdentity.editorSavePlan(for: tagDraft, existingCustomers: existing, mode: .create).customer
+    expect(tagPlan.tags == ["pool", "vip"], "editor save: tags normalized, de-duplicated and sorted")
+    expect(tagPlan.marketingOptOutOn == nil && tagPlan.marketingOptOutVia == nil, "editor save: a blank opt-out date is cleared")
+    tagDraft.tags = ["", " "]
+    tagDraft.marketingOptOutOn = "2026-03-04"
+    let optPlan = NativeCustomerIdentity.editorSavePlan(for: tagDraft, existingCustomers: existing, mode: .create).customer
+    expect(optPlan.tags == nil && optPlan.marketingOptOutOn == "2026-03-04" && optPlan.marketingOptOutVia == "asked",
+           "editor save: no tags is nil; the opt-out and its reason are kept")
 }
 
 do {
@@ -475,6 +490,51 @@ do {
     expect(keptWinner == "google", "a winner source is never replaced by the loser's")
     let bothBlank = try mergedSource(winner: nil, loser: nil)
     expect(bothBlank == nil, "two blank sources stay blank")
+
+    // Phase 33 (campaigns spec §4.4): tags union (the winner's first, cap 10)
+    // and a sticky opt-out (either record's, the earlier date and its reason).
+    // They are typed fields, so merge copies them; undo restores both records.
+    func mergedMarketing(
+        winnerTags: [String]?, loserTags: [String]?,
+        winnerOptOut: (String?, String?), loserOptOut: (String?, String?)
+    ) throws -> (customer: Canonical.Customer?, payload: [String: Canonical.JSONValue], undoExact: Bool) {
+        var taggedWinner = winner
+        taggedWinner.tags = winnerTags
+        taggedWinner.marketingOptOutOn = winnerOptOut.0
+        taggedWinner.marketingOptOutVia = winnerOptOut.1
+        var taggedLoser = loser
+        taggedLoser.tags = loserTags
+        taggedLoser.marketingOptOutOn = loserOptOut.0
+        taggedLoser.marketingOptOutVia = loserOptOut.1
+        let snapshot = Canonical.Snapshot(payload: .init(customers: [taggedLoser, taggedWinner]))
+        let result = try NativeCustomerIdentity.merge(snapshot: snapshot, winnerID: winner.id, loserID: loser.id)
+        let mergedCustomer = result.snapshot.payload.customers?.first { $0.id == winner.id }
+        let upsert = result.mutations.first { $0.table == "customers" && $0.recordId == winner.id && $0.op == .upsert }
+        guard case let .object(payload)? = upsert?.payload else { return (nil, [:], false) }
+        let undone = try NativeCustomerIdentity.undo(snapshot: result.snapshot, token: result.undo)
+        let undoExact = try wireEncoder.encode(undone.snapshot.payload.customers) == wireEncoder.encode(snapshot.payload.customers)
+        return (mergedCustomer, payload, undoExact)
+    }
+    let unioned = try mergedMarketing(winnerTags: ["VIP"], loserTags: ["vip", "Pool", "AC"], winnerOptOut: (nil, nil), loserOptOut: (nil, nil))
+    expect(unioned.customer?.tags == ["AC", "Pool", "VIP"], "merge: tags union by key, the winner's spelling kept")
+    expect(unioned.payload["tags"] == .array([.string("AC"), .string("Pool"), .string("VIP")]), "merge: the winner upsert carries the tags")
+    expect(unioned.customer?.isMarketingOptedOut == false && unioned.payload["marketingOptOutOn"] == nil,
+           "merge: no opt-out is invented")
+    expect(unioned.undoExact, "merge undo restores both tagged records exactly")
+    let capped = try mergedMarketing(winnerTags: (1...9).map { "w\($0)" }, loserTags: ["b", "a"], winnerOptOut: (nil, nil), loserOptOut: (nil, nil))
+    expect(capped.customer?.tags?.count == 10 && capped.customer?.tags?.contains("a") == true
+           && capped.customer?.tags?.contains("b") == false, "merge: the loser's tags join in key order until 10")
+    let sticky = try mergedMarketing(winnerTags: nil, loserTags: nil, winnerOptOut: (nil, nil), loserOptOut: ("2026-02-01", "text_stop"))
+    expect(sticky.customer?.marketingOptOutOn == "2026-02-01" && sticky.customer?.marketingOptOutVia == "text_stop"
+           && sticky.payload["marketingOptOutOn"] == .string("2026-02-01"), "merge: the loser's opt-out carries over (sticky)")
+    expect(sticky.undoExact, "merge undo restores the loser's opt-out record exactly")
+    let earlier = try mergedMarketing(winnerTags: nil, loserTags: nil,
+                                      winnerOptOut: ("2026-05-01", "asked"), loserOptOut: ("2026-02-01", "email_reply"))
+    expect(earlier.customer?.marketingOptOutOn == "2026-02-01" && earlier.customer?.marketingOptOutVia == "email_reply",
+           "merge: the earlier opt-out date wins with its reason")
+    let kept = try mergedMarketing(winnerTags: nil, loserTags: nil, winnerOptOut: ("2026-01-01", "asked"), loserOptOut: (nil, nil))
+    expect(kept.customer?.marketingOptOutOn == "2026-01-01" && kept.customer?.marketingOptOutVia == "asked",
+           "merge: never clears the winner's opt-out")
 }
 
 do {
