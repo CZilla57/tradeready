@@ -11,7 +11,10 @@
 //      contact. A well-formed key is never rejected by the IP block.
 //   5. Per-key-hash memory guards (no database contact): a hash the RPC has
 //      repeatedly called unknown → 401 invalid_key; a hash the RPC has said
-//      is over its limit → 429 rate_limited until its reset.
+//      is over its limit → 429 rate_limited until its reset. A hash outside
+//      the positive cache (recently authorized) from an IP over the failure
+//      threshold gets only a small RPC budget per window → 429 beyond it.
+//      Known-good hashes always go to the RPC (revocation is still checked).
 //   6. api_key_authorize RPC → 401 key_revoked | key_expired | invalid_key,
 //      429 rate_limited, 503 unavailable. From here on the request has an
 //      owner and every outcome is logged against the key.
@@ -283,6 +286,18 @@ async function handleV1(req, env, { nowMs = Date.now(), failureGuard }) {
     return fail(shed.error, WWW_AUTHENTICATE);
   }
 
+  // A hash this isolate has seen authorize recently is never held to the IP
+  // budget, but it still goes to the RPC below (revocation and expiry are
+  // checked on every request). Any other hash from a blocked address gets a
+  // small RPC budget per window, so a flood of distinct random well-formed
+  // keys cannot reach the database unbounded.
+  if (!failureGuard.isKnownKey(keyHash, nowMs)) {
+    const blockedFor = failureGuard.blockedFor(ipKey, nowMs);
+    if (blockedFor > 0 && !failureGuard.takeIpBudget(ipKey, nowMs)) {
+      return fail('rate_limited', { 'Retry-After': String(blockedFor) });
+    }
+  }
+
   let auth;
   try {
     auth = await authorizeKey(env, { keyHash, route: route.template, ip: req.ip || null });
@@ -293,14 +308,17 @@ async function handleV1(req, env, { nowMs = Date.now(), failureGuard }) {
   if (auth.kind === 'unavailable') return fail('unavailable');
   if (auth.kind === 'denied') {
     failureGuard.fail(ipKey, nowMs);
+    failureGuard.forgetKey(keyHash);
     if (auth.error === 'invalid_key') failureGuard.unknownKey(keyHash, nowMs);
     return fail(auth.error, WWW_AUTHENTICATE);
   }
   if (auth.kind === 'rate_limited') {
+    failureGuard.knownKey(keyHash, nowMs); // only a live key is ever rate limited
     failureGuard.rateLimitedKey(keyHash, { retryAfter: auth.retryAfter, rate: auth.rate }, nowMs);
     return fail('rate_limited', { 'Retry-After': String(auth.retryAfter), ...rateHeaders(auth.rate) });
   }
 
+  failureGuard.knownKey(keyHash, nowMs);
   const out = await serveAuthorized(env, auth, route, url.searchParams, { nowMs, fail, respond });
   out.headers = { ...out.headers, ...rateHeaders(auth.rate) };
   await logApiRequest(env, {

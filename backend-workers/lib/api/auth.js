@@ -114,31 +114,37 @@ async function logApiRequest(env, { userId, keyId, route, status, ip }) {
 }
 
 // In-memory load guards (spec §6), per isolate. Load guards for junk and
-// hammering traffic, not security boundaries (keys are 256-bit). Three
-// independent layers, all bounded:
+// hammering traffic, not security boundaries (keys are 256-bit). Layers:
 //
 //   1. IP failure guard. The `limit`-th failed request in a window from one
-//      cf-connecting-ip blocks that address for one window. It applies to
-//      requests that carry NO well-formed key (missing or malformed
-//      Authorization, key in the query, a bad route of that kind). A request
-//      carrying a well-formed `trk_` key is NEVER rejected by it: valid keys
-//      behind a shared egress IP (an integration platform, a corporate NAT)
-//      must not be locked out by someone else's junk. Well-formed keys are
-//      shed by the two per-hash layers below instead.
-//   2. Unknown-key negative cache, keyed by sha256 of the presented key.
-//      After `unknownLimit` "unknown key" answers for the same hash in a
-//      window, that hash is answered 401 invalid_key from memory without the
-//      RPC, until the window ends. At most `unknownLimit` RPCs per hash per
-//      window reach the database.
-//   3. Rate-limited-key shed, keyed the same way. Once the RPC answers
-//      `rate_limited` for a hash, further requests with it are answered 429
-//      from memory (same Retry-After and X-RateLimit-* the RPC gave) until
-//      the reported reset, so a key over its limit costs no authorize RPC
-//      (each takes the per-owner advisory lock).
+//      cf-connecting-ip (every unknown/revoked/expired key, malformed or
+//      missing key, key in the query) blocks that address for one window.
+//      Requests with NO well-formed key are answered 429 while blocked.
+//   2. Well-formed keys are never flatly rejected by the IP block (valid keys
+//      behind a shared egress IP must keep working), but while their IP is
+//      blocked a key hash NOT in the positive cache may reach the authorize
+//      RPC only `ipBudget` times per window per IP; beyond that, 429 from
+//      memory. A flood of distinct random well-formed keys therefore costs
+//      the database at most `limit` + `ipBudget` RPCs per window per IP.
+//   3. Positive cache: sha256 hashes that authorized (or were rate limited,
+//      which only a live key can be) in the last `knownTtlMs`. A hash in it
+//      is never held to the IP budget. It does NOT skip the RPC: revocation
+//      and expiry are checked on every request, and a denial removes the hash.
+//      Accepted trade-off: a valid key this isolate has not seen recently,
+//      arriving from an address that is over the threshold, shares that IP's
+//      small budget.
+//   4. Unknown-key negative cache, keyed by hash: after `unknownLimit`
+//      "unknown key" answers for one hash in a window, that hash is answered
+//      401 invalid_key from memory until the window ends.
+//   5. Rate-limited-key shed, keyed by hash: once the RPC answers
+//      `rate_limited`, further requests with it are answered 429 from memory
+//      (same Retry-After and X-RateLimit-*) until the reported reset.
 //
 // Only sha256 hex hashes ever enter the per-hash maps (anything else is
-// ignored), never the presented key. Every map is capped: past the cap,
-// expired entries are swept and then the oldest entries are evicted.
+// ignored), never the presented key. Every map is separate and capped: past
+// its cap, expired entries are swept and then the oldest in THAT map are
+// evicted, so churn in one map (an attacker's random keys) cannot evict the
+// entries of another (known-good keys, active rate-limit entries).
 const GUARD_MAX_ENTRIES = 2000;
 const HASH_RE = /^[0-9a-f]{64}$/;
 
@@ -154,12 +160,17 @@ function createAuthFailureGuard({
   limit = 20,
   windowMs = 60_000,
   unknownLimit = 5,
+  ipBudget = 5,
+  knownTtlMs = 300_000,
+  maxKnownKeys = 500,
   maxEntries = GUARD_MAX_ENTRIES,
 } = {}) {
   const failures = new Map(); // ip -> { start, count }
   const blockedUntil = new Map(); // ip -> ms
   const unknownKeys = new Map(); // key hash -> { start, count }
   const limitedKeys = new Map(); // key hash -> { until, rate }
+  const knownKeys = new Map(); // key hash -> expiry ms (positive cache)
+  const budgets = new Map(); // ip -> { start, count } of RPCs spent while blocked
 
   const windowExpired = (now) => (w) => now - w.start >= windowMs;
 
@@ -178,9 +189,38 @@ function createAuthFailureGuard({
       const w = failures.get(ip);
       const next = w && now - w.start < windowMs ? { start: w.start, count: w.count + 1 } : { start: now, count: 1 };
       setBounded(failures, ip, next, maxEntries, windowExpired(now));
-      if (next.count >= limit) {
+      // A failure inside an existing block (a budgeted RPC) never extends it.
+      if (next.count >= limit && !((blockedUntil.get(ip) || 0) > now)) {
         setBounded(blockedUntil, ip, now + windowMs, maxEntries, (until) => until <= now);
       }
+    },
+    // Spend one of the IP's RPC credits for a key hash outside the positive
+    // cache. Meant for use only while the IP is blocked; false = answer 429.
+    takeIpBudget(ip, now = Date.now()) {
+      const w = budgets.get(ip);
+      const cur = w && now - w.start < windowMs ? w : { start: now, count: 0 };
+      if (cur.count >= ipBudget) return false;
+      setBounded(budgets, ip, { start: cur.start, count: cur.count + 1 }, maxEntries, windowExpired(now));
+      return true;
+    },
+
+    // Positive cache (never skips the RPC; it only exempts from the IP budget).
+    isKnownKey(keyHash, now = Date.now()) {
+      if (!HASH_RE.test(keyHash)) return false;
+      const until = knownKeys.get(keyHash);
+      if (!until) return false;
+      if (until <= now) {
+        knownKeys.delete(keyHash);
+        return false;
+      }
+      return true;
+    },
+    knownKey(keyHash, now = Date.now()) {
+      if (!HASH_RE.test(keyHash)) return;
+      setBounded(knownKeys, keyHash, now + knownTtlMs, maxKnownKeys, (until) => until <= now);
+    },
+    forgetKey(keyHash) {
+      knownKeys.delete(keyHash);
     },
 
     // Answered from memory for this key hash, or null to go to the RPC.
@@ -219,7 +259,14 @@ function createAuthFailureGuard({
 
     // Test hook: how many entries each map holds.
     sizes() {
-      return { ips: failures.size, blocked: blockedUntil.size, unknownKeys: unknownKeys.size, limitedKeys: limitedKeys.size };
+      return {
+        ips: failures.size,
+        blocked: blockedUntil.size,
+        unknownKeys: unknownKeys.size,
+        limitedKeys: limitedKeys.size,
+        knownKeys: knownKeys.size,
+        budgets: budgets.size,
+      };
     },
   };
 }

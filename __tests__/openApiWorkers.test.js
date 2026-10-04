@@ -378,7 +378,8 @@ describe('keys and scopes', () => {
     for (let i = 0; i < 15; i++) await api('/v1/customers?token=x', { key: null, ip: '198.51.100.5' });
     expect((await api('/v1/customers', { key: 'trk_short', ip: '198.51.100.5' })).status).toBe(429);
     expect((await api('/v1/customers', { key: null, ip: '198.51.100.5' })).status).toBe(429);
-    // Other owners' valid keys on the same address still go to the RPC and are served.
+    // Other owners' valid keys on the same address still go to the RPC and are served
+    // (never-seen keys share the blocked address's small RPC budget, see below).
     for (const key of [KEY, KEY_JOBS_ONLY]) {
       const rpcBefore = calls.filter((c) => c.url.endsWith('/rpc/api_key_authorize')).length;
       const res = await api('/v1/jobs', { key, ip: '198.51.100.5' });
@@ -405,6 +406,65 @@ describe('keys and scopes', () => {
     // Shedding ends with the window: the hash is looked up again.
     await api('/v1/customers', { key: KEY_UNKNOWN, ip: '198.51.100.7', nowMs: NOW + 61_000 });
     expect(rpcCount()).toBe(8);
+  });
+
+  describe('distinct well-formed random keys from one address (resource-cap defeat)', () => {
+    const rpcCount = () => calls.filter((c) => c.url.endsWith('/rpc/api_key_authorize')).length;
+    const IP = '198.51.100.20';
+    const fresh = (tag, i) => `trk_${sha(`${tag}${i}`).slice(0, 43)}`;
+    const addValid = (key) => { KEYS_BY_HASH[sha(key)] = { ...KEYS_BY_HASH[sha(KEY)] }; };
+    afterEach(() => { for (const k of Object.keys(KEYS_BY_HASH)) if (!ALL_KEYS.some((a) => sha(a) === k)) delete KEYS_BY_HASH[k]; });
+
+    test('500 distinct unknown keys from one IP cost exactly 25 RPCs (20 failures + 5 budget); known and fresh keys still work', async () => {
+      // KEY authorizes first, so it is in the positive cache.
+      expect((await api('/v1/customers', { key: KEY, ip: IP })).status).toBe(200);
+      expect(rpcCount()).toBe(1);
+      let shed = 0;
+      for (let i = 0; i < 500; i++) {
+        const res = await api('/v1/customers', { key: fresh('junk', i), ip: IP });
+        if (res.status === 429) { shed++; expect(res.headers['Retry-After']).toBe('60'); } else expect(res.status).toBe(401);
+      }
+      expect(rpcCount()).toBe(1 + 25);
+      expect(shed).toBe(475);
+      // During the flood a previously authorized key from the same IP still succeeds (and is checked by the RPC).
+      const before = rpcCount();
+      expect((await api('/v1/customers', { key: KEY, ip: IP })).status).toBe(200);
+      expect(rpcCount()).toBe(before + 1);
+      // The attacker's churn did not evict the positive-cache entry.
+      expect(guard.sizes().knownKeys).toBe(1);
+      // Another IP is unaffected, even for unknown keys.
+      expect((await api('/v1/customers', { key: fresh('other', 0), ip: '198.51.100.21' })).status).toBe(401);
+      expect((await api('/v1/jobs', { key: KEY_JOBS_ONLY, ip: '198.51.100.21' })).status).toBe(200);
+    });
+
+    test('a never-seen valid key from a blocked IP succeeds within the budget and gets 429 beyond it', async () => {
+      for (let i = 0; i < 20; i++) await api('/v1/customers', { key: null, ip: IP }); // block the address
+      expect((await api('/v1/customers', { key: null, ip: IP })).status).toBe(429);
+      const keys = Array.from({ length: 7 }, (_, i) => fresh('valid', i));
+      keys.forEach(addValid);
+      const statuses = [];
+      for (const key of keys) statuses.push((await api('/v1/customers', { key, ip: IP })).status);
+      expect(statuses).toEqual([200, 200, 200, 200, 200, 429, 429]);
+      expect(rpcCount()).toBe(5);
+      // The budget resets with the window, and the block itself has lapsed by then.
+      expect((await api('/v1/customers', { key: keys[5], ip: IP, nowMs: NOW + 61_000 })).status).toBe(200);
+    });
+
+    test('the positive cache never skips the RPC: a revoked key is refused and forgotten', async () => {
+      const key = fresh('flip', 0);
+      addValid(key);
+      expect((await api('/v1/customers', { key, ip: IP })).status).toBe(200);
+      for (let i = 0; i < 20; i++) await api('/v1/customers', { key: null, ip: IP });
+      const before = rpcCount();
+      expect((await api('/v1/customers', { key, ip: IP })).status).toBe(200);
+      expect(rpcCount()).toBe(before + 1);
+      KEYS_BY_HASH[sha(key)] = { ok: false, error: 'key_revoked' };
+      const res = await api('/v1/customers', { key, ip: IP });
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe('key_revoked');
+      expect(rpcCount()).toBe(before + 2);
+      expect(guard.isKnownKey(sha(key), NOW)).toBe(false);
+    });
   });
 
   test('revoked and expired keys are not negative-cached (only unknown hashes are)', async () => {
@@ -646,7 +706,7 @@ describe('in-memory guards stay bounded and hold hashes only', () => {
       for (let f = 0; f < 5; f++) g.unknownKey(hash, NOW + i);
       g.rateLimitedKey(sha(`l${i}`), { retryAfter: 600, rate: { limit: 60, remaining: 0, reset: 1 } }, NOW + i);
     }
-    expect(g.sizes()).toEqual({ ips: 50, blocked: 50, unknownKeys: 50, limitedKeys: 50 });
+    expect(g.sizes()).toMatchObject({ ips: 50, blocked: 50, unknownKeys: 50, limitedKeys: 50 });
     // The newest entries survive; the oldest were evicted.
     expect(g.blockedFor('ip-499', NOW + 500)).toBeGreaterThan(0);
     expect(g.blockedFor('ip-0', NOW + 500)).toBe(0);
@@ -657,8 +717,10 @@ describe('in-memory guards stay bounded and hold hashes only', () => {
     // A raw key is refused by the per-hash maps, so it can never be remembered.
     g.unknownKey(KEY_UNKNOWN, NOW);
     g.rateLimitedKey(KEY_UNKNOWN, { retryAfter: 60 }, NOW);
+    g.knownKey(KEY_UNKNOWN, NOW);
     expect(g.keyShed(KEY_UNKNOWN, NOW)).toBeNull();
-    expect(g.sizes()).toEqual({ ips: 50, blocked: 50, unknownKeys: 50, limitedKeys: 50 });
+    expect(g.isKnownKey(KEY_UNKNOWN, NOW)).toBe(false);
+    expect(g.sizes()).toMatchObject({ ips: 50, blocked: 50, unknownKeys: 50, limitedKeys: 50, knownKeys: 0 });
   });
 
   test('the default caps keep the maps bounded under a flood of distinct addresses and keys', () => {
@@ -670,5 +732,22 @@ describe('in-memory guards stay bounded and hold hashes only', () => {
     }
     const sizes = g.sizes();
     for (const n of Object.values(sizes)) expect(n).toBeLessThanOrEqual(2000);
+  });
+
+  test('churn in one map never evicts another: known keys and active rate-limit entries survive unknown-key floods', () => {
+    const g = createAuthFailureGuard({ maxEntries: 100, maxKnownKeys: 20 });
+    g.knownKey(sha('good'), NOW);
+    g.rateLimitedKey(sha('limited'), { retryAfter: 600, rate: null }, NOW);
+    for (let i = 0; i < 5000; i++) {
+      g.unknownKey(sha(`junk${i}`), NOW + i);
+      g.fail(`ip-${i}`, NOW + i);
+    }
+    expect(g.isKnownKey(sha('good'), NOW + 5000)).toBe(true);
+    expect(g.keyShed(sha('limited'), NOW + 5000).error).toBe('rate_limited');
+    // The positive cache is itself bounded (oldest evicted) and expires.
+    for (let i = 0; i < 100; i++) g.knownKey(sha(`k${i}`), NOW + i);
+    expect(g.sizes().knownKeys).toBe(20);
+    expect(g.isKnownKey(sha('k99'), NOW + 100)).toBe(true);
+    expect(g.isKnownKey(sha('k99'), NOW + 100 + 300_000)).toBe(false);
   });
 });

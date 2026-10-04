@@ -292,7 +292,26 @@ describe('per-key-hash memory guards (§6)', () => {
     const raw = `trk_${'Z'.repeat(43)}`;
     g.unknownKey(raw, 1);
     g.rateLimitedKey(raw, { retryAfter: 30 }, 1);
-    assert.deepEqual(g.sizes(), { ips: 0, blocked: 0, unknownKeys: 0, limitedKeys: 0 });
+    g.knownKey(raw, 1);
+    assert.deepEqual(g.sizes(), { ips: 0, blocked: 0, unknownKeys: 0, limitedKeys: 0, knownKeys: 0, budgets: 0 });
+  });
+
+  test('over the threshold, hashes outside the positive cache share a small per-IP budget; known hashes do not', () => {
+    const g = createAuthFailureGuard({ limit: 3, windowMs: 1000, ipBudget: 2 });
+    for (let i = 0; i < 3; i++) g.fail('ip', 0);
+    assert.ok(g.blockedFor('ip', 10) > 0);
+    assert.equal(g.takeIpBudget('ip', 10), true);
+    assert.equal(g.takeIpBudget('ip', 20), true);
+    assert.equal(g.takeIpBudget('ip', 30), false);
+    assert.equal(g.takeIpBudget('other', 30), true, 'per address');
+    g.fail('ip', 40); // a budgeted RPC that failed must not extend the block
+    assert.equal(g.blockedFor('ip', 1000), 0, 'block ends one window after it began');
+    g.knownKey(H1, 0);
+    assert.equal(g.isKnownKey(H1, 299_999), true);
+    assert.equal(g.isKnownKey(H1, 300_000), false, 'five-minute TTL');
+    g.knownKey(H2, 0);
+    g.forgetKey(H2);
+    assert.equal(g.isKnownKey(H2, 1), false);
   });
 
   test('the IP failure window restarts after it elapses (failures do not accumulate across windows)', () => {

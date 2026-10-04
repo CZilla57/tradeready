@@ -2630,7 +2630,7 @@
   },
   "openApiWorkers": {
    "path": "__tests__/openApiWorkers.test.js",
-   "sha256": "e7462101290db516843d518a3795b1880f1a7d054fb2eacbb6eedcf5ba05157f"
+   "sha256": "92e311d077918db6276a91a1b42f06176ba98863ee5861bdd851caa465e6b74b"
   },
   "paymentLink": {
    "path": "__tests__/paymentLink.test.js",
