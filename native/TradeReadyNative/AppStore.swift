@@ -200,6 +200,29 @@ extension NativeEstimateReviewDraft {
     /// The IANA zone the date is evaluated in (the device zone when the draft
     /// was built). Meaningful only with a `validUntil`.
     var validUntilTimeZone: String { snapshot.validUntilTimeZone ?? TimeZone.current.identifier }
+
+    /// The same reviewed draft with only the snapshot's validity replaced:
+    /// the date with the device zone (spec §2.5), or neither key for
+    /// "Doesn't expire". See `AppStore.estimateReviewDraft(_:changingValidUntilTo:now:)`.
+    func withValidity(_ validUntil: String?) -> NativeEstimateReviewDraft {
+        var frozen = snapshot
+        frozen.validUntil = validUntil
+        frozen.validUntilTimeZone = validUntil == nil ? nil : TimeZone.current.identifier
+        return NativeEstimateReviewDraft(
+            jobID: jobID,
+            expectedStatus: expectedStatus,
+            snapshot: frozen,
+            customerEmail: customerEmail,
+            customerPhone: customerPhone,
+            customerAddress: customerAddress,
+            businessContactName: businessContactName,
+            businessPhone: businessPhone,
+            businessEmail: businessEmail,
+            businessAddress: businessAddress,
+            businessLogoReference: businessLogoReference,
+            jobDescription: jobDescription
+        )
+    }
 }
 
 enum NativeChangeOrderApprovalLinkOutcome: Equatable {
@@ -1357,7 +1380,7 @@ final class AppStore: ObservableObject {
             customerID: job.customerId,
             customerName: job.customerName
         )
-        let today = NativeQuoteExpiry.today(now: now, calendar: .current)
+        let today = estimateValidityToday(now: now)
         let validUntil: String?
         switch choice {
         case nil:
@@ -2628,7 +2651,7 @@ final class AppStore: ObservableObject {
     ) -> Bool {
         guard expectedStatus == .lead else { return false }
         if let validUntil,
-           !NativeQuoteExpiry.isSelectable(validUntil, today: NativeQuoteExpiry.today(now: date, calendar: .current)) {
+           !NativeQuoteExpiry.isSelectable(validUntil, today: estimateValidityToday(now: date)) {
             migrationMessage = "The valid-until date has passed. Choose a new date before marking the estimate sent."
             return false
         }
@@ -2749,14 +2772,25 @@ final class AppStore: ObservableObject {
         // is born expired (the Worker would refuse it); reopening the review
         // proposes a fresh date.
         if let validUntil = review.validUntil,
-           !NativeQuoteExpiry.isSelectable(validUntil, today: NativeQuoteExpiry.today(now: date, calendar: .current)) {
+           !NativeQuoteExpiry.isSelectable(validUntil, today: estimateValidityToday(now: date)) {
             return .failure(.estimateChanged)
         }
+
+        // Review fix 2026-10-03: while the customer holds an undecided link,
+        // the job keeps the date that link enforces until the new link is
+        // minted, and the reviewed date is written with the approval mirror
+        // (as `extendEstimateValidity` does). A failed "Update approval link"
+        // therefore never leaves the job showing a date the link doesn't
+        // have. Without an open link there is nothing to disagree with, so
+        // the reviewed date is stamped up front.
+        let localJob = snapshot.payload.jobs?.first(where: { $0.id == review.jobID })
+        let hasUndecidedLink = localJob?.approval != nil && localJob?.approval?.decision == nil
+        let stampedValidUntil = hasUndecidedLink ? localJob?.estimateValidUntil : review.validUntil
 
         guard stampEstimateSent(
             id: review.jobID,
             from: review.expectedStatus,
-            validUntil: review.validUntil,
+            validUntil: stampedValidUntil,
             on: date
         ) else { return .failure(.jobNotSynced) }
 
@@ -2776,11 +2810,11 @@ final class AppStore: ObservableObject {
         // fresh canonical state before minting so another device's pricing,
         // customer, or business-profile edit cannot be hidden behind the
         // already-open review sheet.
-        // Phase 32: the pulled job must also carry the reviewed date (another
-        // device's send or extension in between fails closed).
+        // Phase 32: the pulled job must also carry the date just stamped
+        // (another device's send or extension in between fails closed).
         guard let currentJob = snapshot.payload.jobs?.first(where: { $0.id == review.jobID }),
               currentJob.status == JobStatus.estimateSent.rawValue,
-              currentJob.estimateValidUntil == review.validUntil
+              currentJob.estimateValidUntil == stampedValidUntil
         else { return .failure(.estimateChanged) }
         let currentCustomer = NativeCustomerIdentity.resolve(
             customers: customers,
@@ -2844,6 +2878,8 @@ final class AppStore: ObservableObject {
             guard let index = records.firstIndex(where: { $0.id == review.jobID }),
                   records[index].status == JobStatus.estimateSent.rawValue
             else { return .failure(.estimateChanged) }
+            // The link now shows the reviewed date, so the job does too.
+            records[index].estimateValidUntil = review.validUntil
             records[index].approval = try CanonicalUIAdapters.estimateApprovalAfterLink(
                 existing: records[index].approval,
                 snapshot: review.snapshot,
@@ -2868,9 +2904,11 @@ final class AppStore: ObservableObject {
     // MARK: Phase 32 — estimate validity (spec 2026-10-03 §6.5)
 
     /// Today's local calendar date: the "today" every validity rule reads,
-    /// in the same zone as `estimateSentAt` and Today (FA-039 safe).
+    /// in the same zone as `estimateSentAt` and Today (FA-039 safe). Always
+    /// the Gregorian date (review fix 2026-10-03): a Buddhist or Japanese
+    /// device Calendar setting must not write 2569 or Reiwa 8.
     func estimateValidityToday(now: Date = .now) -> String {
-        NativeQuoteExpiry.today(now: now, calendar: .current)
+        NativeQuoteExpiry.today(now: now, calendar: NativeQuoteExpiry.localCalendar)
     }
 
     /// The sent estimate's validity for job detail; `nil` unless the job is
@@ -2900,6 +2938,55 @@ final class AppStore: ObservableObject {
     func canChangeEstimateValidity(jobID: String) -> Bool {
         guard let job = snapshot.payload.jobs?.first(where: { $0.id == jobID }) else { return false }
         return job.status == JobStatus.estimateSent.rawValue && job.approval?.decision == nil
+    }
+
+    /// Phase 32 (spec §3, §6.4), review fix 2026-10-03: the review sheet's
+    /// date change. Only the frozen snapshot's `validUntil` and zone change;
+    /// prices, names, contact details and the expected status stay exactly
+    /// what the owner reviewed, so `recordEstimateDelivery` and
+    /// `createEstimateApprovalLink` still compare a newer canonical estimate
+    /// against them and preserve it. A date outside today…today+365 returns
+    /// `nil` with `.invalidDate`'s message.
+    func estimateReviewDraft(
+        _ draft: NativeEstimateReviewDraft,
+        changingValidUntilTo choice: NativeEstimateValidUntilChoice,
+        now: Date = .now
+    ) -> NativeEstimateReviewDraft? {
+        switch choice {
+        case .doesNotExpire:
+            return draft.withValidity(nil)
+        case .date(let date):
+            guard NativeQuoteExpiry.isSelectable(date, today: estimateValidityToday(now: now)) else {
+                migrationMessage = NativeEstimateExtensionError.invalidDate.errorDescription
+                return nil
+            }
+            return draft.withValidity(date)
+        }
+    }
+
+    /// Phase 32 (spec §6.5), review fix 2026-10-03: whether saving
+    /// `validUntil` from the job-detail editor changes nothing. The job must
+    /// already store it, and the customer's undecided approval link (if any)
+    /// must already show it. A link showing another date (a re-send recorded
+    /// without "Update approval link", or an older failed update) makes Save
+    /// refresh the link through `extendEstimateValidity`.
+    func isEstimateValidityUnchanged(jobID: String, validUntil: String?) -> Bool {
+        guard estimateValidUntil(jobID: jobID) == validUntil else { return false }
+        guard let approval = activeEstimateApproval(jobID: jobID), approval.decision == nil else { return true }
+        return approval.snapshot.validUntil == validUntil
+    }
+
+    /// The job-detail editor's note while the customer's undecided link
+    /// shows a different date than the job; `nil` when they agree or there
+    /// is no open link.
+    func estimateLinkValidityNote(jobID: String) -> String? {
+        guard canChangeEstimateValidity(jobID: jobID),
+              let approval = activeEstimateApproval(jobID: jobID),
+              approval.snapshot.validUntil != estimateValidUntil(jobID: jobID)
+        else { return nil }
+        let shown = approval.snapshot.validUntil
+            .map { NativeQuoteExpiry.displayDate($0, style: .medium) } ?? "no valid-until date"
+        return "The customer’s approval link still shows \(shown). Save to update the link to match."
     }
 
     /// Phase 32 (spec §6.7): the "Let the customer know" draft after an

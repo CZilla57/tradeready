@@ -643,7 +643,7 @@
    "testSources": [
     {
      "path": "native/EstimateFollowUpTests",
-     "sha256": "5f7a88f3a8d1218d6b59accfaee1c810741d08dd9bd5bc274a3a0b0b0bbaea72"
+     "sha256": "1ff8227d6e2b3d61d8b002d54a10e64c10d923116813fb85cad2c7088e90af62"
     }
    ],
    "fixtures": []
@@ -1303,22 +1303,22 @@
   },
   "quote-expiry-store": {
    "script": "native/run-quote-expiry-store-tests.sh",
-   "scriptSha256": "13121f336cd728b39d78ce5421e9b49b9a698601fbad95dd6d950282d2a7b07d",
+   "scriptSha256": "83314db716cbb7ff4798cae6edc75a6f363167132d8d4f736ecbc33559bbfbcb",
    "testSources": [
     {
      "path": "native/QuoteExpiryStoreTests",
-     "sha256": "c736b4357edff59291033c991e9539c19fb4dbbff98c6fab3a3c2f81b330a04f"
+     "sha256": "049025c8ad632ba62738373a9355843db65190a801f848e5edcc2312455af25d"
     }
    ],
    "fixtures": []
   },
   "quote-expiry": {
    "script": "native/run-quote-expiry-tests.sh",
-   "scriptSha256": "9bf94a246cb93472535d9b132da6ce74d41956072398f321a44f81926d4fb662",
+   "scriptSha256": "bca5e7bcf8c4fa2d97027b0798f7e3fc4121111aa6724a9cadfdd7da0b6cc864",
    "testSources": [
     {
      "path": "native/QuoteExpiryTests",
-     "sha256": "fd5580b8261f0e4057d551a9ad66a6bc7b072dc9439945f3282f9648c206ea92"
+     "sha256": "e4a81e71a149dd861938eb628ca2735d20c83f965f48d1ca29077015d2b221b2"
     }
    ],
    "fixtures": [

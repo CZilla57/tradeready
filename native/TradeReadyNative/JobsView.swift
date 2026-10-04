@@ -708,6 +708,8 @@ struct NativeEstimateValidityEditorView: View {
 
     private var today: String { store.estimateValidityToday() }
     private var hasLink: Bool { store.hasUndecidedEstimateApprovalLink(jobID: jobID) }
+    /// Review fix 2026-10-03: the customer's link shows another date.
+    private var linkDateNote: String? { store.estimateLinkValidityNote(jobID: jobID) }
 
     private var currentText: String {
         switch store.estimateValidity(jobID: jobID) {
@@ -733,6 +735,11 @@ struct NativeEstimateValidityEditorView: View {
                             in: NativeValidUntilPicker.range(today: today),
                             displayedComponents: .date
                         )
+                    }
+                    if let linkDateNote {
+                        Text(linkDateNote)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 } footer: {
                     Text(hasLink
@@ -797,9 +804,10 @@ struct NativeEstimateValidityEditorView: View {
     private func save() {
         guard !isSaving else { return }
         let validUntil = doesNotExpire ? nil : NativeValidUntilPicker.ymd(from: date)
-        // Nothing changed (an open date kept, or still "Doesn't expire"):
-        // no save, no link refresh, no alert.
-        if !wasExpired, validUntil == originalValidUntil {
+        // Nothing changed (an open date kept, or still "Doesn't expire",
+        // and the customer's link already shows it): no save, no link
+        // refresh, no alert. A link showing another date is refreshed.
+        if !wasExpired, store.isEstimateValidityUnchanged(jobID: jobID, validUntil: validUntil) {
             dismiss()
             return
         }

@@ -233,6 +233,40 @@ private func quoteExpiryTests() throws {
            "Phase 32: no extension notice for a job that moved on or a nameless customer")
 }
 
+/// Review fix 2026-10-03 (finding 1): the expiry reminder and the dated copy
+/// under a Buddhist or Japanese device calendar (what `Calendar.current` is
+/// when the iPhone's Calendar setting is not Gregorian). `estimateValidUntil`
+/// is a Gregorian `YYYY-MM-DD`, so the reminder fires on that Gregorian day
+/// and the copy compares Gregorian days. The send stamp here is a link-only
+/// `approval.sentAt` instant, which reads the same in every calendar.
+private func deviceCalendarTests() throws {
+    for identifier in [Calendar.Identifier.buddhist, .japanese] {
+        var device = Calendar(identifier: identifier)
+        device.locale = Locale(identifier: "en_US")
+        device.timeZone = TimeZone(identifier: "America/Phoenix")!
+        let name = "\(identifier)"
+        let now = localDate(2026, 8, 2, 12)
+        let dated = try makeJob(approvalSentAt: "2026-08-01T19:00:00.000Z", validUntil: "2026-08-31")
+
+        let reminders = NativeEstimateFollowUp.upcomingReminders(jobs: [dated], now: now, calendar: device)
+        expect(reminders.map(\.kind) == [.followUp, .expiry],
+               "\(name) calendar: a dated estimate still gets both reminders (got \(reminders.map(\.kind)))")
+        expect(reminders.last?.fireDate == localDate(2026, 8, 29, 9),
+               "\(name) calendar: est_exp_ fires at 9:00 Phoenix on the Gregorian validUntil − 2 (got \(reminders.last.map { "\($0.fireDate)" } ?? "nil"))")
+        let plan = NativeEstimateFollowUp.notificationPlan(jobs: [dated], now: now, enabled: true, calendar: device)
+        expect(plan.first?.body == "Estimate for \"Water heater swap\" sent 3 days ago with no response. It expires Aug 31. Tap to follow up.",
+               "\(name) calendar: the 3-day copy compares Gregorian days (got \(plan.first?.body ?? "nil"))")
+
+        let quoted = try makeJob(title: "Panel upgrade", total: "2499.5", validUntil: "2026-11-02")
+        expect(NativeEstimateFollowUp.message(job: quoted, customerFirstName: "Dave", now: localDate(2026, 10, 20, 12), calendar: device)
+                   .contains("It's valid until November 2, 2026."),
+               "\(name) calendar: an open estimate is not called expired")
+        expect(NativeEstimateFollowUp.message(job: quoted, customerFirstName: "Dave", now: localDate(2026, 11, 3, 0, 0), calendar: device)
+                   .contains("It expired on November 2, 2026"),
+               "\(name) calendar: the day after is expired")
+    }
+}
+
 @main
 enum EstimateFollowUpTests {
     static func main() throws {
@@ -524,6 +558,7 @@ enum EstimateFollowUpTests {
         expect(NativeEstimateFollowUp.followUpDays == 3, "the follow-up interval remains one shared constant")
 
         try quoteExpiryTests()
+        try deviceCalendarTests()
 
         if failures == 0 {
             print("PASS: native estimate follow-up eligibility and message tests")
