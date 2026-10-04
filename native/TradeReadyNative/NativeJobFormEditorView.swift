@@ -68,6 +68,18 @@ struct NativeFormItemsEditor: View {
                     .focused($titleFocused)
                     .submitLabel(.done)
                     .onSubmit { commitTitle() }
+                    // Same mechanism as the answer and note fields
+                    // (`NativeFormTextField`): save when focus leaves the
+                    // field and after a pause in typing (spec §4).
+                    .onChange(of: titleFocused) { _, isFocused in
+                        if !isFocused { commitTitle() }
+                    }
+                    .task(id: titleDraft) {
+                        guard titleFocused else { return }
+                        try? await Task.sleep(for: .seconds(NativeJobFormsPresentation.textCommitDebounceSeconds))
+                        guard !Task.isCancelled, titleFocused else { return }
+                        commitTitle()
+                    }
                     .disabled(!editable)
                     .accessibilityLabel("Form title")
                 if let titleRefusal {
