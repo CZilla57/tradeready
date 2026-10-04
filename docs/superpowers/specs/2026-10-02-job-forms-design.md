@@ -1,7 +1,7 @@
 # Custom Job / Inspection Forms & Checklists (Roadmap Phase 20) — Design Spec
 
 **Date:** 2026-10-02
-**Status:** BUILDING on `feat/job-forms` (stacked; owner go-ahead 2026-10-02)
+**Status:** BUILT, reviewed and committed 2026-10-04 on local `feat/job-forms`, stacked on `feat/quote-expiration` (owner go-ahead 2026-10-02). Gate green against the master baseline (accessibility-audit and layout-metrics fail on master too); independent review found no P1/P2, two P3s fixed in `0b01407`. Nothing pushed, deployed or applied: `supabase/migrations/20261002_forms.sql` is owner-run
 **Origin:** `docs/post-launch-feature-roadmap.md` Phase 20, build order #4
 **Build target (owner, 2026-10-02):** native SwiftUI app, plus one Supabase migration **file** (not applied). **No React Native changes.** No Worker changes.
 
