@@ -1392,6 +1392,25 @@ final class AppStore: ObservableObject {
         return NativeJobPricingDraft(job: job, settings: snapshot.payload.settings)
     }
 
+    /// The reviewed snapshot as the Phase 32 declined guard compares it. An
+    /// estimate declined before Phase 19 carries none of the e-signature
+    /// additions (scope, terms, business contact, signature options, esign
+    /// envelope), so they are left out of that one comparison: adding them is
+    /// not a revision. A decline that already carries them compares exactly.
+    static func declinedGuardCandidate(
+        _ reviewed: Canonical.EstimateApprovalSnapshot,
+        declined: Canonical.EstimateApprovalSnapshot
+    ) -> Canonical.EstimateApprovalSnapshot {
+        guard declined.esign == nil else { return reviewed }
+        var candidate = reviewed
+        candidate.scope = nil
+        candidate.terms = nil
+        candidate.businessContact = nil
+        candidate.signature = nil
+        candidate.esign = nil
+        return candidate
+    }
+
     /// Phase 32 (spec 2026-10-03 §3, §6.4): without a `validUntil` choice the
     /// draft proposes the default date (a lead ignores any stale date; a
     /// re-send keeps a still-valid one). The date and the device zone are
@@ -1440,7 +1459,7 @@ final class AppStore: ObservableObject {
                job.approval == nil,
                let declined = job.approvalHistory?.last(where: { $0.decision == "declined" }),
                CanonicalUIAdapters.estimateApprovalSnapshotsMatch(
-                   reviewedSnapshot,
+                   Self.declinedGuardCandidate(reviewedSnapshot, declined: declined.snapshot),
                    declined.snapshot,
                    ignoringValidity: true
                ) {
