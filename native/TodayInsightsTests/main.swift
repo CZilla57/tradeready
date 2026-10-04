@@ -635,6 +635,205 @@ do {
     expectEqual(mixed.last?.kind, .referralThanks, "referral_thanks runs last")
 }
 
+// MARK: - Phase 32: quote_expiring / quote_expired (spec 2026-10-03 §6.8)
+
+/// A sent estimate for Dana ("Faucet repair", $1,200) sent Aug 1.
+private func sentEstimate(_ id: String = "j1", validUntil: String?, _ overrides: String = "") -> Canonical.Job {
+    let date = validUntil.map { #","estimateValidUntil":"\#($0)""# } ?? ""
+    let base = #"{"id":"\#(id)","status":"estimate_sent","estimateSentAt":"2026-08-01"\#(date)}"#
+    guard !overrides.isEmpty else { return job(base) }
+    return job(merge(base, overrides))
+}
+
+private func quoteInsights(_ jobs: [Canonical.Job], at instant: Date = now) -> [NativeTodayInsight] {
+    NativeTodayInsights.select(jobs: jobs, invoices: [], now: instant)
+        .filter { $0.kind == .quoteExpiring || $0.kind == .quoteExpired }
+}
+
+do {
+    let insights = quoteInsights([sentEstimate(validUntil: "2026-08-06")])
+    expectEqual(insights.count, 1, "quote_expiring: one estimate inside the window")
+    let insight = insights.first
+    expectEqual(insight?.kind, .quoteExpiring, "quote_expiring: kind")
+    expectEqual(insight?.id, "quote_expiring:j1:2026-08-06", "quote_expiring: id carries the job and the date")
+    expectEqual(insight?.title, "Estimate for Dana expires in 2 days", "quote_expiring: title")
+    expectEqual(insight?.detail, "Faucet repair · $1,200", "quote_expiring: detail")
+    expectEqual(insight?.target, .job(jobId: "j1"), "quote_expiring: target is the job")
+    expectEqual(insight?.reason,
+                "You sent 'Faucet repair' on Aug 1, 2026 and it's valid until Aug 6, 2026. After that the customer can't approve it online. Follow up now or extend it.",
+                "quote_expiring: reason")
+    expectEqual(insight?.coachPrompt,
+                "My estimate for 'Faucet repair' ($1,200) to Dana expires in 2 days and they haven't answered. What's a good follow-up, and should I extend it?",
+                "quote_expiring: coach prompt")
+}
+
+do {
+    expectEqual(quoteInsights([sentEstimate(validUntil: "2026-08-04")]).first?.title, "Estimate for Dana expires today", "quote_expiring: 0 days is today")
+    expectEqual(quoteInsights([sentEstimate(validUntil: "2026-08-05")]).first?.title, "Estimate for Dana expires tomorrow", "quote_expiring: 1 day is tomorrow")
+    expectEqual(quoteInsights([sentEstimate(validUntil: "2026-08-07")]).first?.title, "Estimate for Dana expires in 3 days", "quote_expiring: 3 days is the window edge")
+    expectEqual(quoteInsights([sentEstimate(validUntil: "2026-08-08")]).count, 0, "quote_expiring: 4 days out is silent")
+    let lateEvening = NativeCashBasis.localDate(year: 2026, month: 7, day: 4, hour: 23, minute: 30)
+    expectEqual(quoteInsights([sentEstimate(validUntil: "2026-08-04")], at: lateEvening).first?.title,
+                "Estimate for Dana expires today", "quote_expiring: 23:30 local on the date still expires today (FA-039)")
+    let nextMorning = NativeCashBasis.localDate(year: 2026, month: 7, day: 5, hour: 0, minute: 1)
+    expectEqual(quoteInsights([sentEstimate(validUntil: "2026-08-04")], at: nextMorning).map(\.kind), [.quoteExpired],
+                "quote_expired: local midnight flips it to expired")
+}
+
+do {
+    let insights = quoteInsights([
+        sentEstimate("a", validUntil: "2026-08-04"),
+        sentEstimate("b", validUntil: "2026-08-07"),
+    ])
+    expectEqual(insights.count, 1, "quote_expiring: two estimates aggregate into one row")
+    expectEqual(insights.first?.id, "quote_expiring:all", "quote_expiring: aggregate id")
+    expectEqual(insights.first?.title, "2 estimates expire within 3 days", "quote_expiring: aggregate title")
+    expectEqual(insights.first?.target, .jobs, "quote_expiring: aggregate target")
+    expect(insights.first?.coachPrompt == nil && insights.first?.detail == nil, "quote_expiring: aggregate has no detail or coach prompt")
+}
+
+do {
+    let insights = quoteInsights([sentEstimate(validUntil: "2026-08-03")])
+    let insight = insights.first
+    expectEqual(insight?.kind, .quoteExpired, "quote_expired: kind")
+    expectEqual(insight?.id, "quote_expired:j1:2026-08-03", "quote_expired: id carries the job and the date")
+    expectEqual(insight?.title, "Estimate for Dana expired Aug 3", "quote_expired: title")
+    expectEqual(insight?.detail, "Faucet repair · $1,200", "quote_expired: detail")
+    expectEqual(insight?.target, .job(jobId: "j1"), "quote_expired: target is the job")
+    expectEqual(insight?.reason,
+                "'Faucet repair' passed its valid-until date (Aug 3, 2026) without a response, so the customer can no longer approve it online. Extend it, send an updated estimate, or let it go. Dismissing hides this until the date changes.",
+                "quote_expired: reason")
+    expectEqual(insight?.coachPrompt, nil, "quote_expired: no coach prompt")
+    expectEqual(quoteInsights([sentEstimate(validUntil: "2026-07-21")]).first?.kind, .quoteExpired, "quote_expired: 14 days ago is the window edge")
+    expectEqual(quoteInsights([sentEstimate(validUntil: "2026-07-20")]).count, 0, "quote_expired: 15 days ago is silent")
+    expect(quoteInsights([sentEstimate(validUntil: "2026-08-02")]).first?.id != insight?.id,
+           "quote_expired: a different date is a different id, so an extension re-arms a dismissal")
+
+    let aggregate = quoteInsights([
+        sentEstimate("a", validUntil: "2026-08-03"),
+        sentEstimate("b", validUntil: "2026-07-25"),
+    ])
+    expectEqual(aggregate.map(\.id), ["quote_expired:all:2026-08-03"],
+                "quote_expired: two estimates aggregate under the newest date")
+    expectEqual(aggregate.first?.title, "2 estimates expired in the last 2 weeks", "quote_expired: aggregate title")
+    expectEqual(aggregate.first?.target, .jobs, "quote_expired: aggregate target")
+    expect(aggregate.first?.coachPrompt == nil && aggregate.first?.detail == nil,
+           "quote_expired: aggregate has no detail or coach prompt")
+
+    // The aggregate is dismiss-only, so its id must not outlive its batch
+    // (the card-policy half of this is in StoreIntegrationTests): an older
+    // member joining keeps the id, a newer expiry changes it.
+    let withOlder = quoteInsights([
+        sentEstimate("a", validUntil: "2026-08-03"),
+        sentEstimate("b", validUntil: "2026-07-25"),
+        sentEstimate("c", validUntil: "2026-07-22"),
+    ])
+    expectEqual(withOlder.map(\.id), aggregate.map(\.id), "quote_expired: an older member does not change the aggregate id")
+    let nextBatch = quoteInsights([
+        sentEstimate("a", validUntil: "2026-08-03"),
+        sentEstimate("e", validUntil: "2026-08-09"),
+    ], at: NativeCashBasis.localDate(year: 2026, month: 7, day: 10, hour: 9))
+    expectEqual(nextBatch.map(\.id), ["quote_expired:all:2026-08-09"], "quote_expired: a newer expiry is a new aggregate id")
+}
+
+do {
+    expectEqual(quoteInsights([sentEstimate(validUntil: nil)]).count, 0, "quote insights: an undated estimate is silent")
+    expectEqual(quoteInsights([sentEstimate(validUntil: "2026-08-05", #"{"archivedAt":"2026-08-03"}"#)]).count, 0,
+                "quote insights: archived estimates are silent")
+    expectEqual(quoteInsights([sentEstimate(validUntil: "2026-08-05", #"{"status":"lead"}"#)]).count, 0,
+                "quote insights: a lead's stale date is ignored")
+    expectEqual(quoteInsights([sentEstimate(validUntil: "2026-08-03", #"{"status":"scheduled"}"#)]).count, 0,
+                "quote insights: a job that moved on is silent")
+    let decided = #"{"approval":{"token":"t","sentAt":"2026-08-01T10:00:00.000Z","decision":"declined","snapshot":{"businessName":"B","customerName":"Dana","jobTitle":"Faucet repair","lineItems":[],"total":1200,"currency":"USD"}}}"#
+    expectEqual(quoteInsights([sentEstimate(validUntil: "2026-08-05", decided)]).count, 0,
+                "quote insights: an answered estimate is silent")
+    expectEqual(quoteInsights([sentEstimate(validUntil: "garbage")]).count, 0, "quote insights: a malformed date is silent")
+
+    func tier(_ id: String, _ total: Int) -> String {
+        #"{"id":"\#(id)","name":"\#(id)","laborHours":2,"laborRate":85,"materials":[],"materialMarkup":20,"overhead":15,"margin":20,"estimateTotal":\#(total)}"#
+    }
+    let options = #"{"quoteOptions":{"tiers":[\#(tier("std", 1200)),\#(tier("rep", 450))],"addOns":[],"recommendedTierId":"std"}}"#
+    let optionsInsight = quoteInsights([sentEstimate(validUntil: "2026-08-05", options)]).first
+    expectEqual(optionsInsight?.detail, "Faucet repair · from $450", "quote insights: undecided options quote from the lowest tier")
+    expectContains(optionsInsight?.coachPrompt ?? "", "'Faucet repair' (from $450)",
+                   "quote insights: the coach prompt uses the options amount")
+}
+
+do {
+    // FA-039: a link-only send stamp is a UTC instant, so "You sent … on"
+    // names the local day it fell on (Jul 31 in Phoenix), not its UTC prefix.
+    let original = TimeZone.current
+    NSTimeZone.default = TimeZone(identifier: "America/Phoenix")!
+    defer { NSTimeZone.default = original }
+    let approvalOnly = #"{"estimateSentAt":null,"approval":{"token":"t","sentAt":"2026-08-01T03:00:00.000Z","snapshot":{"businessName":"B","customerName":"Dana","jobTitle":"Faucet repair","lineItems":[],"total":1200,"currency":"USD"}}}"#
+    let at = NativeCashBasis.localDate(year: 2026, month: 7, day: 4, hour: 10)
+    expectContains(quoteInsights([sentEstimate(validUntil: "2026-08-05", approvalOnly)], at: at).first?.reason ?? "",
+                   "You sent 'Faucet repair' on Jul 31, 2026 and it's valid until Aug 5, 2026.",
+                   "quote_expiring: a link-only send stamp reads as its local day")
+}
+
+do {
+    // Priority: quote_expiring right after due_soon; quote_expired after the
+    // schedule rules and before maintenance_due.
+    let jobs = [
+        job(#"{"id":"over","timeSessions":[\#(sessionJSON(5))]}"#),
+        job(#"{"id":"done","status":"complete"}"#),
+        job(#"{"id":"sched","status":"scheduled","scheduledDate":"2026-08-05","scheduledStartTime":"09:00","scheduledEndTime":"11:00"}"#),
+        job(#"{"id":"fit","status":"approved","laborHours":2}"#),
+        job(#"{"id":"left","status":"approved","laborHours":9}"#),
+        sentEstimate("soon", validUntil: "2026-08-05"),
+        sentEstimate("gone", validUntil: "2026-08-01"),
+        job(#"{"id":"old","customerId":"c9","status":"paid","scheduledDate":"2025-12-01"}"#),
+    ]
+    let kinds = NativeTodayInsights.select(
+        jobs: jobs, invoices: [invoice()], now: now,
+        customers: [customer(#"{"id":"c9","name":"Old Customer"}"#)]
+    ).map(\.kind)
+    expectEqual(kinds, [.laborOverrun, .uninvoicedComplete, .dueSoon, .quoteExpiring, .openSlot, .unscheduledApproved, .quoteExpired, .maintenanceDue],
+                "quote kinds arrive in spec priority order")
+}
+
+expect(NativeInsightKind.allCases.map(\.rawValue).suffix(2) == ["quote_expiring", "quote_expired"], "the two Phase 32 kinds are registered")
+
+// MARK: - warranty_expiring (Phase 21, spec 2026-10-02-properties-equipment-design.md §4)
+
+private func warrantyCustomer(_ id: String, _ name: String, expires: String, archived: Bool = false) -> Canonical.Customer {
+    let equipment = #"{"id":"eq_\#(id)","type":"water_heater","warrantyExpires":"\#(expires)"\#(archived ? #","archivedAt":"2026-07-01""# : "")}"#
+    return customer(#"{"id":"\#(id)","name":"\#(name)","properties":[{"id":"pr_\#(id)","primary":true,"equipment":[\#(equipment)]}]}"#)
+}
+
+do {
+    // Aug 4: the window is Aug 4 through Sep 2 (30 local days, today included).
+    let soon = select(customers: [warrantyCustomer("w1", "Ola Park", expires: "2026-08-20")])
+    expectEqual(soon.map(\.kind), [.warrantyExpiring], "warranty_expiring fires inside the window")
+    expectEqual(soon.first?.id, "warranty_expiring:eq_w1:2026-08-20", "warranty_expiring id")
+    expectEqual(soon.first?.title, "Ola Park's water heater warranty ends Aug 20, 2026", "warranty_expiring copy")
+    expectEqual(soon.first?.target, .customer(customerId: "w1"), "warranty_expiring target")
+    expectEqual(select(customers: [warrantyCustomer("w1", "Ola Park", expires: "2026-09-02")]).count, 1, "day 29 is in")
+    expectEqual(select(customers: [warrantyCustomer("w1", "Ola Park", expires: "2026-09-03")]).count, 0, "day 30 is out")
+    expectEqual(select(customers: [warrantyCustomer("w1", "Ola Park", expires: "2026-08-03")]).count, 0, "an expired warranty is silent")
+    expectEqual(select(customers: [warrantyCustomer("w1", "Ola Park", expires: "2026-08-04", archived: true)]).count, 0,
+                "removed equipment is silent")
+
+    let both = select(customers: [
+        warrantyCustomer("w2", "Zed Young", expires: "2026-08-10"),
+        warrantyCustomer("w1", "Ola Park", expires: "2026-08-10"),
+        warrantyCustomer("w3", "Abe Lane", expires: "2026-08-30"),
+    ])
+    expectEqual(both.map(\.id), ["warranty_expiring:eq_w1:2026-08-10"], "one row: the soonest expiry, ties by customer name")
+}
+
+do {
+    // Priority: after maintenance_due, before expense_anomaly.
+    let insights = select(
+        jobs: [historyJob()],
+        customers: [customer(), warrantyCustomer("w1", "Ola Park", expires: "2026-08-20")],
+        expenses: priorEven + [expense(#"{"id":"m","date":"2026-08-02","amount":1600}"#)]
+    )
+    expectEqual(insights.map(\.kind), [.maintenanceDue, .warrantyExpiring, .expenseAnomaly],
+                "warranty_expiring runs after maintenance_due and before expense_anomaly")
+}
+
 // MARK: - month/date pure helpers (FA-039 guards)
 
 expectEqual(NativeTodayInsights.monthsBetween(from: "2026-02-04", now: now), 6, "monthsBetween: exact boundary")

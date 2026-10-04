@@ -32,6 +32,11 @@ struct NativeEstimatePDFAddOn: Equatable, Sendable {
 /// snapshot (`snapshot.options`); a single-total or accepted estimate leaves
 /// both empty. `lineItems`/`total` always mirror the snapshot's top level (the
 /// recommended tier for an options snapshot), exactly as before.
+///
+/// Phase 32 (spec 2026-10-03 §6.6): `validUntil` is the reviewed snapshot's
+/// frozen date (the one the customer is shown and the Worker enforces), and
+/// `closingNote` is the customer copy the renderer draws, so the host suite
+/// tests both without UIKit.
 struct NativeEstimatePDFDocument: Equatable, Sendable {
     let businessName: String
     let businessContactName: String
@@ -42,6 +47,9 @@ struct NativeEstimatePDFDocument: Equatable, Sendable {
     let customerPhone: String
     let customerEmail: String
     let customerAddress: String
+    /// Phase 21: the job's address when it differs from the customer's
+    /// (empty otherwise), printed as "Service address".
+    let serviceAddress: String
     let jobTitle: String
     let jobDescription: String
     let lineItems: [NativeEstimatePDFLineItem]
@@ -50,6 +58,24 @@ struct NativeEstimatePDFDocument: Equatable, Sendable {
     let addOns: [NativeEstimatePDFAddOn]
     let currency: String
     let issueDate: String
+    /// Phase 32: inclusive `YYYY-MM-DD`, or `nil` when the estimate doesn't expire.
+    let validUntil: String?
+
+    /// "Nov 2, 2026" for the header's "Valid until" line; `nil` when undated.
+    var validUntilDisplay: String? {
+        validUntil.map { NativeQuoteExpiry.displayDate($0, style: .medium) }
+    }
+
+    /// The closing sentence under the estimate. Dated: "This estimate is valid
+    /// until November 2, 2026. " followed by the call to action; undated: the
+    /// call to action alone.
+    var closingNote: String {
+        let action = options.isEmpty
+            ? "Reply to approve and we'll get you scheduled."
+            : "Reply with the option you'd like and we'll get you scheduled."
+        guard let validUntil else { return action }
+        return "This estimate is valid until \(NativeQuoteExpiry.displayDate(validUntil, style: .long)). \(action)"
+    }
 
     init(review: NativeEstimateReviewDraft, issuedAt: Date = .now, calendar: Calendar = .current) {
         businessName = review.snapshot.businessName
@@ -61,6 +87,7 @@ struct NativeEstimatePDFDocument: Equatable, Sendable {
         customerPhone = review.customerPhone
         customerEmail = review.customerEmail
         customerAddress = review.customerAddress
+        serviceAddress = review.serviceAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         jobTitle = review.snapshot.jobTitle
         jobDescription = review.jobDescription
         lineItems = review.snapshot.lineItems.map {
@@ -83,6 +110,7 @@ struct NativeEstimatePDFDocument: Equatable, Sendable {
             NativeEstimatePDFAddOn(label: $0.label, description: $0.description ?? "", amount: $0.amount)
         } ?? []
         currency = review.snapshot.currency
+        validUntil = review.snapshot.validUntil
 
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US")
@@ -288,11 +316,23 @@ enum NativeEstimatePDFRenderer {
             let customerContact = [document.customerEmail, document.customerPhone, document.customerAddress]
                 .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                 .joined(separator: "\n")
-            let contactHeight = draw(customerContact, x: margin, y: y, width: 240,
+            var contactHeight = draw(customerContact, x: margin, y: y, width: 240,
                                      font: .systemFont(ofSize: 10), color: secondary)
-            _ = draw("Date  \(document.issueDate)\nPending approval", x: 330, y: y, width: 234,
+            if !document.serviceAddress.isEmpty {
+                // Phase 21: where the work is, when it isn't the customer's address.
+                let top = y + contactHeight + (contactHeight > 0 ? 8 : 0)
+                let labelHeight = draw("SERVICE ADDRESS", x: margin, y: top, width: 240,
+                                       font: .systemFont(ofSize: 9, weight: .bold), color: secondary,
+                                       characterSpacing: 1)
+                let addressHeight = draw(document.serviceAddress, x: margin, y: top + labelHeight + 2, width: 240,
+                                         font: .systemFont(ofSize: 10), color: ink)
+                contactHeight = top - y + labelHeight + 2 + addressHeight
+            }
+            // Phase 32: the "Valid until" line appears only on a dated estimate.
+            let validityLine = document.validUntilDisplay.map { "\nValid until  \($0)" } ?? ""
+            _ = draw("Date  \(document.issueDate)\(validityLine)\nPending approval", x: 330, y: y, width: 234,
                      font: .systemFont(ofSize: 10), color: secondary, alignment: .right)
-            y += max(contactHeight, 34) + 28
+            y += max(contactHeight, document.validUntilDisplay == nil ? 34 : 48) + 28
 
             if document.options.isEmpty {
                 drawTableHeader()
@@ -424,9 +464,7 @@ enum NativeEstimatePDFRenderer {
             }
 
             require(50)
-            _ = draw(document.options.isEmpty
-                        ? "This estimate is valid for 30 days. Reply to approve and we'll get you scheduled."
-                        : "This estimate is valid for 30 days. Reply with the option you'd like and we'll get you scheduled.",
+            _ = draw(document.closingNote,
                      x: margin, y: y, width: page.width - margin * 2,
                      font: .systemFont(ofSize: 10.5), color: secondary)
 

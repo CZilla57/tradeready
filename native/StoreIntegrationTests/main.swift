@@ -1739,8 +1739,18 @@ struct StoreIntegrationTests {
             expect(reopened.completedAt == nil && reopened.items == completed.items, "forms: reopening keeps the answers")
             expect(queueStore.reopenForm(id: formID) == .failure(.notCompleted), "forms: reopening twice is refused")
 
+            // Review fix (2026-10-03): the form PDF reads each photo from its
+            // file inside the render task instead of holding every photo's bytes.
+            let photoFile = queueStore.jobPhotoFileURL(photoID: photo.id)
+            expect(photoFile.flatMap { try? Data(contentsOf: $0) } == queueStore.jobPhotoBytes(photoID: photo.id)
+                   && photoFile != nil,
+                   "forms: a photo's file holds the same bytes the screen shows")
+            expect(queueStore.jobPhotoFileURL(photoID: "p1_missing") == nil && queueStore.jobPhotoFileURL(photoID: "../x") == nil,
+                   "forms: a photo with no bytes here, or an invalid id, has no file")
+
             // A deleted photo leaves a dangling id that no longer satisfies the item.
             expect(queueStore.deleteJobPhoto(photoID: photo.id), "forms: the job photo deletes")
+            expect(queueStore.jobPhotoFileURL(photoID: photo.id) == nil, "forms: a deleted photo's file is gone")
             expect(queueStore.form(id: formID)?.items[1].photoIds == [photo.id], "forms: the item keeps the dangling id")
             expect(queueStore.formItemPhotos(formID: formID, itemID: "fi_2").isEmpty, "forms: a dangling id resolves to nothing")
             expect(queueStore.formMissingItems(queueStore.form(id: formID)!).map(\.reasons) == [[.photoUnavailable]],
@@ -1819,6 +1829,157 @@ struct StoreIntegrationTests {
             expect(relaunched.form(id: formID) == queueStore.form(id: formID) && relaunched.customFormTemplates.isEmpty
                    && relaunched.formRecords.count == 3,
                    "forms: every form row survives a relaunch")
+        }
+
+        // MARK: - Phase 21: properties & equipment through AppStore
+
+        do {
+            func queuedCustomerValue(_ id: String) -> Canonical.Customer? {
+                guard let payload = pendingMutations(queueURL).last(where: { $0.table == "customers" && $0.recordId == id })?.payload,
+                      let data = try? JSONEncoder().encode(payload) else { return nil }
+                return try? JSONDecoder().decode(Canonical.Customer.self, from: data)
+            }
+            func queuedJobValue(_ id: String) -> Canonical.Job? {
+                guard let payload = pendingMutations(queueURL).last(where: { $0.table == "jobs" && $0.recordId == id })?.payload,
+                      let data = try? JSONEncoder().encode(payload) else { return nil }
+                return try? JSONDecoder().decode(Canonical.Job.self, from: data)
+            }
+            let owner = Customer(name: "Pat Property", phone: "555-0142", address: "12 Oak St")
+            expect(queueStore.upsert(owner), "properties: the customer saves")
+            let implicit = queueStore.customerProperties(customerID: owner.id)
+            expect(implicit.map(\.id) == [NativePropertiesEquipment.implicitPrimaryID] && implicit.first?.address == "12 Oak St",
+                   "properties: a customer starts with one implicit primary at their address")
+            expect(queueStore.canonicalCustomer(id: owner.id)?.properties == nil, "properties: nothing is stored yet")
+
+            // The first equipment action materializes the primary.
+            guard case let .success(furnace) = queueStore.addEquipment(
+                customerID: owner.id, propertyID: NativePropertiesEquipment.implicitPrimaryID,
+                draft: .init(type: "gas furnace", make: "Carrier", model: "59SC5", serial: "CAR-77",
+                             installDate: "2019-04-02", warrantyExpires: "2029-04-02")
+            ) else {
+                expect(false, "properties: equipment is added to the implicit primary")
+                throw StoreTestError.missingFixture
+            }
+            let materialized = queueStore.canonicalCustomer(id: owner.id)?.properties
+            expect(materialized?.count == 1 && materialized?.first?.primary == true && materialized?.first?.id == furnace.propertyID
+                   && materialized?.first?.address == nil, "properties: the primary is materialized with no stored address")
+            expect(queuedCustomerValue(owner.id)?.properties?.first?.equipment?.first?.type == "furnace",
+                   "properties: the change is queued as one customers upsert")
+
+            guard case let .success(rentalID) = queueStore.addProperty(
+                customerID: owner.id, draft: .init(label: "Rental on Elm", address: "44 Elm St", notes: "Lockbox 1234")
+            ) else {
+                expect(false, "properties: a property is added")
+                throw StoreTestError.missingFixture
+            }
+            expect(queueStore.customerProperties(customerID: owner.id).map(\.id) == [furnace.propertyID, rentalID],
+                   "properties: primary first, then the new property")
+            expect(queueStore.addProperty(customerID: owner.id, draft: .init(address: "44 elm st.")) == .failure(.duplicateAddress),
+                   "properties: a duplicate address is refused")
+            expect(queueStore.customerProperties(customerID: owner.id).count == 2, "properties: a refusal changes nothing")
+            expect(queueStore.addProperty(customerID: "missing", draft: .init(address: "1 A")) == .failure(.customerNotFound),
+                   "properties: an unknown customer is refused")
+            expect(queueStore.showsPropertyPicker(customerID: owner.id)
+                   && queueStore.propertyPickerOptions(customerID: owner.id).map(\.id) == [furnace.propertyID, rentalID],
+                   "properties: the job editor shows the picker for two properties")
+
+            // A customer edit (address included) keeps the nested properties;
+            // the primary's address follows.
+            var moved = queueStore.customers.first { $0.id == owner.id } ?? owner
+            moved.address = "14 Oak St"
+            expect(queueStore.upsert(moved), "properties: the customer edit saves")
+            expect(queueStore.canonicalCustomer(id: owner.id)?.properties?.count == 2
+                   && queueStore.customerProperty(customerID: owner.id, propertyID: furnace.propertyID)?.address == "14 Oak St",
+                   "properties: editing the customer keeps properties and moves the primary's address")
+
+            // "Add as a property" from a booking-style job at a new address.
+            let bookingJob = Job(customerId: owner.id, customerName: owner.name, title: "Leak at the cabin",
+                                 address: "9 Cabin Rd", estimateTotal: 250)
+            expect(queueStore.upsert(bookingJob), "properties: the job saves")
+            let before = queueStore.jobPropertyContext(jobID: bookingJob.id)
+            expect(before?.canAddAsProperty == true && before?.property == nil, "properties: a new address offers Add as a property")
+            expect(queueStore.estimateReviewDraft(jobID: bookingJob.id)?.serviceAddress == "9 Cabin Rd",
+                   "properties: the estimate shows the job's service address when it differs")
+            guard case let .success(cabinID) = queueStore.addJobAddressAsProperty(jobID: bookingJob.id) else {
+                expect(false, "properties: the job address becomes a property")
+                throw StoreTestError.missingFixture
+            }
+            let after = queueStore.jobPropertyContext(jobID: bookingJob.id)
+            expect(after?.linkedProperty?.id == cabinID && after?.canAddAsProperty == false,
+                   "properties: the job is linked and the offer is gone")
+            expect(queuedJobValue(bookingJob.id)?.propertyId == cabinID
+                   && queuedCustomerValue(owner.id)?.properties?.last?.address == "9 Cabin Rd",
+                   "properties: the job and the customer are queued together")
+            expect(queueStore.jobs.first { $0.id == bookingJob.id }?.propertyId == cabinID, "properties: the screen model carries the link")
+            expect(queueStore.propertyJobHistory(customerID: owner.id, propertyID: cabinID).map(\.id) == [bookingJob.id],
+                   "properties: the property's history lists the job")
+
+            // The job editor's pick writes through the normal job save.
+            var picked = queueStore.jobs.first { $0.id == bookingJob.id } ?? bookingJob
+            picked.propertyId = rentalID
+            expect(queueStore.upsert(picked) && queueStore.jobPropertyContext(jobID: bookingJob.id)?.linkedProperty?.id == rentalID,
+                   "properties: re-picking a property saves")
+            let atHome = Job(customerId: owner.id, customerName: owner.name, title: "Tune-up", address: "14 Oak St", estimateTotal: 90)
+            expect(queueStore.upsert(atHome), "properties: a job at the customer's address saves")
+            expect(queueStore.propertyJobHistory(customerID: owner.id, propertyID: furnace.propertyID).map(\.id) == [atHome.id],
+                   "properties: an unlinked job at the customer's address is in the primary's history")
+            expect(queueStore.estimateReviewDraft(jobID: atHome.id)?.serviceAddress == "",
+                   "properties: no service address at the customer's own address")
+
+            // Edits, archive and restore.
+            expect((try? queueStore.updateProperty(customerID: owner.id, propertyID: rentalID,
+                                                   draft: .init(label: "Elm duplex", address: "44 Elm St")).get())?
+                       .properties?.first { $0.id == rentalID }?.label == "Elm duplex",
+                   "properties: a property edit commits")
+            expect((try? queueStore.setPropertyArchived(customerID: owner.id, propertyID: rentalID, archived: true).get()) != nil
+                   && queueStore.jobPropertyContext(jobID: bookingJob.id)?.linkedProperty == nil,
+                   "properties: an archived property no longer resolves for its jobs (P3)")
+            expect(queueStore.jobs.first { $0.id == bookingJob.id }?.propertyId == rentalID,
+                   "properties: archiving never rewrites the job")
+            if case .failure(.primaryLocked) = queueStore.setPropertyArchived(
+                customerID: owner.id, propertyID: furnace.propertyID, archived: true
+            ) {} else {
+                expect(false, "properties: the primary can't be archived")
+            }
+            _ = queueStore.setPropertyArchived(customerID: owner.id, propertyID: rentalID, archived: false)
+            expect(queueStore.jobPropertyContext(jobID: bookingJob.id)?.linkedProperty?.id == rentalID, "properties: restore resolves again")
+            expect((try? queueStore.updateEquipment(customerID: owner.id, propertyID: furnace.propertyID, equipmentID: furnace.equipmentID,
+                                                    draft: .init(type: "furnace", serial: "CAR-78")).get()) != nil
+                   && queueStore.customerEquipmentSearchIndex[owner.id] == ["CAR-78"],
+                   "properties: an equipment edit commits and feeds search")
+            _ = queueStore.setEquipmentArchived(customerID: owner.id, propertyID: furnace.propertyID, equipmentID: furnace.equipmentID, archived: true)
+            expect(queueStore.customerProperty(customerID: owner.id, propertyID: furnace.propertyID)?.archivedEquipment.count == 1,
+                   "properties: Mark as removed keeps the item as past equipment")
+
+            // Delete + undo through the shared undo.
+            let snapshotBefore = queueStore.canonicalCustomer(id: owner.id)
+            expect(queueStore.deleteEquipment(customerID: owner.id, propertyID: furnace.propertyID, equipmentID: furnace.equipmentID),
+                   "properties: the equipment entry deletes")
+            expect(queueStore.pendingRecordDeleteUndo?.kind == .equipment
+                   && queuedCustomerValue(owner.id)?.properties?.first?.equipment == nil,
+                   "properties: the delete offers the shared undo and queues the customer")
+            queueStore.undoRecordDeletion()
+            let sortedEncoder = JSONEncoder()
+            sortedEncoder.outputFormatting = .sortedKeys
+            let restoredProperties = try sortedEncoder.encode(queueStore.canonicalCustomer(id: owner.id)?.properties)
+            let propertiesBefore = try sortedEncoder.encode(snapshotBefore?.properties)
+            expect(restoredProperties == propertiesBefore, "properties: undo restores the equipment exactly")
+            expect(queueStore.deleteProperty(customerID: owner.id, propertyID: cabinID), "properties: a property deletes")
+            expect(queueStore.pendingRecordDeleteUndo?.bannerMessage == "Deleted property 9 Cabin Rd",
+                   "properties: the property delete names its address")
+            queueStore.undoRecordDeletion()
+            expect(queueStore.customerProperty(customerID: owner.id, propertyID: cabinID) != nil, "properties: undo restores the property")
+            expect(!queueStore.deleteProperty(customerID: owner.id, propertyID: furnace.propertyID)
+                   && queueStore.customerProperties(customerID: owner.id).count == 3,
+                   "properties: the primary can't be deleted")
+
+            // Insight policy and durability.
+            expect(NativeInsightsCardPolicy.isMuteable(.warrantyExpiring) && NativeInsightsCardPolicy.snoozeDays(for: .warrantyExpiring) == 14,
+                   "properties: the warranty insight is muteable with a 14-day snooze")
+            let relaunched = AppStore(fileURL: queueURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
+            expect(relaunched.customerProperties(customerID: owner.id).map(\.id) == queueStore.customerProperties(customerID: owner.id).map(\.id)
+                   && relaunched.jobs.first { $0.id == bookingJob.id }?.propertyId == rentalID,
+                   "properties: properties and links survive a relaunch")
         }
 
 
@@ -4348,6 +4509,38 @@ struct StoreIntegrationTests {
                    "10.12 gate ordering: zero visible insights suppresses the card even when otherwise eligible")
             expect(NativeInsightsCardPolicy.isVisible(setupComplete: true, hero: nil, insights: five),
                    "10.12 gate ordering: setup complete + no hero + insights present shows the card")
+
+            // Phase 32 (spec 2026-10-03 §6.8): quote_expired is dismiss-only
+            // (its id carries the date, so an extension re-arms it);
+            // quote_expiring resolves on its own and has no mute affordance.
+            expect(NativeInsightsCardPolicy.isMuteable(.quoteExpired) && NativeInsightsCardPolicy.snoozeDays(for: .quoteExpired) == nil,
+                   "Phase 32 quote_expired is dismiss-only")
+            expect(!NativeInsightsCardPolicy.isMuteable(.quoteExpiring), "Phase 32 quote_expiring is not muteable")
+            expect(NativeInsightsCardPolicy.symbolName(for: .quoteExpiring) == "hourglass"
+                   && NativeInsightsCardPolicy.symbolName(for: .quoteExpired) == "hourglass.bottomhalf.filled",
+                   "Phase 32 quote kinds use the hourglass symbols")
+            let expired = insight1012(.quoteExpired, id: "quote_expired:j9:2026-09-01")
+            let expiring = insight1012(.quoteExpiring, id: "quote_expiring:j8:2026-09-25")
+            let dismissed = [NativeInsightMutes.makeMute(id: expired.id, now: now)]
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [expiring, expired], mutes: dismissed, now: now).map(\.id) == [expiring.id],
+                   "Phase 32 a dismissed quote_expired row stays hidden")
+            let reArmed = insight1012(.quoteExpired, id: "quote_expired:j9:2026-09-20")
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [reArmed], mutes: dismissed, now: now).map(\.id) == [reArmed.id],
+                   "Phase 32 an extended-then-expired estimate (new date, new id) shows again")
+            // The dismiss-only aggregate carries its newest date, so
+            // dismissing one batch never hides the next one for good.
+            let batch = insight1012(.quoteExpired, id: "quote_expired:all:2026-09-01")
+            let batchDismissed = [NativeInsightMutes.makeMute(id: batch.id, now: now)]
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [batch], mutes: batchDismissed, now: now).isEmpty,
+                   "Phase 32 a dismissed quote_expired aggregate stays hidden")
+            let nextBatch = insight1012(.quoteExpired, id: "quote_expired:all:2026-09-20")
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [nextBatch], mutes: batchDismissed, now: now).map(\.id) == [nextBatch.id],
+                   "Phase 32 the next quote_expired aggregate shows despite the earlier dismissal")
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [expired, expiring], mutes: nil, now: now).map(\.id) == [expiring.id],
+                   "Phase 32 fail-closed hides quote_expired but keeps the self-resolving quote_expiring")
+            expect(NativeInsightsCardPolicy.muteControlsAvailable(for: .quoteExpired, mutes: [])
+                   && !NativeInsightsCardPolicy.muteControlsAvailable(for: .quoteExpiring, mutes: []),
+                   "Phase 32 only quote_expired offers mute controls")
         }
 
         // --- Every checklist destination (pure `NativeSetupChecklist.route`).
@@ -4790,6 +4983,40 @@ struct StoreIntegrationTests {
                    "10.12 fix1 I7a: the relaunched, re-activated store reads back a real (non-nil) checklist state")
             expect(relaunched.setupChecklistState?.isDone(.rate) == false,
                    "10.12 fix1 I7a: the on-disk setup-checklist store was actually removed by applyCompletedSignOutState, not just the in-memory copy")
+        }
+
+        // --- Phase 20 review fix (2026-10-03): form text a closing screen could
+        // not save is held in memory by form id, taken back once by the screen
+        // that owns it, and scrubbed at an account boundary.
+        do {
+            let (store, _) = try seed08Store(settings: settings08(), tag: "forms-held-text")
+            seed08Owner(store, binding: hexBinding("bind-forms-held"))
+            let heldFormID = "fm1759420800000_held"
+            let answer = NativeJobFormsPresentation.DraftKey(itemID: "fi_12", field: .answer)
+            expect(!store.hasHeldFormText(formID: heldFormID) && store.takeHeldFormDrafts(formID: heldFormID) == nil
+                   && store.takeHeldFormTitle(formID: heldFormID) == nil,
+                   "forms held text: nothing is held at first")
+            store.holdFormDrafts([answer: "Three breakers"], refusals: [answer: .readOnlyCompleted], formID: heldFormID)
+            store.holdFormTitle("Panel check", refusal: .notSaved, formID: heldFormID)
+            expect(store.hasHeldFormText(formID: heldFormID), "forms held text: the form's row can say it has unsaved text")
+            let drafts = store.takeHeldFormDrafts(formID: heldFormID)
+            expect(drafts?.drafts == [answer: "Three breakers"] && drafts?.refusals == [answer: .readOnlyCompleted],
+                   "forms held text: the fill screen takes back its text with the reasons")
+            expect(store.takeHeldFormDrafts(formID: heldFormID) == nil && store.hasHeldFormText(formID: heldFormID),
+                   "forms held text: taken once; the editor's title is still held")
+            let title = store.takeHeldFormTitle(formID: heldFormID)
+            expect(title?.title == "Panel check" && title?.refusal == .notSaved && store.heldFormText.isEmpty,
+                   "forms held text: the editor takes back its title, and nothing is left")
+            store.holdFormDrafts([answer: "x"], refusals: [answer: .notSaved], formID: heldFormID)
+            store.holdFormDrafts([:], refusals: [answer: .notSaved], formID: heldFormID)
+            expect(store.heldFormText.isEmpty, "forms held text: a screen that closes with everything saved releases what was held")
+            store.holdFormTitle(nil, refusal: .notSaved, formID: heldFormID)
+            expect(store.heldFormText.isEmpty, "forms held text: no title, nothing held")
+            store.holdFormDrafts([answer: "Kept"], refusals: [:], formID: heldFormID)
+            store.holdFormTitle("Kept title", refusal: nil, formID: heldFormID)
+            store.testApplyCompletedSignOutState()
+            expect(store.heldFormText.isEmpty && !store.hasHeldFormText(formID: heldFormID),
+                   "forms held text: an account boundary scrubs held text")
         }
 
         // --- I7(b): apply a mute, cross a boundary, relaunch/reactivate, and

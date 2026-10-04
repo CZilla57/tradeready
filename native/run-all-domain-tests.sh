@@ -56,6 +56,11 @@ sh "$ROOT_DIR/native/run-quote-options-store-tests.sh"
 sh "$ROOT_DIR/native/run-job-forms-tests.sh"
 # Phase 27: lead source tracking (normalizer, capture rules, report, coach block).
 sh "$ROOT_DIR/native/run-lead-source-tests.sh"
+# Phase 32: quote expiration dates (pure policy + shared expiry vectors with the Worker).
+sh "$ROOT_DIR/native/run-quote-expiry-tests.sh"
+sh "$ROOT_DIR/native/run-quote-expiry-store-tests.sh"
+# Phase 21: multi-property and equipment history (properties, merge, warranty insight).
+sh "$ROOT_DIR/native/run-properties-equipment-tests.sh"
 # Phase 34: referral program (codes with the Worker's shared vectors, intake
 # decision, credits, report control total, coach block, Today insight).
 sh "$ROOT_DIR/native/run-referral-tests.sh"

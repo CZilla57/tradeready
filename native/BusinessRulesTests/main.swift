@@ -104,6 +104,11 @@ expect(JobLifecycleRules.canSendEstimate(status: .lead, estimateTotal: 0), false
 expect(JobLifecycleRules.statusAfterEstimateDecision(.estimateSent, decision: .approved), .approved, "approval transition")
 expect(JobLifecycleRules.statusAfterEstimateDecision(.lead, decision: .declined), .declined, "decline branch")
 expect(JobLifecycleRules.statusAfterEstimateDecision(.scheduled, decision: .declined), .scheduled, "decision no-regress")
+// Native-only (Phase 25 review, 2026-10-03): the Worker lets a customer approve
+// on the same link after declining; RN leaves the job declined, native approves it.
+expect(JobLifecycleRules.statusAfterEstimateDecision(.declined, decision: .approved), .approved, "declined then approved")
+expect(JobLifecycleRules.statusAfterEstimateDecision(.declined, decision: .declined), .declined, "declined stays declined")
+expect(JobLifecycleRules.statusAfterEstimateDecision(.scheduled, decision: .approved), .scheduled, "approval no-regress")
 expect(JobLifecycleRules.canRequestDeposit(status: .approved), true, "approved deposit")
 expect(JobLifecycleRules.canRequestDeposit(status: .scheduled), true, "scheduled deposit")
 expect(JobLifecycleRules.canRequestDeposit(status: .inProgress), true, "in-progress deposit")

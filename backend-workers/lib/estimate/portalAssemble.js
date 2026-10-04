@@ -11,6 +11,7 @@ const { isAllowedPaymentLink } = require('../reminderEmail.js');
 const { changeOrderStatus } = require('./changeOrderMath.js');
 const { photoSignature, PHOTO_URL_TTL_SEC } = require('../photoSign.js');
 const { hasSnapshotOptions, lowestTierTotal } = require('./quoteOptions.js');
+const { snapshotExpiry } = require('./estimateExpiry.js');
 
 const ESTIMATE_PAGE = 'https://gettradereadyapp.com/estimate.html';
 const CHANGE_PAGE = 'https://gettradereadyapp.com/change.html';
@@ -95,17 +96,23 @@ function estimateTotal(approval, hasOptions) {
 // Only jobs with an approval link are customer-visible estimates — the
 // frozen snapshot plus the shipped approval page. Internal jobs stay
 // invisible. (v1 behavior, moved verbatim from the route.)
-function buildEstimates(jobRows) {
+// Phase 32: `validUntil` is the frozen snapshot's date (null when undated);
+// `expired` uses the same owner-zone rule as respond and is false once the
+// customer decided — a decided estimate no longer needs a decision.
+function buildEstimates(jobRows, nowMs) {
   return jobRows
     .filter((r) => r.data && r.data.approval && r.data.approval.token)
     .map((r) => {
       const approval = r.data.approval;
       const hasOptions = hasSnapshotOptions(approval.snapshot);
+      const { validUntil, expired } = snapshotExpiry(approval.snapshot, nowMs);
       return {
         title: cap(approval.snapshot?.jobTitle || r.data.title, 200),
         total: estimateTotal(approval, hasOptions),
         decision: approval.decision || null,
         hasOptions,
+        validUntil,
+        expired: !approval.decision && expired,
         approvalUrl: `${ESTIMATE_PAGE}?j=${encodeURIComponent(r.id)}&t=${encodeURIComponent(approval.token)}`,
       };
     });
@@ -197,7 +204,7 @@ function assemblePortalView({ businessName, customerRow, jobRows, invoiceRows, r
     businessName: cap(businessName, 120),
     customerName: cap(customerRow.data?.name, 120),
     appointments: buildAppointments(jobRows, requestRows, { token, apiOrigin, nowMs }),
-    estimates: buildEstimates(jobRows),
+    estimates: buildEstimates(jobRows, nowMs),
     changeOrders: buildChangeOrders(jobRows),
     invoices: buildInvoices(invoiceRows),
     photos: buildPhotos(jobRows, photoRows, { userId, apiOrigin, photoSecret, nowMs }),

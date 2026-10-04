@@ -44,6 +44,24 @@ let customerResults = NativeGlobalSearch.search(jobs: [], customers: customers, 
 expect(customerResults.customers.items.map(\.id) == ["a", "z"],
        "customers search contact fields, exclude archives, and sort alphabetically")
 
+// Phase 21 (spec 2026-10-02-properties-equipment-design.md §3): an equipment
+// serial or model match lands on the customer.
+let equipment = ["z": ["CAR-2219-0042", "59SC5A080"], "archived": ["CAR-9999"]]
+let serialResults = NativeGlobalSearch.search(
+    jobs: [], customers: customers, invoices: [], query: "car-2219", customerEquipment: equipment
+)
+expect(serialResults.customers.items.map(\.id) == ["z"], "an equipment serial finds its customer")
+let modelResults = NativeGlobalSearch.search(
+    jobs: [], customers: customers, invoices: [], query: "59sc5", customerEquipment: equipment
+)
+expect(modelResults.customers.items.map(\.id) == ["z"], "an equipment model finds its customer, any case")
+let archivedSerial = NativeGlobalSearch.search(
+    jobs: [], customers: customers, invoices: [], query: "CAR-9999", customerEquipment: equipment
+)
+expect(archivedSerial.customers.total == 0, "an archived customer's equipment stays out of search")
+expect(NativeGlobalSearch.search(jobs: [], customers: customers, invoices: [], query: "car-2219").customers.total == 0,
+       "without the equipment index nothing matches (the default)")
+
 let invoices = [
     Invoice(id: "early", customer: "Alice", number: "INV-0042", amount: 10, due: date(2026, 2, 1)),
     Invoice(id: "late", customer: "Bob", number: "INV-0042-B", amount: 20, due: date(2026, 8, 1)),

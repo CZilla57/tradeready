@@ -347,6 +347,7 @@ struct CustomerDetailView: View {
                             if let address = storedCustomer?.address, !address.isEmpty { Text(address) }
                         }
                     }
+                    if let storedCustomer { NativeCustomerPropertiesSection(customerID: storedCustomer.id) } // Phase 21
 
                     // Phase 34: referrals (renders nothing for an unsaved customer).
                     NativeCustomerReferralsSection(customerID: storedCustomer?.id ?? customer.id, customerName: customer.name)

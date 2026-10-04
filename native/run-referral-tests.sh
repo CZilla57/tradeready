@@ -15,10 +15,12 @@ MODULE_CACHE="${TMPDIR:-/tmp}/tradeready-referral-module-cache"
 swiftc \
   -module-cache-path "$MODULE_CACHE" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/CanonicalModels.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeQuoteExpiry.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/CanonicalSnapshot.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeMutationQueue.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeLeadSource.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeReferrals.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativePropertiesEquipment.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeBookingIntake.swift" \
   "$ROOT_DIR/native/TradeReadyNative/BuildEnvironment.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeBookingAdministration.swift" \

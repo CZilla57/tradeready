@@ -103,6 +103,11 @@ struct RecurringJobTests {
             expect(job.scheduledStartTime == nil && job.scheduledEndTime == nil, "occurrence has no time window")
             expect(job.photos == nil && job.timeSessions == nil, "occurrence inherits no photos or time")
             expect(job.approval == nil && job.changeOrders == nil, "occurrence inherits no approvals or change orders")
+            // Phase 32 (spec 2026-10-03 §3): an occurrence is never a sent
+            // estimate, so it carries no valid-until date or key.
+            expect(job.estimateSentAt == nil && job.estimateValidUntil == nil, "occurrence has no send stamp or valid-until date")
+            let occurrenceJSON = (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(job))) as? [String: Any]
+            expect(occurrenceJSON != nil && occurrenceJSON?["estimateValidUntil"] == nil, "occurrence JSON has no estimateValidUntil key")
             expectEqual(result.updatedRules.count, 1, "due rule reports one updated rule")
             let updated = result.updatedRules[0]
             expectEqual(updated.occurrenceCount, 2, "rule occurrence count advances")
@@ -247,6 +252,22 @@ struct RecurringJobTests {
             expectEqual(carrying.newJobs[0].jobCosts?.count, 1, "rule direct costs copy onto the occurrence")
             let plain = run(rules: [try rule()], today: "2026-07-08")
             expect(plain.newJobs[0].jobCosts == nil, "rules without direct costs stay without them")
+        }
+
+        // Phase 21 (spec 2026-10-02-properties-equipment-design.md §3): every
+        // occurrence is at the rule's property; a rule without one stays
+        // without, and occurrences still start with fresh preservation.
+        do {
+            var atProperty = try rule()
+            atProperty.propertyId = "pr1759500000000_rental"
+            let linked = run(rules: [atProperty], today: "2026-07-22")
+            expect(!linked.newJobs.isEmpty && linked.newJobs.allSatisfy { $0.propertyId == "pr1759500000000_rental" },
+                   "occurrences carry the rule's propertyId")
+            expectEqual(linked.updatedRules.first?.propertyId, "pr1759500000000_rental", "the advanced rule keeps its property")
+            let unlinked = run(rules: [try rule()], today: "2026-07-08")
+            expect(unlinked.newJobs[0].propertyId == nil, "a rule without a property generates unlinked jobs")
+            expect(linked.newJobs.allSatisfy { $0.preservation.unknownFields.isEmpty },
+                   "occurrences still start with fresh preservation")
         }
 
         if failures == 0 {

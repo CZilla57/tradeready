@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 enum SettingsDestination: Hashable {
-    case business, schedule, pricing, numbering, importData
+    case business, schedule, pricing, numbering, importData, forms
     case payments, booking, appearance, ai, notifications, reviews
     case sync, subscription, account
 }
@@ -47,6 +47,7 @@ struct SettingsView: View {
                         (.schedule, "clock.fill", "Schedule", "Working hours, job length, time off"),
                         (.pricing, "tag.fill", "Pricing defaults", "Labor, markup, overhead, and margin"),
                         (.numbering, "number.square.fill", "Invoice numbering", "Prefix and starting number"),
+                        (.forms, "checklist", "Forms & checklists", formsSubtitle),
                         (.importData, "square.and.arrow.down.fill", "Import data", "Bring records over from CSV or the old app")
                     ])
                     settingsGroup("GETTING PAID", rows: [
@@ -137,6 +138,7 @@ struct SettingsView: View {
         case .pricing: PricingSettings()
         case .numbering: InvoiceNumberSettings()
         case .importData: ImportSettings()
+        case .forms: NativeFormTemplatesView()
         case .payments: PaymentsSettings()
         case .booking: NativeBookingSettingsView()
         case .appearance: AppearanceSettings()
@@ -147,6 +149,12 @@ struct SettingsView: View {
         case .subscription: SubscriptionSettings()
         case .account: AccountSettings()
         }
+    }
+
+    /// Phase 20: the owner's saved form templates.
+    private var formsSubtitle: String {
+        let count = store.customFormTemplates.count
+        return count == 0 ? "Checklist and inspection templates" : "\(count) saved template\(count == 1 ? "" : "s")"
     }
 
     private var syncSubtitle: String {
@@ -225,6 +233,11 @@ struct BusinessProfileSettings: View {
 
 struct PricingSettings: View {
     @EnvironmentObject private var store: AppStore
+    // Phase 32 (spec 2026-10-03 §6.3): the days field commits (clamped to
+    // 0…365) when editing ends, so a half-typed number is never saved.
+    @ScaledMetric(relativeTo: .body) private var validityFieldWidth: CGFloat = 56
+    @State private var validityDaysText = ""
+    @FocusState private var validityDaysFocused: Bool
     var body: some View { SettingsPage(title: "Pricing Defaults", content: Group {
         Section("LABOR") { CurrencyField(title: "Billing rate per hour", value: $store.settings.laborRate); CurrencyField(title: "Owner labor cost per hour", value: $store.settings.ownerLaborCostRate) }
         Section("MARKUP & MARGIN") { percent("Material markup", $store.settings.materialMarkup); percent("Overhead", $store.settings.overheadPercent); percent("Profit margin", $store.settings.marginPercent) }
@@ -238,9 +251,33 @@ struct PricingSettings: View {
                 }
             }
         }
+        Section {
+            LabeledContent("Valid for") {
+                HStack(spacing: 4) {
+                    TextField("30", text: $validityDaysText)
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: validityFieldWidth)
+                        .focused($validityDaysFocused)
+                        .onSubmit(commitValidityDays)
+                        .accessibilityLabel("Estimates valid for, in days")
+                    Text("days").foregroundStyle(.secondary).accessibilityHidden(true)
+                }
+            }
+        } header: {
+            Text("ESTIMATES")
+        } footer: {
+            Text("New estimates get a valid-until date this many days after you send them. Customers can't approve an estimate online after that date. Enter 0 for estimates that don't expire. You can change the date on each estimate before you send it.")
+        }
         Section { Text("Defaults prefill new estimates. You can override them on an individual job.").font(.caption).foregroundStyle(.secondary) }
     })
+    .onAppear { validityDaysText = String(store.settings.estimateValidityDays) }
+    .onChange(of: validityDaysFocused) { _, focused in if !focused { commitValidityDays() } }
+    .onChange(of: store.settings.estimateValidityDays) { _, days in
+        if !validityDaysFocused { validityDaysText = String(days) }
+    }
     .onDisappear {
+        commitValidityDays()
         // Task 10.12 (D4): the setup checklist's `rate` task has no honest
         // live-derivation (RN's `SettingsPricingScreen` records it on save;
         // native's bindings write continuously, so leaving this page stands
@@ -248,6 +285,16 @@ struct PricingSettings: View {
         store.markSetupTaskDone(.rate)
     }
     .nativeAnalyticsScreen(.settingsPricing) }
+    /// Clamps to 0…365; anything that isn't a whole number restores the
+    /// saved value. The field then shows what was actually saved.
+    private func commitValidityDays() {
+        let trimmed = validityDaysText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let parsed = Int(trimmed) {
+            let clamped = min(max(parsed, 0), NativeQuoteExpiry.maximumValidityDays)
+            if clamped != store.settings.estimateValidityDays { store.settings.estimateValidityDays = clamped }
+        }
+        validityDaysText = String(store.settings.estimateValidityDays)
+    }
     private func percent(_ title: String, _ value: Binding<Double>) -> some View { HStack { Text(title); Spacer(); TextField("0", value: value, format: .number).keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 70); Text("%").foregroundStyle(.secondary) } }
 }
 

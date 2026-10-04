@@ -9,6 +9,7 @@ swiftc \
   -parse-as-library \
   -module-cache-path "$MODULE_CACHE" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/CanonicalModels.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeQuoteExpiry.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeEstimateFollowUp.swift" \
   "$ROOT_DIR/native/EstimateFollowUpTests/main.swift" \
   -o "$OUTPUT_PATH"

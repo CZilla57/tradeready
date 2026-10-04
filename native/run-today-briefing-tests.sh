@@ -8,8 +8,10 @@ MODULE_CACHE="${TMPDIR:-/tmp}/tradeready-today-briefing-module-cache"
 swiftc \
   -module-cache-path "$MODULE_CACHE" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/CanonicalModels.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeQuoteExpiry.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeLeadSource.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeReferrals.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativePropertiesEquipment.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/BusinessRules.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/FinancialDomain.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeCashBasis.swift" \

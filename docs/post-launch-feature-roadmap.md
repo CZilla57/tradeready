@@ -77,7 +77,7 @@ This is the current order for everything not yet built. It **supersedes** earlie
 | 29 | Instant payouts | 🔥🔥 | Low–Med | Stripe Connect Express accounts | **Out of scope (2026-10-02)** · staged 2026-10-02 — prompt ready (bundle with #24) |
 | 30 | ACH / bank payments | 🔥 | Med | Stripe payment links + webhook, payment ledger (#3) | **Out of scope (2026-10-02)** · staged 2026-10-02 — prompt ready (webhook gap, see Why) |
 | 31 | Card-fee surcharge / convenience fee | 🔥 | Med (compliance-gated) | Payment links, invoice PDF | **Out of scope (2026-10-02)** · staged 2026-10-02 — evaluate-first |
-| 32 | Quote expiration dates | 🔥 | Low | Estimate approval loop (#1), estimate follow-up | **Build #3** · staged 2026-10-02 — prompt ready |
+| 32 | Quote expiration dates | 🔥 | Low | Estimate approval loop (#1), estimate follow-up | **Build #3** · BUILT 2026-10-03 on local `feat/quote-expiration` (native + Worker; `estimate.html`/`portal.html` uncommitted in `tradeready-legal`). Not deployed; rollout order in the spec §9, build record §12 |
 | 33 | Past-customer campaigns (+ customer tags) | 🔥🔥 | Med–High | Outreach, AI layer, lead source (#27) | **Build #9** · staged 2026-10-02 — prompt ready (send channel evaluate-first) |
 | 34 | Referral program | 🔥 | Med | Booking link (#9/#11), lead source (#27), review requests | **Build #6** · staged 2026-10-02 — prompt ready (after #27) |
 
