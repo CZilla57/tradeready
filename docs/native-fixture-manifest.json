@@ -1317,7 +1317,7 @@
    "testSources": [
     {
      "path": "native/PoorNetworkTests",
-     "sha256": "71347fcbaec88f9fa8ba35605eb89d54c189e3b3fb07b57e7c6a430f458d9d6c"
+     "sha256": "a01dbc946e3922a07fa08c7e4b9dfaeee0bb6ef422188c2ae251064da6fb1c77"
     }
    ],
    "fixtures": []
