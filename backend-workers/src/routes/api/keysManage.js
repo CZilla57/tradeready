@@ -4,12 +4,12 @@
 // JWT-authed (the caller is the APP — hence appCors, which allows the
 // Authorization header), per-user 10/min, copying portalManage.js.
 // Thin shell; the invariants live in lib/api/keyAdmin.js (tested). The raw
-// key is minted here from the Worker CSPRNG and only its hash is stored.
+// key is minted from the Worker CSPRNG, tagged with API_KEY_TAG_SECRET, and
+// only its hash is stored.
 
 import { randomBytes } from 'node:crypto';
 import { createRateLimiter } from '../../../lib/guards.js';
 import { apiKeysManageCore } from '../../../lib/api/keyAdmin.js';
-import { KEY_RANDOM_BYTES } from '../../../lib/api/keys.js';
 import { appCors, jsonBody } from '../../appCors.js';
 
 const allow = createRateLimiter({ limit: 10 });
@@ -48,7 +48,7 @@ export async function apiKeysManageHandler(c) {
       userId: authed.userId,
       body,
       nowMs: Date.now(),
-      randomBytes: () => randomBytes(KEY_RANDOM_BYTES),
+      randomBytes: (n) => randomBytes(n),
     });
   } catch (err) {
     console.error('[api-keys/manage] failed:', err.message);

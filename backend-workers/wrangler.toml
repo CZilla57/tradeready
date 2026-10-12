@@ -8,6 +8,10 @@
 #   API_CURSOR_SECRET (Phase 23 open API: HMAC key for /v1 list cursors;
 #     without it /v1 lists answer 503 unavailable)
 #   ESIGN_SEAL_PRIVATE_KEY (Phase 19, stage B)
+#   API_KEY_TAG_SECRET (Phase 23 open API: HMAC key that tags every API key;
+#     at least 32 random bytes, e.g. `openssl rand -base64 48`; without it, or
+#     shorter than 44 characters, /v1 answers 503 not_configured and key
+#     create/rotate answer 503 unavailable. Changing it invalidates every key)
 # Local dev reads .dev.vars (gitignored) — see .dev.vars.example.
 
 name = "tradeready-backend"
