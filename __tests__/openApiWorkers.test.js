@@ -1373,6 +1373,38 @@ describe('request guard bounds, measured with a fake RPC and a fake clock (§14.
       expect((await hit('198.51.100.242', victim, NOW + 3)).status).toBe(200);
     }, 120_000);
 
+    test('owner windows that straddle a global window get one reserve take per global window (120 skew owners: the victim still authorizes)', async () => {
+      const T0 = NOW + 10 * WINDOW;
+      // A take at T0 - 60 s opens a global window that ends at T0.
+      expect((await hit('198.51.100.243', validKey(), T0 - WINDOW)).status).toBe(200);
+      const skew = [];
+      for (let a = 0; a < 120; a++) {
+        const owner = uuidOf(`skew-owner-${a}`);
+        const live = mint({ keyId: uuidOf(`skew-live-${a}`), ownerId: owner, seed: `skew-live-${a}` });
+        KEYS_BY_HASH[sha(live)] = { ok: false, error: 'rate_limited', retryAfter: 1, limit: 60, remaining: 0, reset: 1 };
+        const dead = [1, 2].map((d) => mint({ keyId: uuidOf(`skew-dead-${a}-${d}`), ownerId: owner, seed: `skew-dead-${a}-${d}` }));
+        for (const k of dead) KEYS_BY_HASH[sha(k)] = { ok: false, error: 'key_revoked' };
+        skew.push({ live, dead });
+        // The live key opens the owner's window at T0 - 30 s and refunds it to 0.
+        expect((await hit(ipv4(95_000 + a), live, T0 - 30_000)).status).toBe(429);
+      }
+      rpc.calls = 0;
+      // 6 drain owners spend the shared 60 at T0 (a new global window).
+      for (let r = 0; r < 60; r++) await hit(`203.0.113.${140 + (r % 6)}`, deadKey(200 + (r % 6), r, 'key_revoked'), T0 + r);
+      expect(rpc.calls).toBe(60);
+      // Skew owners: one dead key at T0 + 2 s (reserve), another at T0 + 31 s,
+      // after their own owner window rolled over but inside the same global window.
+      const first = [];
+      for (let a = 0; a < 120; a++) first.push((await hit(ipv4(95_000 + a), skew[a].dead[0], T0 + 2_000)).status);
+      const second = [];
+      for (let a = 0; a < 120; a++) second.push((await hit(ipv4(95_000 + a), skew[a].dead[1], T0 + 31_000)).status);
+      expect(first.filter((x) => x === 401)).toHaveLength(120);
+      expect(second.filter((x) => x === 429)).toHaveLength(120); // 120 x 401 before this fix (240 reserve takes)
+      expect(rpc.calls).toBe(60 + 120);
+      expect(guard.globalTokensUsed(T0 + 31_500)).toBe(180);
+      expect((await hit('198.51.100.244', validKey(), T0 + 32_000)).status).toBe(200);
+    }, 60_000);
+
     test('an outage closes the reserve: one RPC failure in a window holds the rest of it to the shared pool', async () => {
       mode = 'throw';
       for (let i = 0; i < 5000; i++) await hit(ipv4(80_000 + i), unseenKey(), NOW + i);

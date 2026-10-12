@@ -142,8 +142,10 @@ async function logApiRequest(env, { userId, keyId, route, status, ip }) {
 //   before the RPC is awaited; if any is empty, 429 from memory with
 //   Retry-After to that window's end. The isolate token comes from the shared
 //   pool (GLOBAL_TOKENS) or, once that is empty, from the reserve
-//   (GLOBAL_RESERVE), but only for an owner that holds no token in the
-//   window: one cold admission per owner at a time. All tokens are refunded
+//   (GLOBAL_RESERVE), but only for an owner that holds no token and has no
+//   unrefunded reserve take in the current GLOBAL window (so an owner window
+//   straddling two global windows cannot take twice): one cold admission per
+//   owner at a time. All tokens are refunded
 //   only when the RPC answers `ok` or `rate_limited` (a live key), and only
 //   to the window and pool that issued them. Denials, `unavailable` and
 //   transport failures keep them. So per isolate and window, hashes outside
@@ -300,8 +302,12 @@ function createApiGuard(overrides = {}) {
   // A window is an object; when it ends it is REPLACED, never reset, so a
   // late refund can tell whether the window that issued its token is current.
   // `used` counts the shared pool, `reserved` the reserve (see takeTokens);
-  // `failed` closes the reserve once an RPC in the window failed.
-  let globalWindow = { start: -Infinity, used: 0, reserved: 0, failed: false };
+  // `failed` closes the reserve once an RPC in the window failed;
+  // `reserveByOwner` counts each owner's unrefunded reserve takes in THIS
+  // global window (owner windows start at the owner's first take, so they
+  // can straddle a global window; the reserve rule must not).
+  const newGlobalWindow = (start) => ({ start, used: 0, reserved: 0, failed: false, reserveByOwner: new Map() });
+  let globalWindow = newGlobalWindow(-Infinity);
 
   const current = (w, now) => Boolean(w) && now - w.start < L.WINDOW_MS;
   const secondsLeft = (w, now) => Math.max(1, Math.ceil((w.start + L.WINDOW_MS - now) / 1000));
@@ -346,13 +352,13 @@ function createApiGuard(overrides = {}) {
         o = owners.get(owner);
         if (!current(o, now)) o = { start: now, used: 0 };
       }
-      if (!current(globalWindow, now)) globalWindow = { start: now, used: 0, reserved: 0, failed: false };
+      if (!current(globalWindow, now)) globalWindow = newGlobalWindow(now);
       const g = globalWindow;
       const clientEmpty = c.used >= L.CLIENT_TOKENS;
       const ownerEmpty = Boolean(o) && o.used >= L.OWNER_TOKENS;
       let pool = null;
       if (g.used < L.GLOBAL_TOKENS) pool = 'shared';
-      else if (o && o.used === 0 && !g.failed && g.reserved < L.GLOBAL_RESERVE) pool = 'reserve';
+      else if (o && o.used === 0 && !g.reserveByOwner.has(owner) && !g.failed && g.reserved < L.GLOBAL_RESERVE) pool = 'reserve';
       if (clientEmpty || ownerEmpty || !pool) {
         return {
           retryAfter: Math.max(
@@ -364,7 +370,10 @@ function createApiGuard(overrides = {}) {
       }
       c.used += 1;
       if (pool === 'shared') g.used += 1;
-      else g.reserved += 1;
+      else {
+        g.reserved += 1;
+        g.reserveByOwner.set(owner, 1); // at most one unrefunded reserve take per owner per global window
+      }
       setBounded(clients, client, c, L.MAX_CLIENTS, (v) => !current(v, now));
       if (o) {
         o.used += 1;
@@ -387,6 +396,7 @@ function createApiGuard(overrides = {}) {
       if (globalWindow === g) {
         if (ticket.pool === 'reserve') {
           if (g.reserved > 0) g.reserved -= 1;
+          g.reserveByOwner.delete(ticket.owner);
         } else if (g.used > 0) g.used -= 1;
       }
     },
