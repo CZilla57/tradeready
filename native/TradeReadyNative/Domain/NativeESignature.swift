@@ -7,10 +7,15 @@ import Foundation
 ///   time (`scope`, `terms`, `businessContact`, `signature`, `esign`). They are
 ///   additive: the Phase 25 options and the Phase 32 validity fields are left
 ///   exactly as the existing builders made them.
-/// - §3.7 / §11.1 B: the owner-facing reading of an approval — signed with an
-///   audit trail, a typed-name approval from before the audit trail, or a
-///   change-order decision the owner recorded on site — and the audit trail
-///   built from the server-owned `signatureEvidence`.
+/// - §3.7 / §11.1 B: the owner-facing reading of an approval — an approval
+///   that claims an e-signature, a typed-name approval from before the audit
+///   trail, or a change-order decision the owner recorded on site.
+/// - §11.11 (security review 2026-10-04): an approval that claims a signature
+///   is UNCONFIRMED until `POST /api/esign/record` returns that sealed record.
+///   The job blob (`signatureRecordId`, `signatureEvidence`, `ip`, …) is the
+///   owner's own writable copy, so nothing from it is ever shown as a sealed
+///   record: the signer, drawing, IP, trail, fingerprint and record id the app
+///   shows as signed all come from the Worker's answer.
 ///
 /// Pure: Foundation and the canonical models only. Wording here is
 /// owner-facing; it never calls a signature "legally binding" or similar
@@ -262,11 +267,75 @@ enum NativeESignature {
         }.map(\.element)
     }
 
-    // MARK: - What an approval is (§3.7)
+    // MARK: - What an approval is (§3.7, §11.11)
 
-    /// An e-signed approval: the customer agreed to electronic records (or
-    /// used an older page without that step), typed their name, and the
-    /// Worker sealed a record.
+    /// A signature as the Worker sealed it: read from the sealed record that
+    /// `POST /api/esign/record` returned, never from the job blob.
+    struct SealedRecord: Equatable, Sendable {
+        let recordID: String
+        let recordDigest: String
+        let signerName: String
+        let signedAt: String
+        let method: String?
+        let ip: String?
+        let userAgent: String?
+        /// The disclosure version agreed to; `nil` when the customer signed on
+        /// a page from before the consent step.
+        let consentVersion: Int?
+        let drawing: Drawing?
+        /// The trail sealed into the record (before the signing itself).
+        let sealedEvents: [AuditEvent]
+        /// The route's live log for the link, oldest first (unsealed).
+        let liveEvents: [AuditEvent]
+        let sealKeyID: String?
+    }
+
+    /// Reads the sealed canonical record (`record` in the answer of
+    /// `POST /api/esign/record`, spec §3.5 record version 1). `nil` when it
+    /// is not a version-1 record with the expected id and a typed name: a
+    /// confirmation is never assembled from a partial or mismatched record.
+    static func sealedRecord(
+        recordID: String,
+        recordDigest: String,
+        sealKeyID: String?,
+        record: Canonical.JSONValue,
+        liveEvents: [AuditEvent]
+    ) -> SealedRecord? {
+        guard case let .object(fields) = record,
+              double(fields["recordVersion"]) == 1,
+              string(fields["recordId"]) == recordID,
+              case let .object(signer)? = fields["signer"],
+              let signerName = string(signer["typedName"]),
+              let signedAt = string(fields["signedAt"])
+        else { return nil }
+        var consentVersion: Int?
+        if case let .object(consent)? = fields["consent"], let version = double(consent["version"]) {
+            consentVersion = Int(version)
+        }
+        var sealedEvents: [AuditEvent] = []
+        if case let .array(rawEvents)? = fields["events"] {
+            for case let .object(event) in rawEvents {
+                guard let type = string(event["type"]), let at = string(event["at"]) else { continue }
+                sealedEvents.append(AuditEvent(type: type, at: at, ip: string(event["ip"])))
+            }
+        }
+        return SealedRecord(
+            recordID: recordID,
+            recordDigest: recordDigest,
+            signerName: signerName,
+            signedAt: signedAt,
+            method: string(fields["signatureMethod"]),
+            ip: string(fields["ip"]),
+            userAgent: string(fields["userAgent"]),
+            consentVersion: consentVersion,
+            drawing: Drawing(json: signer["drawn"]),
+            sealedEvents: sealedEvents,
+            liveEvents: liveEvents,
+            sealKeyID: sealKeyID
+        )
+    }
+
+    /// A confirmed e-signature: built only from a `SealedRecord`.
     struct SignedApproval: Equatable, Sendable {
         let recordID: String
         let recordDigest: String?
@@ -279,8 +348,24 @@ enum NativeESignature {
         /// a page from before the consent step.
         let consentVersion: Int?
         let drawing: Drawing?
-        /// The sealed trail plus the signing itself, oldest first.
+        /// The live log when the Worker sent one, else the sealed trail plus
+        /// the signing itself, oldest first.
         let trail: [AuditEvent]
+
+        init(sealed: SealedRecord) {
+            recordID = sealed.recordID
+            recordDigest = sealed.recordDigest
+            signerName = sealed.signerName
+            signedAt = sealed.signedAt
+            method = sealed.method
+            ip = sealed.ip
+            userAgent = sealed.userAgent
+            consentVersion = sealed.consentVersion
+            drawing = sealed.drawing
+            trail = sealed.liveEvents.isEmpty
+                ? NativeESignature.orderedTrail(sealed.sealedEvents + [AuditEvent(type: "signed", at: sealed.signedAt, ip: sealed.ip)])
+                : NativeESignature.orderedTrail(sealed.liveEvents)
+        }
 
         var methodLabel: String {
             method == "typed_drawn" ? "Typed name and drawn signature" : "Typed name"
@@ -292,8 +377,21 @@ enum NativeESignature {
         }
     }
 
+    /// What the job blob says about an approved link decision that claims an
+    /// e-signature. Owner-writable, so it is only a reason to ask the Worker;
+    /// it is never displayed as a signature record.
+    struct ClaimedSignature: Equatable, Sendable {
+        let recordID: String
+        /// The approval's typed name and time, shown only as the decision
+        /// ("Approved by …"), never as sealed evidence.
+        let signerName: String?
+        let approvedAt: String?
+    }
+
     enum ApprovalEvidence: Equatable, Sendable {
-        case signed(SignedApproval)
+        /// An approval that claims an e-signature: unconfirmed until the
+        /// Worker returns its sealed record (`SignatureConfirmation`).
+        case claimedSignature(ClaimedSignature)
         /// An approval from before the audit trail: the typed name only.
         case typedName(signerName: String?, approvedAt: String?)
         /// A change-order decision the owner recorded on site.
@@ -301,39 +399,18 @@ enum NativeESignature {
     }
 
     /// The approved estimate or change-order approval, or `nil` for anything
-    /// else (undecided, declined: a decline is not a signature).
+    /// else (undecided, declined: a decline is not a signature). Reads only
+    /// what decides which question to ask; `signatureEvidence`, `ip` and the
+    /// stored fingerprint are deliberately not read.
     static func evidence(for approval: Canonical.EstimateApproval?) -> ApprovalEvidence? {
         guard let approval, approval.decision == "approved" else { return nil }
         guard let recordID = nonEmpty(approval.signatureRecordId) else {
             return .typedName(signerName: nonEmpty(approval.signerName), approvedAt: nonEmpty(approval.consentAt))
         }
-        let evidence: [String: Canonical.JSONValue]
-        if case let .object(fields)? = approval.preservation.unknownFields["signatureEvidence"] {
-            evidence = fields
-        } else {
-            evidence = [:]
-        }
-        var trail: [AuditEvent] = []
-        if case let .array(rawEvents)? = evidence["events"] {
-            for case let .object(event) in rawEvents {
-                guard case let .string(type)? = event["type"], case let .string(at)? = event["at"] else { continue }
-                trail.append(AuditEvent(type: type, at: at, ip: string(event["ip"])))
-            }
-        }
-        if let signedAt = nonEmpty(approval.consentAt) {
-            trail.append(AuditEvent(type: "signed", at: signedAt, ip: approval.ip))
-        }
-        return .signed(SignedApproval(
+        return .claimedSignature(ClaimedSignature(
             recordID: recordID,
-            recordDigest: nonEmpty(approval.recordDigest),
-            signerName: approval.signerName ?? "",
-            signedAt: nonEmpty(approval.consentAt),
-            method: nonEmpty(approval.signatureMethod),
-            ip: nonEmpty(approval.ip),
-            userAgent: nonEmpty(approval.userAgent),
-            consentVersion: double(evidence["consentVersion"]).map { Int($0) },
-            drawing: Drawing(json: evidence["drawn"]),
-            trail: orderedTrail(trail)
+            signerName: nonEmpty(approval.signerName),
+            approvedAt: nonEmpty(approval.consentAt)
         ))
     }
 
@@ -344,6 +421,78 @@ enum NativeESignature {
             return .recordedByOwner(decision: manual.decision, decidedAt: manual.decidedAt)
         }
         return evidence(for: order.approval)
+    }
+
+    // MARK: - Confirming a claimed signature (§11.11)
+
+    /// The answer of `POST /api/esign/record` for one claimed record.
+    enum RecordCheck: Equatable, Sendable {
+        case found(SealedRecord)
+        /// 404: the Worker holds no signature for this approval.
+        case notFound
+        /// 503 `record_pending`: the Worker holds it but it isn't sealed yet.
+        case pending
+        /// Anything else (offline, session, unexpected answer): not checked.
+        case failed(String)
+    }
+
+    enum SignatureConfirmation: Equatable, Sendable {
+        /// Not checked yet, or being checked.
+        case unconfirmed
+        case confirmed(SignedApproval)
+        case sealing
+        /// Downgraded: no Worker-held signature exists for this approval.
+        case noRecord
+        /// The check failed; still unconfirmed, with the reason.
+        case unverifiable(String)
+
+        var isConfirmed: Bool {
+            if case .confirmed = self { return true }
+            return false
+        }
+    }
+
+    static let unconfirmedLabel = "Signature record not confirmed yet"
+    static let sealingLabel = "Signature record still being sealed"
+    static let noRecordLabel = "No signature record found for this approval"
+    static let unverifiableLabel = "Couldn’t check the signature record"
+
+    /// The confirmation a check yields for a claim. Only a sealed record with
+    /// the claimed id confirms; anything else leaves the approval unconfirmed
+    /// or downgrades it.
+    static func confirmation(for claim: ClaimedSignature, check: RecordCheck) -> SignatureConfirmation {
+        switch check {
+        case let .found(sealed):
+            guard sealed.recordID == claim.recordID else {
+                return .unverifiable("The signature service returned a different record.")
+            }
+            return .confirmed(SignedApproval(sealed: sealed))
+        case .notFound: return .noRecord
+        case .pending: return .sealing
+        case let .failed(reason): return .unverifiable(reason)
+        }
+    }
+
+    /// The status line for an approval that isn't confirmed.
+    static func statusLabel(_ confirmation: SignatureConfirmation) -> String? {
+        switch confirmation {
+        case .confirmed: nil
+        case .unconfirmed: unconfirmedLabel
+        case .sealing: sealingLabel
+        case .noRecord: noRecordLabel
+        case .unverifiable: unverifiableLabel
+        }
+    }
+
+    /// The explanation under that status line.
+    static func statusDetail(_ confirmation: SignatureConfirmation) -> String? {
+        switch confirmation {
+        case .confirmed: nil
+        case .unconfirmed: "Checking with TradeReady…"
+        case .sealing: "The customer’s signature was received and will be sealed shortly. Check again in a few minutes."
+        case .noRecord: "TradeReady holds no signed record for this approval, so treat it as an approval without a signature record."
+        case let .unverifiable(reason): reason
+        }
     }
 
     // MARK: - Display

@@ -120,9 +120,12 @@ function rowMatches(u, r) {
 // one, which most tests use. Inserts with `resolution=ignore-duplicates`
 // dedupe on exactly the `on_conflict` columns the Worker names, so a test
 // sees the uniqueness the code relies on.
+// `onPatch(db, jobId)` runs before each conditional job write (a concurrent
+// writer: a device push, another signer). A job read honors `deleted=eq.false`
+// only when the query carries it (the esign store reads soft-deleted rows).
 function installBackend(initialRow, {
   failRecordInsert = 0, failPendingInsert = 0, failResend = false, failEventsRead = false, authUser = OWNER,
-  authUsers = null, extraJobs = [],
+  authUsers = null, extraJobs = [], onPatch = null,
 } = {}) {
   const db = {
     jobs: {},
@@ -168,8 +171,10 @@ function installBackend(initialRow, {
     }
     if (u.pathname === '/rest/v1/jobs') {
       const id = eqParam(u, 'id');
+      if (method === 'PATCH' && onPatch) await onPatch(db, id);
       const job = id === undefined ? null : db.jobs[id];
-      const live = job && !job.deleted && (eqParam(u, 'user_id') === undefined || eqParam(u, 'user_id') === job.user_id);
+      const live = job && (eqParam(u, 'deleted') !== 'false' || !job.deleted)
+        && (eqParam(u, 'user_id') === undefined || eqParam(u, 'user_id') === job.user_id);
       if (method === 'GET') return jsonRes(live ? [clone(job)] : []);
       if (method === 'PATCH') {
         if (!live || eqParam(u, 'updated_at') !== job.updated_at) return jsonRes([]);
@@ -288,11 +293,16 @@ describe('respond: approve with consent writes the decision, then the sealed rec
         { type: 'viewed', at: '2026-10-03T17:59:00.000Z', ip: EDGE_IP },
       ],
     });
-    // The job write happened before the record insert.
+    // Evidence first (§11.11): the pending row, then the job write, then the
+    // sealed record.
+    const pendingIdx = db.calls.indexOf('POST /rest/v1/signature_pending');
     const writeIdx = db.calls.indexOf('PATCH /rest/v1/jobs');
     const insertIdx = db.calls.indexOf('POST /rest/v1/signature_records');
-    expect(writeIdx).toBeGreaterThan(-1);
+    expect(pendingIdx).toBeGreaterThan(-1);
+    expect(writeIdx).toBeGreaterThan(pendingIdx);
     expect(insertIdx).toBeGreaterThan(writeIdx);
+    expect(db.pending).toHaveLength(1);
+    expect(db.pending[0]).toMatchObject({ id: a.signatureRecordId, record_digest: a.recordDigest });
     expect(db.records).toHaveLength(1);
     const row = db.records[0];
     expect(row).toMatchObject({
@@ -727,6 +737,8 @@ describe('POST /api/esign/record (owner)', () => {
     expect((await esignRecordHandler(ownerC({ jobId: 'job-1' }, { authorization: 'Bearer bad' }))).status).toBe(401);
     expect((await esignRecordHandler(ownerC({}))).body).toMatchObject({ code: 'invalid_request' });
     expect((await esignRecordHandler(ownerC({ jobId: 'job-1', recordId: 'x' }))).status).toBe(400);
+    // §11.11: recordId is required (the app always sends approval.signatureRecordId).
+    expect((await esignRecordHandler(ownerC({ jobId: 'job-1' }))).body).toMatchObject({ code: 'invalid_request' });
     expect((await esignRecordHandler(fakeC({ method: 'GET' }))).status).toBe(405);
   });
 
@@ -747,19 +759,21 @@ describe('POST /api/esign/record (owner)', () => {
 
   test("another owner's job is not found; a legacy approval is not found", async () => {
     const db = installBackend(jobRow(), { authUser: '99999999-2222-4333-8444-555555555555' });
-    db.records.push({ id: 'r', user_id: OWNER, job_id: 'job-1', change_order_id: null, record: {} });
-    expect((await esignRecordHandler(ownerC({ jobId: 'job-1' }))).body.code).toBe('record_not_found');
+    const rid = '0a0a0a0a-1111-4222-8333-444455556666';
+    db.records.push({ id: rid, user_id: OWNER, job_id: 'job-1', change_order_id: null, record: {} });
+    expect((await esignRecordHandler(ownerC({ jobId: 'job-1', recordId: rid }))).body.code).toBe('record_not_found');
     installBackend(jobRow({ approval: { decision: 'approved', signerName: 'Pat', consentAt: 'x' } }));
-    expect((await esignRecordHandler(ownerC({ jobId: 'job-1' }))).status).toBe(404);
+    expect((await esignRecordHandler(ownerC({ jobId: 'job-1', recordId: rid }))).status).toBe(404);
   });
 
   test('lazily seals a pending record from the owner job; 503 while it cannot', async () => {
     const db = installBackend(jobRow(), { failRecordInsert: 2 });
     await respond(db, approveBody(db));
     expect(db.records).toHaveLength(0);
-    const pending = await esignRecordHandler(ownerC({ jobId: 'job-1' }));
+    const recordId = db.job.data.approval.signatureRecordId;
+    const pending = await esignRecordHandler(ownerC({ jobId: 'job-1', recordId }));
     expect([pending.status, pending.body.code]).toEqual([503, 'record_pending']);
-    const res = await esignRecordHandler(ownerC({ jobId: 'job-1' }));
+    const res = await esignRecordHandler(ownerC({ jobId: 'job-1', recordId }));
     expect(res.status).toBe(200);
     expect(db.records).toHaveLength(1);
     expect(res.body.recordDigest).toBe(db.job.data.approval.recordDigest);
@@ -782,19 +796,16 @@ const TOKEN_X = 'tok_other_link_0123456789';
 // module): a backdated "customer" signature with a made-up IP, user agent and
 // trail, and a recordDigest that matches it exactly.
 function forgeApproval({ token = TOKEN, snapshot = esignSnapshot(), jobId = 'job-1', changeOrderId = null, documentType = 'estimate' } = {}) {
-  const { signApproval, recordFromApproval, recordDigest } = require('../backend-workers/lib/esign/record.js');
-  const merged = {
-    token, sentAt: '2026-09-01T12:00:00.000Z', snapshot,
-    decision: 'approved', consentAt: '2026-09-01T15:00:00.000Z', signerName: 'Pat Lee',
-    ip: '192.0.2.77', userAgent: 'Mozilla/5.0 (forged)',
-  };
+  const { signApproval, recordDigest } = require('../backend-workers/lib/esign/record.js');
+  const merged = { token, sentAt: '2026-09-01T12:00:00.000Z', snapshot, decision: 'approved' };
   const forged = signApproval(merged, {
-    recordId: '0f0f0f0f-1111-4222-8333-444455556666', consent: { version: 1 }, drawn: DRAWN, email: null,
+    recordId: '0f0f0f0f-1111-4222-8333-444455556666', consentVersion: 1, drawn: DRAWN, email: null,
     events: [{ type: 'link_created', at: '2026-09-01T12:00:00.000Z', actor: 'owner' }, { type: 'viewed', at: '2026-09-01T14:00:00.000Z', ip: '192.0.2.77' }],
-    jobId, changeOrderId, documentType,
+    jobId, changeOrderId, documentType, token, snapshot, signedAt: '2026-09-01T15:00:00.000Z', typedName: 'Pat Lee',
+    ip: '192.0.2.77', userAgent: 'Mozilla/5.0 (forged)',
   });
-  // The forgery is internally consistent: the old lazy seal would accept it.
-  expect(recordDigest(recordFromApproval({ approval: forged.approval, jobId, changeOrderId, documentType }))).toBe(forged.approval.recordDigest);
+  // The forgery is internally consistent: its digest matches its record.
+  expect(recordDigest(forged.record)).toBe(forged.approval.recordDigest);
   return forged.approval;
 }
 
@@ -822,8 +833,9 @@ describe('security: an owner-authored approval is never sealed', () => {
       expect([copy.status, copy.body.code]).toEqual([404, 'not_signed']);
       const json = await esignCopyHandler(fakeC({ query: { j: 'job-1', t: TOKEN, format: 'json' } }));
       expect(json.status).toBe(404);
+      // recordId is required since §11.11; the pinned lookup below is the 404.
       const owner = await esignRecordHandler(ownerC({ jobId: 'job-1' }));
-      expect([owner.status, owner.body.code]).toEqual([404, 'record_not_found']);
+      expect([owner.status, owner.body.code]).toEqual([400, 'invalid_request']);
       const pinned = await esignRecordHandler(ownerC({ jobId: 'job-1', recordId: approval.signatureRecordId }));
       expect(pinned.status).toBe(404);
 
@@ -842,7 +854,7 @@ describe('security: an owner-authored approval is never sealed', () => {
     await c.flush();
     expect(view.body.signed).toBeUndefined();
     expect((await esignCopyHandler(fakeC({ query: { j: 'job-1', t: CO_TOKEN, c: 'co-1' } }))).status).toBe(404);
-    expect((await esignRecordHandler(ownerC({ jobId: 'job-1', changeOrderId: 'co-1' }))).status).toBe(404);
+    expect((await esignRecordHandler(ownerC({ jobId: 'job-1', changeOrderId: 'co-1', recordId: approval.signatureRecordId }))).status).toBe(404);
     expect(db.records).toHaveLength(0);
     expect(db.recordInserts).toBe(0);
   });
@@ -927,22 +939,29 @@ describe('security: genuine lazy sealing reads the Worker-held evidence, not the
     await c0.flush();
     expect(res.body.recordPending).toBe(true);
     expect(db.pending[0]).toMatchObject({ change_order_id: 'co-1', document_type: 'change_order' });
-    const owner = await esignRecordHandler(fakeC({ method: 'POST', body: { jobId: 'job-1', changeOrderId: 'co-1' }, headers: { authorization: 'Bearer good' } }));
+    const owner = await esignRecordHandler(fakeC({ method: 'POST', body: { jobId: 'job-1', changeOrderId: 'co-1', recordId: res.body.recordId }, headers: { authorization: 'Bearer good' } }));
     expect(owner.status).toBe(200);
     expect(owner.body).toMatchObject({ recordId: res.body.recordId, recordDigest: res.body.recordDigest, changeOrderId: 'co-1' });
     expect(db.records).toHaveLength(1);
   });
 
-  test('if the pending copy cannot be stored either, nothing is ever sealed from the blob', async () => {
+  test('if the evidence cannot be stored, the decision is not accepted (retryable 503); nothing is sealed from the blob', async () => {
+    // §11.11 (review P2a): formerly the decision stood with `recordPending:
+    // true` and no evidence anywhere. Now the pending row comes first.
     const db = installBackend(jobRow(), { failRecordInsert: 1, failPendingInsert: 1 });
     const res = await respond(db, approveBody(db));
-    expect(res.status).toBe(200);
-    expect(res.body.recordPending).toBe(true);
-    expect(db.job.data.approval.decision).toBe('approved');
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ error: expect.stringMatching(/nothing was signed/), code: 'signature_not_recorded' });
+    expect(res.body.recordId).toBeUndefined();
+    expect(db.jobWrites).toHaveLength(0);
+    expect(db.job.data.approval.decision).toBeUndefined();
+    expect(db.events.map((e) => e.event)).not.toContain('signed');
+    expect(db.emails).toHaveLength(0);
     const c = fakeC({ query: { j: 'job-1', t: TOKEN }, env: V2 });
     const view = await estimateViewHandler(c);
     await c.flush();
     expect(view.body.signed).toBeUndefined();
+    expect(view.body.esign).toBeDefined();
     expect(db.records).toHaveLength(0);
   });
 });
@@ -972,10 +991,13 @@ describe('security: link lookups are bound to the owner, job and change order', 
     const theirCopy = await esignCopyHandler(fakeC({ query: { j: 'job-b', t: TOKEN, format: 'json' } }));
     expect(theirCopy.body.recordId).toBe(b.body.recordId);
 
-    const mine = await esignRecordHandler(fakeC({ method: 'POST', body: { jobId: 'job-1' }, headers: { authorization: 'Bearer good' } }));
+    const mine = await esignRecordHandler(fakeC({ method: 'POST', body: { jobId: 'job-1', recordId: a.body.recordId }, headers: { authorization: 'Bearer good' } }));
     expect(mine.body.recordId).toBe(a.body.recordId);
     expect(mine.body.events.map((e) => e.type)).toEqual(['viewed', 'signed', 'copy_emailed', 'copy_downloaded']);
-    const other = await esignRecordHandler(fakeC({ method: 'POST', body: { jobId: 'job-b' }, headers: { authorization: 'Bearer other' } }));
+    const other = await esignRecordHandler(fakeC({ method: 'POST', body: { jobId: 'job-b', recordId: b.body.recordId }, headers: { authorization: 'Bearer other' } }));
+    // Neither owner reaches the other's record, even with its id.
+    const cross = await esignRecordHandler(fakeC({ method: 'POST', body: { jobId: 'job-1', recordId: a.body.recordId }, headers: { authorization: 'Bearer other' } }));
+    expect(cross.status).toBe(404);
     expect(other.body.recordId).toBe(b.body.recordId);
     expect(other.body.events.map((e) => e.type)).toEqual(['signed', 'copy_emailed', 'copy_downloaded']);
     expect(JSON.stringify(other.body)).not.toContain(EDGE_IP);
@@ -1007,5 +1029,239 @@ describe('security: link lookups are bound to the owner, job and change order', 
       expect(e.job_id).toBe('job-1');
       expect(e.change_order_id).toBe(e.approval_token_sha256 === sha(CO_TOKEN) ? 'co-1' : null);
     }
+  });
+});
+
+// ── security review (2026-10-04): findings P1, P2a, P3 (spec §11.11) ─────
+
+// What an owner can PATCH into a pending approval: the public view hides
+// `selection` until approval, so the customer sees $1,500 and signs.
+const PLANTED_SELECTION = {
+  tierId: 'premium', tierName: 'Premium package', addOnIds: [], addOns: [],
+  lineItems: [{ label: 'Everything included', amount: 50000 }], total: 50000,
+};
+
+function pdfText(bytes) {
+  return Buffer.from(bytes).toString('latin1');
+}
+
+describe('review P1: an owner-planted selection is never sealed or printed as the customer\'s choice', () => {
+  const ownerC = (body) => fakeC({ method: 'POST', body, headers: { authorization: 'Bearer good' } });
+
+  test('estimate without options: the signed record, PDF, stored approval and response carry no selection', async () => {
+    const db = installBackend(jobRow({ approval: { selection: clone(PLANTED_SELECTION) } }));
+    // The customer's view before signing does not show it.
+    const before = await estimateViewHandler(fakeC({ query: { j: 'job-1', t: TOKEN }, env: V2 }));
+    expect(before.body.selection).toBeUndefined();
+    expect(before.body.total).toBe(1500);
+
+    const res = await respond(db, approveBody(db));
+    expect(res.status).toBe(200);
+    expect(res.body.selection).toBeUndefined();
+    const a = db.job.data.approval;
+    expect(a).not.toHaveProperty('selection');
+    expect(db.pending[0].record.selection).toBeNull();
+    expect(db.records[0].record.selection).toBeNull();
+    expect(JSON.stringify(db.records[0].record)).not.toContain('50000');
+
+    const pdf = await esignCopyHandler(fakeC({ query: { j: 'job-1', t: TOKEN } }));
+    expect(pdf.status).toBe(200);
+    expect(pdfText(pdf.body)).not.toMatch(/Chosen option|50,000|Everything included/);
+    expect(pdfText(pdf.body)).toContain('$1,500');
+    const emailed = pdfText(Buffer.from(db.emails[0].attachments[0].content, 'base64'));
+    expect(emailed).not.toMatch(/Chosen option|50,000/);
+    const owner = await esignRecordHandler(ownerC({ jobId: 'job-1', recordId: res.body.recordId }));
+    expect(owner.body.record.selection).toBeNull();
+    expect(pdfText(Buffer.from(owner.body.pdf.base64, 'base64'))).not.toMatch(/Chosen option|50,000/);
+    // And the signed page shows no selection either.
+    const after = await estimateViewHandler(fakeC({ query: { j: 'job-1', t: TOKEN }, env: V2 }));
+    expect(after.body.selection).toBeUndefined();
+  });
+
+  test('change order: a planted selection is not sealed, stored or printed', async () => {
+    const co = changeOrder();
+    co.approval.selection = clone(PLANTED_SELECTION);
+    const db = installBackend(jobRow({ changeOrders: [co] }));
+    const c = fakeC({ method: 'POST', env: V2, body: {
+      jobId: 'job-1', changeOrderId: 'co-1', token: CO_TOKEN, decision: 'approved', signerName: 'Pat Lee',
+      snapshotDigest: snapshotDigest(coSnapshot()), consent: { accepted: true, version: 1 },
+    } });
+    const res = await changeRespondHandler(c);
+    await c.flush();
+    expect(res.status).toBe(200);
+    expect(db.job.data.changeOrders[0].approval).not.toHaveProperty('selection');
+    expect(db.records[0].record.selection).toBeNull();
+    const pdf = await esignCopyHandler(fakeC({ query: { j: 'job-1', t: CO_TOKEN, c: 'co-1' } }));
+    expect(pdfText(pdf.body)).not.toMatch(/Chosen option|50,000|Everything included/);
+    expect(pdfText(pdf.body)).toContain('$450');
+  });
+
+  test('options estimate: only the choice the server resolved is sealed, never the planted one', async () => {
+    const options = {
+      tiers: [
+        { id: 'good', name: 'Good', lineItems: [{ label: 'Labor', amount: 300 }], total: 300 },
+        { id: 'premium', name: 'Premium', lineItems: [{ label: 'Labor', amount: 500 }], total: 500 },
+      ],
+      addOns: [],
+      recommendedTierId: 'good',
+    };
+    const db = installBackend(jobRow({ snapshot: esignSnapshot({ options }), approval: { selection: clone(PLANTED_SELECTION) } }));
+    const res = await respond(db, approveBody(db, { selection: { tierId: 'good', addOnIds: [] } }));
+    expect(res.status).toBe(200);
+    expect(res.body.selection).toMatchObject({ tierId: 'good', total: 300 });
+    expect(db.records[0].record.selection).toMatchObject({ tierId: 'good', total: 300 });
+    expect(db.job.data.approval.selection).toEqual(db.records[0].record.selection);
+    const pdf = pdfText((await esignCopyHandler(fakeC({ query: { j: 'job-1', t: TOKEN } }))).body);
+    expect(pdf).toContain('Chosen option: Good');
+    expect(pdf).not.toMatch(/50,000|Everything included/);
+  });
+
+  test('flags off: a new decision drops planted selection and signature keys (no blob-only "signature")', async () => {
+    const planted = {
+      selection: clone(PLANTED_SELECTION), signatureRecordId: '0f0f0f0f-1111-4222-8333-444455556666',
+      recordDigest: 'f'.repeat(64), signatureMethod: 'typed_drawn', signatureEvidence: { v: 1, events: [] },
+    };
+    const db = installBackend(jobRow({ approval: planted }));
+    const res = await respond(db, approveBody(db), {});
+    expect(res.body).toEqual({ ok: true, decision: 'approved', consentAt: new Date(NOW).toISOString() });
+    const a = db.job.data.approval;
+    for (const k of Object.keys(planted)) expect(a).not.toHaveProperty(k);
+  });
+});
+
+describe('review P2a: evidence is stored before the decision, and only a landed decision\'s evidence is sealed', () => {
+  test('a failed evidence store refuses the decision; the retry signs and seals normally', async () => {
+    const db = installBackend(jobRow(), { failPendingInsert: 1 });
+    const first = await respond(db, approveBody(db));
+    expect([first.status, first.body.code]).toEqual([503, 'signature_not_recorded']);
+    expect(db.jobWrites).toHaveLength(0);
+    const second = await respond(db, approveBody(db));
+    expect(second.status).toBe(200);
+    expect(second.body.recordPending).toBeUndefined();
+    expect(db.records).toHaveLength(1);
+    expect(db.records[0].id).toBe(db.job.data.approval.signatureRecordId);
+  });
+
+  test('change order: a failed evidence store refuses the decision', async () => {
+    const db = installBackend(jobRow({ changeOrders: [changeOrder()] }), { failPendingInsert: 1 });
+    const c = fakeC({ method: 'POST', env: V2, body: {
+      jobId: 'job-1', changeOrderId: 'co-1', token: CO_TOKEN, decision: 'approved', signerName: 'Pat Lee',
+      snapshotDigest: snapshotDigest(coSnapshot()), consent: { accepted: true, version: 1 },
+    } });
+    const res = await changeRespondHandler(c);
+    expect([res.status, res.body.code]).toEqual([503, 'signature_not_recorded']);
+    expect(db.jobWrites).toHaveLength(0);
+    expect(db.job.data.changeOrders[0].approval.decision).toBeUndefined();
+  });
+
+  test('a decision that never landed leaves an orphan pending row that nothing ever seals', async () => {
+    // Every conditional write loses to a concurrent device push.
+    const db = installBackend(jobRow(), { onPatch: (d, id) => { d.version += 1; d.jobs[id].updated_at = `v${d.version}`; } });
+    const res = await respond(db, approveBody(db));
+    expect(res.status).toBe(409);
+    expect(db.job.data.approval.decision).toBeUndefined();
+    expect(db.pending).toHaveLength(1); // one row reused across the retried writes
+    const orphan = db.pending[0];
+
+    // The owner fakes an approval; they cannot know the orphan's id.
+    db.job.data.approval = { ...db.job.data.approval, ...forgeApproval() };
+    const ownerC = (body) => fakeC({ method: 'POST', body, headers: { authorization: 'Bearer good' } });
+    const view = await estimateViewHandler(fakeC({ query: { j: 'job-1', t: TOKEN }, env: V2 }));
+    expect(view.body.signed).toBeUndefined();
+    expect((await esignCopyHandler(fakeC({ query: { j: 'job-1', t: TOKEN } }))).status).toBe(404);
+    expect((await esignRecordHandler(ownerC({ jobId: 'job-1', recordId: db.job.data.approval.signatureRecordId }))).status).toBe(404);
+    expect(db.records).toHaveLength(0);
+    expect(db.calls.filter((x) => x === 'POST /rest/v1/signature_records')).toHaveLength(0);
+    expect(orphan.id).not.toBe(db.job.data.approval.signatureRecordId);
+  });
+
+  test('two customers sign at once: one decision lands, only its evidence is sealed, the other answer echoes it', async () => {
+    let raced = false;
+    let other = null;
+    const db = installBackend(jobRow(), {
+      onPatch: async (d) => {
+        if (raced) return;
+        raced = true;
+        other = await respond(d, approveBody(d, { signerName: 'Second Signer' }));
+      },
+    });
+    const first = await respond(db, approveBody(db));
+    expect(other.status).toBe(200);
+    expect(first.status).toBe(200);
+    // The second request's decision landed first; the first hit the lock.
+    expect(db.jobWrites).toHaveLength(1);
+    expect(db.job.data.approval.signerName).toBe('Second Signer');
+    expect(first.body.recordId).toBe(other.body.recordId);
+    expect(first.body.recordDigest).toBe(other.body.recordDigest);
+    expect(db.pending).toHaveLength(2);
+    expect(db.records).toHaveLength(1);
+    expect(db.records[0].id).toBe(other.body.recordId);
+    expect(db.records[0].record.signer.typedName).toBe('Second Signer');
+    // The loser's pending row is never sealed, by any route.
+    const view = await estimateViewHandler(fakeC({ query: { j: 'job-1', t: TOKEN }, env: V2 }));
+    expect(view.body.signed.recordId).toBe(other.body.recordId);
+    expect(db.records).toHaveLength(1);
+  });
+
+  test('the retried write of one request reuses its pending row; a changed record gets a new id', async () => {
+    let pushes = 0;
+    const db = installBackend(jobRow(), { onPatch: (d, id) => {
+      if (pushes >= 1) return;
+      pushes += 1;
+      d.version += 1;
+      d.jobs[id].updated_at = `v${d.version}`;
+    } });
+    const res = await respond(db, approveBody(db));
+    expect(res.status).toBe(200);
+    expect(db.pending).toHaveLength(1);
+    expect(db.pending[0].id).toBe(res.body.recordId);
+    expect(db.records[0].id).toBe(res.body.recordId);
+  });
+});
+
+describe('review P3: the link slot, the locked echo and the owner route', () => {
+  test('a DIFFERENT record already holding the link slot is not "stored": the signature stays pending and the conflict is logged', async () => {
+    const db = installBackend(jobRow());
+    const squatter = { id: '0e0e0e0e-1111-4222-8333-444455556666', user_id: OWNER, approval_token_sha256: sha(TOKEN), job_id: 'job-1', change_order_id: null, document_type: 'estimate', record: { recordVersion: 1 }, record_digest: 'e'.repeat(64), seal_alg: 'Ed25519', seal_key_id: 'k-test', seal: 'x', signed_at: '2026-10-01T00:00:00Z' };
+    db.records.push(squatter);
+    const res = await respond(db, approveBody(db));
+    expect(res.status).toBe(200);
+    expect(res.body.recordPending).toBe(true);
+    expect(res.body.recordId).toBe(db.job.data.approval.signatureRecordId);
+    expect(res.body.recordId).not.toBe(squatter.id);
+    expect(db.records).toEqual([squatter]);
+    expect(console.error).toHaveBeenCalledWith(expect.stringMatching(/different record already holds this link/));
+    // Its own pending row is still the Worker-held evidence for the page.
+    const view = await estimateViewHandler(fakeC({ query: { j: 'job-1', t: TOKEN }, env: V2 }));
+    expect(view.body.signed).toMatchObject({ recordId: res.body.recordId, recordPending: true });
+  });
+
+  test('under the approved lock the response echoes the Worker-held record, never the blob\'s keys', async () => {
+    const db = installBackend(jobRow());
+    const first = await respond(db, approveBody(db));
+    db.job.data.approval.recordDigest = 'f'.repeat(64);
+    db.job.data.approval.signatureMethod = 'typed';
+    const again = await respond(db, approveBody(db));
+    expect(again.body).toMatchObject({ recordId: first.body.recordId, recordDigest: first.body.recordDigest, signatureMethod: 'typed_drawn' });
+  });
+
+  test('a forged approved blob gets no recordId echoed under the lock', async () => {
+    const db = installBackend(jobRow());
+    db.job.data.approval = { ...db.job.data.approval, ...forgeApproval() };
+    const res = await respond(db, approveBody(db));
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, decision: 'approved', consentAt: '2026-09-01T15:00:00.000Z' });
+  });
+
+  test('change order under the lock: the same, from the record', async () => {
+    const db = installBackend(jobRow({ changeOrders: [changeOrder()] }));
+    const body = {
+      jobId: 'job-1', changeOrderId: 'co-1', token: CO_TOKEN, decision: 'approved', signerName: 'Pat Lee',
+      snapshotDigest: snapshotDigest(coSnapshot()), consent: { accepted: true, version: 1 },
+    };
+    const first = await changeRespondHandler(fakeC({ method: 'POST', env: V2, body }));
+    db.job.data.changeOrders[0].approval.recordDigest = 'f'.repeat(64);
+    const again = await changeRespondHandler(fakeC({ method: 'POST', env: V2, body }));
+    expect(again.body.recordDigest).toBe(first.body.recordDigest);
   });
 });

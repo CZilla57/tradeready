@@ -46,7 +46,8 @@ enum NativeESignatureRecordError: LocalizedError, Equatable {
 }
 
 /// One signed record as the owner app uses it: the fingerprint, the live
-/// audit trail and the signed PDF's bytes.
+/// audit trail, the signature as sealed (spec §11.11: the only source the app
+/// shows a signature from) and the signed PDF's bytes.
 struct NativeSignedRecord: Equatable, Sendable {
     let recordID: String
     let recordDigest: String
@@ -57,6 +58,8 @@ struct NativeSignedRecord: Equatable, Sendable {
     /// The live event log for the link, oldest first (unsealed; includes
     /// later copy downloads and emails).
     let events: [NativeESignature.AuditEvent]
+    /// Read from the sealed canonical record the route returned.
+    let sealed: NativeESignature.SealedRecord
     let pdfFilename: String
     let pdfData: Data
 }
@@ -112,6 +115,7 @@ struct NativeESignatureRecordService: NativeESignatureRecordFetching {
         let signedAt: String
         let signatureMethod: String?
         let seal: Seal?
+        let record: Canonical.JSONValue
         let events: [Event]?
         let pdf: PDF
     }
@@ -180,6 +184,14 @@ struct NativeESignatureRecordService: NativeESignatureRecordFetching {
             guard let at = event.at, !event.type.isEmpty else { return nil }
             return NativeESignature.AuditEvent(type: event.type, at: at, ip: event.ip)
         }
+        let ordered = NativeESignature.orderedTrail(events)
+        guard let sealed = NativeESignature.sealedRecord(
+            recordID: decoded.recordId,
+            recordDigest: decoded.recordDigest,
+            sealKeyID: decoded.seal?.keyId,
+            record: decoded.record,
+            liveEvents: ordered
+        ) else { throw NativeESignatureRecordError.invalidResponse }
         return NativeSignedRecord(
             recordID: decoded.recordId,
             recordDigest: decoded.recordDigest,
@@ -187,7 +199,8 @@ struct NativeESignatureRecordService: NativeESignatureRecordFetching {
             signedAt: decoded.signedAt,
             signatureMethod: decoded.signatureMethod,
             sealKeyID: decoded.seal?.keyId,
-            events: NativeESignature.orderedTrail(events),
+            events: ordered,
+            sealed: sealed,
             pdfFilename: Self.safeFilename(decoded.pdf.filename, documentType: decoded.documentType),
             pdfData: pdfData
         )

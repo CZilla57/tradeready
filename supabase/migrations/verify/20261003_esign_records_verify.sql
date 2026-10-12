@@ -13,8 +13,9 @@
 -- (account deletion keeps deleting signature evidence, decision 19-Q6);
 -- the API roles cannot write, and cannot touch signature_pending at all;
 -- only SELECT policies exist and they scope to the owner; UPDATE raises on
--- all three; one record / pending row per link (token hash + job + change
--- order), the same token on another job is a different link (spec §11.10);
+-- all three; one record per link (token hash + job + change order), the
+-- same token on another job is a different link (spec §11.10); pending rows
+-- are unique per record id only, so one link can hold several (§11.11);
 -- preserve_job_approvals() freezes the four e-signature keys. The real cascade DELETE is exercised by the
 -- local harness supabase/verify/esign_records.sh (deleting an auth user is
 -- not something to do on the project).
@@ -87,7 +88,7 @@ begin
   raise notice 'ok 4. only SELECT policies; none on signature_pending';
 
   -- 5. Append-only: UPDATE raises on all three tables, for the table owner
-  -- too. One record and one pending row per link.
+  -- too. One record per link; pending rows unique per record id (§11.11).
   insert into public.signature_records
     (id, user_id, approval_token_sha256, job_id, change_order_id, document_type, record, record_digest, seal_key_id, seal, signed_at)
   values
@@ -124,14 +125,28 @@ begin
   exception when unique_violation then raised := true;
   end;
   if not raised then raise exception '5. a second record for the same link was accepted'; end if;
+  -- A second pending row for the same link (a decision that never landed,
+  -- then a retry) is accepted; the same record id twice is not, and the
+  -- Worker's on_conflict=id insert must infer the primary key.
+  insert into public.signature_pending
+    (id, user_id, approval_token_sha256, job_id, document_type, record, record_digest, signed_at)
+  values ('00000000-0000-4000-8000-0000000000e5', uid, tok, 'verify_esign_job', 'estimate', '{}', repeat('c', 64), now());
+  select count(*) into n from public.signature_pending where approval_token_sha256 = tok;
+  if n <> 2 then raise exception '5. expected two pending rows for one link, found %', n; end if;
   raised := false;
   begin
     insert into public.signature_pending
       (id, user_id, approval_token_sha256, job_id, document_type, record, record_digest, signed_at)
-    values (gen_random_uuid(), uid, tok, 'verify_esign_job', 'estimate', '{}', repeat('c', 64), now());
+    values ('00000000-0000-4000-8000-0000000000e5', uid, tok, 'verify_esign_job', 'estimate', '{}', repeat('d', 64), now());
   exception when unique_violation then raised := true;
   end;
-  if not raised then raise exception '5. a second pending row for the same link was accepted'; end if;
+  if not raised then raise exception '5. a second pending row with the same record id was accepted'; end if;
+  insert into public.signature_pending
+    (id, user_id, approval_token_sha256, job_id, document_type, record, record_digest, signed_at)
+  values ('00000000-0000-4000-8000-0000000000e5', uid, tok, 'verify_esign_job', 'estimate', '{}', repeat('d', 64), now())
+  on conflict (id) do nothing;
+  select count(*) into n from public.signature_pending where approval_token_sha256 = tok;
+  if n <> 2 then raise exception '5. on conflict (id) did not dedupe: % pending rows', n; end if;
   -- The Worker's PostgREST insert (resolution=ignore-duplicates on exactly
   -- these columns) must infer the constraint, null change_order_id included.
   insert into public.signature_records
@@ -161,7 +176,7 @@ begin
   exception when not_null_violation then raised := true;
   end;
   if not raised then raise exception '5. an event without job_id was accepted'; end if;
-  raise notice 'ok 5. UPDATE raises on all three tables; one record / pending row per link (token hash + job + change order); events name their job';
+  raise notice 'ok 5. UPDATE raises on all three tables; one record per link (token hash + job + change order); pending rows unique per record id; events name their job';
 
   -- 6. RLS scopes reads to the owner, and the owner cannot insert.
   perform set_config('request.jwt.claim.sub', uid::text, true);

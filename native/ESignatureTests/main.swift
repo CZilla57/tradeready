@@ -311,6 +311,31 @@ let signedApprovalJSON = """
              {"type":"viewed","at":"2026-10-03T14:01:00.000Z","ip":"198.51.100.4"}]}}
 """
 
+/// The sealed canonical record (spec §3.5) as `POST /api/esign/record`
+/// returns it. Deliberately different from `signedApprovalJSON`'s blob
+/// (signer, IP, user agent, trail) so a test can tell which one is shown.
+func sealedRecordJSON(
+    recordId: String = "3f0c1a2b-4c5d-4e6f-8a9b-0c1d2e3f4a5b",
+    typedName: String = "Pat Q. Lee",
+    consent: String = #"{"version":1,"text":"…","textSha256":"00","acceptedAt":"2026-10-03T14:05:09.000Z"}"#,
+    drawn: String = #"{"w":600,"h":200,"strokes":[[[0,0,0],[600,200,40]],[[300,100,90]]]}"#,
+    method: String = "typed_drawn",
+    events: String = """
+    [{"type":"viewed","at":"2026-10-03T14:01:00.000Z","ip":"203.0.113.9"},
+     {"type":"link_created","at":"2026-10-01T16:00:00.000Z","actor":"owner"},
+     {"type":"viewed","at":"2026-10-03T14:01:00.000Z","ip":"198.51.100.4"}]
+    """
+) -> String {
+    """
+    {"recordVersion":1,"recordId":"\(recordId)","documentType":"estimate","jobId":"job-1","changeOrderId":null,
+     "approvalTokenSha256":"00","document":{},"documentDigest":"00","selection":null,
+     "consent":\(consent),"intent":null,
+     "signer":{"typedName":"\(typedName)","drawn":\(drawn),"email":null},
+     "signatureMethod":"\(method)","signedAt":"2026-10-03T14:05:09.000Z","ip":"203.0.113.9",
+     "userAgent":"Mozilla/5.0 (Sealed)","context":"remote_link","events":\(events),"renderer":"pdf-v1"}
+    """
+}
+
 @MainActor
 func testApprovalDecode() throws {
     let legacy = try decode(Canonical.EstimateApproval.self, """
@@ -337,27 +362,90 @@ func testApprovalDecode() throws {
     expect(!CanonicalUIAdapters.estimateApprovalsMatch(signed, tampered), "decode: approvals compare the fingerprint")
     expect(CanonicalUIAdapters.estimateApprovalsMatch(signed, signed), "decode: an approval matches itself")
 
-    guard case let .signed(evidence)? = NativeESignature.evidence(for: signed) else {
-        expect(false, "evidence: a signed approval reads as signed"); return
+    // Review P2 (§11.11): the blob's signature keys are the owner's own
+    // writable copy. An approval that claims a signature is only a CLAIM:
+    // nothing from signatureEvidence, ip, userAgent or the stored fingerprint
+    // is read, and it is unconfirmed until the Worker returns the record.
+    expectEqual(NativeESignature.evidence(for: signed),
+                .claimedSignature(.init(recordID: "3f0c1a2b-4c5d-4e6f-8a9b-0c1d2e3f4a5b",
+                                        signerName: "Pat Lee", approvedAt: "2026-10-03T14:05:09.000Z")),
+                "evidence: a blob that claims a signature is a claim, not a signature")
+    guard case let .claimedSignature(claim)? = NativeESignature.evidence(for: signed) else {
+        expect(false, "evidence: a claimed signature reads as a claim"); return
+    }
+    expectEqual(NativeESignature.statusLabel(.unconfirmed), "Signature record not confirmed yet",
+                "evidence: an unchecked claim says it is unconfirmed")
+    expect(NativeESignature.statusLabel(.unconfirmed)?.hasPrefix("Signed by") == false,
+           "evidence: an unchecked claim never reads \"Signed by\"")
+
+    // A planted blob that the Worker holds no record for is downgraded.
+    expectEqual(NativeESignature.confirmation(for: claim, check: .notFound), .noRecord,
+                "confirm: no Worker-held record downgrades the claim")
+    expectEqual(NativeESignature.statusLabel(.noRecord), "No signature record found for this approval",
+                "confirm: and says so")
+    expectEqual(NativeESignature.confirmation(for: claim, check: .pending), .sealing, "confirm: 503 record_pending is sealing")
+    expectEqual(NativeESignature.confirmation(for: claim, check: .failed("offline")), .unverifiable("offline"),
+                "confirm: a failed check stays unconfirmed")
+    expect(!NativeESignature.confirmation(for: claim, check: .failed("offline")).isConfirmed, "confirm: not confirmed")
+
+    // Only the sealed record confirms, and everything shown comes from it,
+    // not from the blob (whose signer, IP and trail differ here).
+    guard let sealed = NativeESignature.sealedRecord(
+        recordID: "3f0c1a2b-4c5d-4e6f-8a9b-0c1d2e3f4a5b", recordDigest: String(repeating: "ef", count: 32),
+        sealKeyID: "k2026-10", record: try decode(Canonical.JSONValue.self, sealedRecordJSON()), liveEvents: []
+    ) else { expect(false, "confirm: the sealed record reads"); return }
+    guard case let .confirmed(evidence) = NativeESignature.confirmation(for: claim, check: .found(sealed)) else {
+        expect(false, "confirm: the matching sealed record confirms"); return
     }
     expectEqual(evidence.recordID, "3f0c1a2b-4c5d-4e6f-8a9b-0c1d2e3f4a5b", "evidence: record id")
-    expectEqual(evidence.signerName, "Pat Lee", "evidence: signer")
+    expectEqual(evidence.recordDigest, String(repeating: "ef", count: 32), "evidence: the fingerprint is the Worker's, not the blob's")
+    expectEqual(evidence.signerName, "Pat Q. Lee", "evidence: signer from the sealed record")
     expectEqual(evidence.consentVersion, 1, "evidence: consent version")
     expectEqual(evidence.methodLabel, "Typed name and drawn signature", "evidence: method label")
     expect(evidence.consentLabel.contains("version 1"), "evidence: consent label names the version")
-    expect(evidence.ip == nil && evidence.userAgent == "Mozilla/5.0 (iPhone)", "evidence: IP and user agent")
-    expect(evidence.drawing != nil, "evidence: the drawn mark is read from signatureEvidence")
+    expect(evidence.ip == "203.0.113.9" && evidence.userAgent == "Mozilla/5.0 (Sealed)", "evidence: IP and user agent from the record")
+    expect(evidence.drawing != nil, "evidence: the drawn mark is read from the sealed record")
     // Audit trail: sealed events + the signing, oldest first, ties in order.
     expectEqual(evidence.trail.map(\.type), ["link_created", "viewed", "viewed", "signed"], "trail: oldest first")
-    expectEqual(evidence.trail.map(\.ip), [nil, "203.0.113.9", "198.51.100.4", nil], "trail: equal times keep their order")
+    expectEqual(evidence.trail.map(\.ip), [nil, "203.0.113.9", "198.51.100.4", "203.0.113.9"], "trail: equal times keep their order")
     expectEqual(evidence.trail.first?.label, "Approval link created by you", "trail: owner event label")
+    // The live log, when the Worker sent one, is the trail shown.
+    let live = [NativeESignature.AuditEvent(type: "copy_downloaded", at: "2026-10-04T10:00:00.000Z"),
+                NativeESignature.AuditEvent(type: "signed", at: "2026-10-03T14:05:09.000Z")]
+    let withLive = NativeESignature.sealedRecord(
+        recordID: claim.recordID, recordDigest: digest, sealKeyID: nil,
+        record: try decode(Canonical.JSONValue.self, sealedRecordJSON()), liveEvents: live
+    )
+    expectEqual(withLive.map { NativeESignature.SignedApproval(sealed: $0).trail.map(\.type) }, ["signed", "copy_downloaded"],
+                "trail: the live log, oldest first")
 
-    var noConsent = signed
-    noConsent.preservation.unknownFields["signatureEvidence"] = .object(["v": .number(1), "consentVersion": .null, "drawn": .null, "events": .array([])])
-    noConsent.signatureMethod = "typed"
-    guard case let .signed(older)? = NativeESignature.evidence(for: noConsent) else {
-        expect(false, "evidence: an older-page signature still reads as signed"); return
+    // A different record never confirms the claim.
+    guard let other = NativeESignature.sealedRecord(
+        recordID: "11111111-2222-4333-8444-555555555555", recordDigest: digest, sealKeyID: nil,
+        record: try decode(Canonical.JSONValue.self, sealedRecordJSON(recordId: "11111111-2222-4333-8444-555555555555")),
+        liveEvents: []
+    ) else { expect(false, "confirm: the other record reads"); return }
+    expect(!NativeESignature.confirmation(for: claim, check: .found(other)).isConfirmed,
+           "confirm: another record id never confirms the claim")
+    // A record that isn't a full version-1 record with that id is refused.
+    for (label, text) in [
+        ("an id mismatch", sealedRecordJSON(recordId: "11111111-2222-4333-8444-555555555555")),
+        ("no typed name", sealedRecordJSON(typedName: "")),
+        ("another version", sealedRecordJSON().replacingOccurrences(of: #""recordVersion":1"#, with: #""recordVersion":2"#)),
+        ("a bare stub", #"{"recordVersion":1}"#),
+    ] {
+        let raw = try decode(Canonical.JSONValue.self, text)
+        expect(NativeESignature.sealedRecord(
+            recordID: claim.recordID, recordDigest: digest, sealKeyID: nil, record: raw, liveEvents: []
+        ) == nil, "sealed record: \(label) is refused")
     }
+
+    let typedOnly = NativeESignature.sealedRecord(
+        recordID: claim.recordID, recordDigest: digest, sealKeyID: nil,
+        record: try decode(Canonical.JSONValue.self, sealedRecordJSON(consent: "null", drawn: "null", method: "typed", events: "[]")),
+        liveEvents: []
+    ).map(NativeESignature.SignedApproval.init(sealed:))
+    guard let older = typedOnly else { expect(false, "evidence: an older-page record reads"); return }
     expect(older.consentVersion == nil && older.consentLabel.contains("older page"), "evidence: no consent step is said plainly")
     expect(older.drawing == nil && older.methodLabel == "Typed name", "evidence: typed only")
     expectEqual(older.trail.map(\.type), ["signed"], "evidence: the signing alone")
@@ -459,8 +547,8 @@ func testLegacyAndManualLabels() throws {
     let signedOrder = try decode(Canonical.ChangeOrder.self, """
     {"id":"co-3","title":"Sub-panel","amount":900,"createdAt":"2026-10-02","approval":\(signedApprovalJSON)}
     """)
-    guard case .signed? = NativeESignature.evidence(for: signedOrder) else {
-        expect(false, "labels: a change order signed through its link is signed"); return
+    guard case .claimedSignature? = NativeESignature.evidence(for: signedOrder) else {
+        expect(false, "labels: a change order signed through its link claims a signature"); return
     }
     let pending = try decode(Canonical.ChangeOrder.self, #"{"id":"co-4","title":"Pending","amount":10,"createdAt":"2026-10-02"}"#)
     expect(NativeESignature.evidence(for: pending) == nil, "labels: a pending change order shows nothing")
@@ -498,7 +586,7 @@ func recordBody(
     return Data("""
     {"recordId":"\(recordId)","recordDigest":"\(digest)","documentType":"\(documentType)","jobId":"\(jobId)","changeOrderId":\(co),
      "signedAt":"2026-10-03T14:05:09.000Z","signatureMethod":"typed","seal":{"alg":"Ed25519","keyId":"k2026-10","signature":"c2ln"},
-     "record":{"recordVersion":1},
+     "record":\(sealedRecordJSON(recordId: recordId)),
      "events":[{"type":"signed","at":"2026-10-03T14:05:09.000Z","ip":"203.0.113.9"},{"type":"link_created","at":"2026-10-01T16:00:00.000Z","ip":null},
                {"type":"copy_downloaded","at":"2026-10-03T15:00:00.000Z","ip":"203.0.113.9"}],
      "pdf":{"filename":"\(filename)","contentType":"application/pdf","base64":"\(pdf)"}}
@@ -526,6 +614,9 @@ func testTransport() async throws {
     expectEqual(record.pdfFilename, "signed-estimate-3f0c1a2b.pdf", "transport: the server filename")
     expect(record.pdfData.starts(with: Data("%PDF-".utf8)), "transport: the PDF bytes")
     expectEqual(record.sealKeyID, "k2026-10", "transport: the seal key id")
+    expectEqual(record.sealed.signerName, "Pat Q. Lee", "transport: the signer is read from the sealed record")
+    expectEqual(record.sealed.recordDigest, digest, "transport: the sealed view carries the route's fingerprint")
+    expectEqual(record.sealed.liveEvents, record.events, "transport: with the live log")
 
     loader.body = recordBody(changeOrderId: "co-1", documentType: "change_order")
     _ = try await service.fetchRecord(jobID: "job-1", changeOrderID: "co-1", recordID: recordID, sessionBytes: session)
@@ -564,6 +655,10 @@ func testTransport() async throws {
     expectEqual(await failure({ loader.body = recordBody(pdf: Data("<html>".utf8).base64EncodedString()) }),
                 .invalidResponse, "transport: a non-PDF body is refused")
     expectEqual(await failure({ loader.body = Data("{}".utf8) }), .invalidResponse, "transport: a malformed body is refused")
+    expectEqual(await failure({
+        loader.body = Data(String(decoding: recordBody(), as: UTF8.self)
+            .replacingOccurrences(of: #""recordId":"\#(recordID)","documentType""#, with: #""recordId":"11111111-2222-4333-8444-555555555555","documentType""#).utf8)
+    }), .invalidResponse, "transport: a sealed record naming another id is refused")
     expectEqual(await failure({}, sessionBytes: Data("{}".utf8)), .malformedSession, "transport: no session")
     expectEqual(await failure({}, service: NativeESignatureRecordService(
         endpoint: URL(string: "http://worker.example/api/esign/record")!, loader: loader
@@ -818,6 +913,59 @@ func testChangeOrderSnapshot() throws {
     expect(h.store.changeOrderESignProblem(jobID: job.id, changeOrderID: "missing") == nil, "co: an unknown order has no e-sign problem")
 }
 
+func testSealedRecord(recordId: String = recordID) -> NativeESignature.SealedRecord {
+    NativeESignature.sealedRecord(
+        recordID: recordId, recordDigest: digest, sealKeyID: "k2026-10",
+        record: (try? decode(Canonical.JSONValue.self, sealedRecordJSON(recordId: recordId))) ?? .null,
+        liveEvents: []
+    )!
+}
+
+/// Review P2 (§11.11): the app confirms a claimed signature only through
+/// the Worker; a 404 downgrades it, and only a found record is remembered.
+@MainActor
+func testSignatureCheck() async throws {
+    let h = StoreHarness(tag: "check")
+    defer { h.cleanup() }
+    func signedRecord(_ id: String = recordID) -> NativeSignedRecord {
+        NativeSignedRecord(
+            recordID: id, recordDigest: digest, documentType: "estimate", signedAt: "2026-10-03T14:05:09.000Z",
+            signatureMethod: "typed", sealKeyID: "k2026-10", events: [], sealed: testSealedRecord(recordId: id),
+            pdfFilename: "signed-estimate.pdf", pdfData: Data("%PDF-1.4\n".utf8)
+        )
+    }
+
+    h.records.results = [.failure(.notFound)]
+    expectEqual(await h.store.checkSignatureRecord(jobID: "job-1", changeOrderID: nil, recordID: recordID), .notFound,
+                "check: a blob-only claim the Worker never captured is not found")
+    h.records.results = [.failure(.pending)]
+    expectEqual(await h.store.checkSignatureRecord(jobID: "job-1", changeOrderID: nil, recordID: recordID), .pending,
+                "check: 503 record_pending")
+    h.records.results = [.failure(.unavailable)]
+    guard case .failed = await h.store.checkSignatureRecord(jobID: "job-1", changeOrderID: nil, recordID: recordID) else {
+        expect(false, "check: offline is a failed check"); return
+    }
+    expectEqual(h.records.calls.count, 3, "check: nothing is remembered until a record is found")
+
+    h.records.results = [.success(signedRecord())]
+    expectEqual(await h.store.checkSignatureRecord(jobID: "job-1", changeOrderID: "co-1", recordID: recordID),
+                .found(testSealedRecord()), "check: the Worker's sealed record")
+    expectEqual(h.records.calls.last?.changeOrderID, "co-1", "check: for that change order's record")
+    expectEqual(await h.store.checkSignatureRecord(jobID: "job-1", changeOrderID: "co-1", recordID: recordID),
+                .found(testSealedRecord()), "check: a found record is remembered")
+    expectEqual(h.records.calls.count, 4, "check: without asking again")
+    h.records.results = [.failure(.notFound)]
+    expectEqual(await h.store.checkSignatureRecord(jobID: "job-1", changeOrderID: nil, recordID: recordID), .notFound,
+                "check: the cache is per link (the estimate is asked separately)")
+
+    // The account changes mid-check: nothing is confirmed or remembered.
+    h.records.results = [.success(signedRecord())]
+    h.records.beforeReturn = { h.store.testSeedNativeSignedInOwner(subject: "another-subject", binding: StoreHarness.binding) }
+    guard case .failed = await h.store.checkSignatureRecord(jobID: "job-2", changeOrderID: nil, recordID: recordID) else {
+        expect(false, "check: an account switch mid-check confirms nothing"); return
+    }
+}
+
 @MainActor
 func testSignedCopy() async throws {
     let h = StoreHarness(tag: "copy")
@@ -826,6 +974,7 @@ func testSignedCopy() async throws {
         recordID: recordID, recordDigest: digest, documentType: "estimate", signedAt: "2026-10-03T14:05:09.000Z",
         signatureMethod: "typed", sealKeyID: "k2026-10",
         events: [.init(type: "signed", at: "2026-10-03T14:05:09.000Z", ip: "203.0.113.9")],
+        sealed: testSealedRecord(),
         pdfFilename: "signed-estimate-3f0c1a2b.pdf", pdfData: Data("%PDF-1.4\n".utf8)
     )
     h.records.results = [.success(record)]
@@ -871,6 +1020,7 @@ struct ESignatureTests {
         try await testReviewDraftAndLink()
         try testChangeOrderSnapshot()
         try await testSignedCopy()
+        try await testSignatureCheck()
         if failures == 0 {
             print("PASS: e-signature tests (\(checks) checks)")
         } else {

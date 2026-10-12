@@ -435,7 +435,7 @@ Request: headers `Authorization: Bearer <Supabase access token>`, `Content-Type:
 ```json
 { "jobId": "job-1", "changeOrderId": "co-1", "recordId": "3f0c…" }
 ```
-`jobId` required (string ≤ 200). `changeOrderId` optional (omit for the estimate). `recordId` optional; when given it must be the record of that job/change order (send `approval.signatureRecordId`); when omitted the newest record for that job/change order is returned.
+`jobId` required (string ≤ 200). `changeOrderId` optional (omit for the estimate). `recordId` **required** since §11.11 (send `approval.signatureRecordId`); it must be the record of that job/change order. *Superseded 2026-10-04 (§11.11):* it was optional, with "the newest record for that job/change order" as the fallback.
 
 200 response:
 ```json
@@ -456,7 +456,7 @@ Errors (all JSON `{error, code}`):
 
 | Status | `code` | When |
 |---|---|---|
-| 400 | `invalid_request` | missing/oversized `jobId`, non-string `changeOrderId`/`recordId` |
+| 400 | `invalid_request` | missing/oversized `jobId`, non-string `changeOrderId`, missing or malformed `recordId` |
 | 401 | `unauthorized` | no/invalid bearer token |
 | 404 | `record_not_found` | no Worker-held signature for that job/change order (legacy approval, declined, not signed, other owner's job, or an approval in the job blob that the Worker never captured) |
 | 405 | — | not POST (`{error: 'Method not allowed'}`) |
@@ -517,7 +517,7 @@ Pages (`tradeready-legal`, uncommitted): `esign.js` (new), `verify.html` (new), 
 #### 11.4 Page-facing contract (estimate.html / change.html ↔ Worker)
 
 - `GET /api/estimate/view` and `/change-view` add, when the e-signature path is active and the document isn't approved, `esign: {version: 1, disclosure: {version, title, intro, items: [{label, text}]}, disclosureText, checkboxLabel, disclosureLinkLabel, intent, approveLabel, drawPad}`. The snapshot's own `esign` marker is never passed through. After an e-signed approval they add `signed: {recordId, recordDigest, signatureMethod, signedAt, typedName, drawn, recordPending}` (no email, no IP). `change-view` adds `snapshotDigest` under `ESIGN_V2`.
-- `POST /api/estimate/respond` and `/change-respond` accept, on approve: `consent: {accepted: true, version: 1}`, `drawn` (11.1 B shape or `null`), `signerEmail` (string or `null`), plus the existing fields; the page always sends `snapshotDigest`. 200 adds `recordId`, `recordDigest`, `signatureMethod` and, when sealing failed, `recordPending: true`. New 400 `{error, code}` codes: `name_required`, `name_too_long`, `name_invalid`, `drawing_invalid`, `drawing_too_large`, `email_invalid`, `consent_required`, `consent_version_unknown`, `reload_required`. Change orders gain a 409 for a stale digest.
+- `POST /api/estimate/respond` and `/change-respond` accept, on approve: `consent: {accepted: true, version: 1}`, `drawn` (11.1 B shape or `null`), `signerEmail` (string or `null`), plus the existing fields; the page always sends `snapshotDigest`. 200 adds `recordId`, `recordDigest`, `signatureMethod` and, when sealing failed, `recordPending: true` (all from the Worker-held record, never the blob; §11.11). A 503 `{error, code: "signature_not_recorded"}` means the signature evidence could not be stored, so the decision was **not** written; the page shows `error` and the customer may retry (§11.11). New 400 `{error, code}` codes: `name_required`, `name_too_long`, `name_invalid`, `drawing_invalid`, `drawing_too_large`, `email_invalid`, `consent_required`, `consent_version_unknown`, `reload_required`. Change orders gain a 409 for a stale digest.
 
 #### 11.5 Uncommitted `tradeready-legal` edits (owner commits and publishes at stage C)
 
@@ -605,4 +605,30 @@ Rollback: set `ESIGN_V2` off and deploy; sealed records stay downloadable and ve
 
 **Superseded:** §3.5 step 4's "lazily seals from the stored approval" and "unique on `approvalTokenSha256`"; §4's token-hash-only unique constraint and token-only event index; 11.3 item 3's rationale for `signatureEvidence`; 11.1 B's description of it as re-seal input.
 
-**Residual.** If the seal, the record insert and the pending insert all fail (or the Worker dies between the decision write and them), the decision stands with no signature evidence: it is shown and served as unsigned, and the respond answer still says `recordPending: true`. The public `view` still echoes the blob's `decision` / `signerName` as the legacy banner always did; that is display, never a seal.
+**Residual.** If the seal, the record insert and the pending insert all fail (or the Worker dies between the decision write and them), the decision stands with no signature evidence: it is shown and served as unsigned, and the respond answer still says `recordPending: true`. The public `view` still echoes the blob's `decision` / `signerName` as the legacy banner always did; that is display, never a seal. *Closed 2026-10-04 (§11.11):* evidence is now stored before the decision, so this residual no longer exists.
+
+#### 11.11 Review fixes: seal only the customer's own selection; truthful record status (2026-10-04)
+
+From a review of `feat/esign`, fixed on `fix/esign-seal`. Nothing deployed or applied; the migration was edited in place (unapplied, no current users).
+
+**P1: an owner-planted `approval.selection` was sealed as the customer's choice.** The record builder read `selection` from the merged approval, and the decision merge kept whatever the blob held, so on a non-option estimate and on every change order an owner-written `selection` was sealed and printed ("Chosen option") as the customer's. Reproduced: a $5,000 document sealed with a $50,000 chosen option.
+- `lib/esign/record.js`: `recordFromApproval` is replaced by `buildRecord({…})` (the §3.5 name), which takes only explicit Worker-validated inputs (typed name, consent version, drawing, email, server clock, edge IP, user agent, trail, frozen snapshot, token) and never reads the stored approval. `sealedSelection` allows a selection only on an estimate whose snapshot has options, and only one that re-resolves against that snapshot to exactly the same value; anything else is `null` (change orders, non-option estimates) or a thrown programming error. `signApproval` copies every signature-bearing key on the stored approval from the record, so the two agree by construction.
+- `respond.js` passes only the selection it resolved from the request body; `changeRespond.js` passes `null`. `nextApproval` drops `selection` and the four server-owned keys from the stored approval on every new decision (flags off too), so a planted value cannot survive into a decision.
+- `pdf.js` prints "Chosen option" only for an estimate whose document offers options.
+
+**P2a: respond said `recordPending: true` when no evidence was stored.** Write order changed (amends §3.5 step 3–4 and D13): the record is built and stored in `signature_pending` **before** the conditional decision write. If that store fails, the decision is not written and respond / change-respond answer 503 `signature_not_recorded` (retryable). The decision then lands naming the pending row; a failed seal is retried lazily from that row. `recordPending: true` is therefore only ever said when the evidence is held. A retried write in the same request reuses its pending row while the record is unchanged and mints a new id when it changed. Pending rows whose decision never landed (a lost race, a refused retry) are never named by a landed decision and so never sealed: `ensureRecord` reads a pending row only by the record id the link's landed approved decision names (`landedRecordId`). The blob is read for that id only, never for the sealed bytes. Schema: `signature_pending` loses its per-link unique constraint (unique per record id; new link index), and the verify script and harness check that.
+
+**P2b: native showed "Signed by" from the blob.** `NativeESignature.evidence(for:)` now returns `.claimedSignature(recordID, signerName, approvedAt)` for an approval with `signatureRecordId` and reads nothing else from the blob (`signatureEvidence`, `ip`, `userAgent`, `recordDigest` are ignored). The approval card shows "Signature record not confirmed yet" with the decision's name and time ("Customer", "Approved"), asks `POST /api/esign/record` (`AppStore.checkSignatureRecord`), and shows "Signed by", the drawn mark, the trail, the fingerprint and "Signed copy" only from a sealed record whose `recordId` matches (`SignatureConfirmation.confirmed`). A 404 shows "No signature record found for this approval"; a 503 `record_pending` shows "still being sealed"; other failures stay unconfirmed with a "Check again" button. The transport now decodes the sealed `record` (`NativeESignature.sealedRecord`, version 1, matching id, typed name) and refuses a response without it. A found record is cached in memory per owner + link + record id.
+
+**P3.**
+- `sealAndStore`: a different record already holding the link's slot is `stored: false, conflict: true` (logged), not `stored: true`; that signature stays pending.
+- respond / change-respond under the approved lock echo `recordId` / `recordDigest` / `signatureMethod` / `selection` from the Worker-held record or pending row (`lockedSignature`), never from the blob; a forged approved blob gets none.
+- The owner route requires `recordId` (11.1 C) and `fetchOwnerRecord` refuses a lookup without one: no newest-record fallback.
+
+**Not fixed (by design).** The copy email to any typed address, once per link and rate-limited.
+
+**Deviations from the spec.** §3.5 step 3 ("the decision is authoritative and is written first") and step 4's "if the pending row cannot be stored either, the decision stands" are superseded by evidence-first; §11.1 C `recordId` is now required; §3.7's "Signed by {name} · {date}" appears only after the Worker confirms the record; 11.2's `recordFromApproval` is now `buildRecord`; §4's `signature_pending` per-link uniqueness is gone.
+
+**Tests.** `__tests__/esignRoutesWorkers.test.js` gains the "review P1", "review P2a" and "review P3" groups (16 of its tests fail against the pre-fix Worker code); `backend-workers/tests/esign.test.cjs` covers `buildRecord` / `sealedSelection` and the store wire format; `native/ESignatureTests/main.swift` covers the claim, the confirmation states, the sealed-record parser and `checkSignatureRecord`. `docs/native-fixture-manifest.json` regenerated.
+
+**Not verified here.** The SwiftUI views (`NativeSignatureRecordView.swift`) are only checked by the Release compile, which was not run. The signing pages (`tradeready-legal`) were not touched: they must show the 503 `signature_not_recorded` body's `error` and keep the form for a retry; that is unchecked.

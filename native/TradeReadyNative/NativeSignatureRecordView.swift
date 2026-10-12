@@ -20,9 +20,10 @@ struct NativeEstimateSignatureSection: View {
     }
 }
 
-/// Under a decided change-order row: the customer's signature (collapsed
-/// under its "Signed by" line), a typed-name approval from before the audit
-/// trail, or the owner's on-site record.
+/// Under a decided change-order row: the customer's signature (its details
+/// collapsed under the "Signed by" line once the Worker confirms it), a
+/// typed-name approval from before the audit trail, or the owner's on-site
+/// record.
 struct NativeChangeOrderEvidenceRows: View {
     @EnvironmentObject private var store: AppStore
     let jobID: String
@@ -31,48 +32,31 @@ struct NativeChangeOrderEvidenceRows: View {
     var body: some View {
         if let order = store.changeOrders(for: jobID).first(where: { $0.id == changeOrderID }),
            let evidence = NativeESignature.evidence(for: order) {
-            if case let .signed(signed) = evidence {
-                DisclosureGroup {
-                    NativeApprovalEvidenceRows(
-                        evidence: evidence, jobID: jobID, changeOrderID: changeOrderID, showsTitle: false
-                    )
-                } label: {
-                    NativeSignedTitle(signed: signed)
-                }
-            } else {
-                NativeApprovalEvidenceRows(evidence: evidence, jobID: jobID, changeOrderID: changeOrderID)
-            }
+            NativeApprovalEvidenceRows(
+                evidence: evidence, jobID: jobID, changeOrderID: changeOrderID, collapsesDetails: true
+            )
         }
     }
 }
 
-/// The rows for one approval. Signed: the "Signed by" line, the drawn mark,
-/// "Signed copy" (the sealed PDF through the share sheet) and the audit
-/// trail. Before the audit trail: the typed-name label and the name.
-/// Recorded on site: the owner-recorded label.
+/// The rows for one approval. Claiming an e-signature: unconfirmed (the
+/// customer's name and time as the decision, with the check's status) until
+/// `POST /api/esign/record` returns the sealed record; then the "Signed by"
+/// line, the drawn mark, "Signed copy" and the audit trail, all from that
+/// record (spec §11.11). Before the audit trail: the typed-name label and the
+/// name. Recorded on site: the owner-recorded label.
 struct NativeApprovalEvidenceRows: View {
-    @EnvironmentObject private var store: AppStore
     let evidence: NativeESignature.ApprovalEvidence
     let jobID: String
     let changeOrderID: String?
-    var showsTitle = true
-
-    @State private var isFetchingCopy = false
-    @State private var signedCopy: NativeSignedCopy?
-    @State private var liveTrail: [NativeESignature.AuditEvent]?
-    @State private var copyError: String?
+    var collapsesDetails = false
 
     var body: some View {
         switch evidence {
-        case let .signed(signed):
-            if showsTitle { NativeSignedTitle(signed: signed) }
-            if let drawing = signed.drawing {
-                NativeSignatureMark(drawing: drawing, signerName: signed.signerName)
-            }
-            signedCopyButton(signed)
-            DisclosureGroup("Audit trail") {
-                auditTrail(signed)
-            }
+        case let .claimedSignature(claim):
+            NativeClaimedSignatureRows(
+                claim: claim, jobID: jobID, changeOrderID: changeOrderID, collapsesDetails: collapsesDetails
+            )
         case let .typedName(signerName, approvedAt):
             Label(NativeESignature.typedNameApprovalLabel, systemImage: "character.cursor.ibeam")
             if let signerName {
@@ -91,10 +75,109 @@ struct NativeApprovalEvidenceRows: View {
             .accessibilityElement(children: .combine)
         }
     }
+}
 
-    private func signedCopyButton(_ signed: NativeESignature.SignedApproval) -> some View {
+/// An approval whose job blob claims an e-signature. Nothing from the blob is
+/// shown as a signature: the rows ask the Worker for the sealed record and
+/// show "Signed by" only from its answer.
+struct NativeClaimedSignatureRows: View {
+    @EnvironmentObject private var store: AppStore
+    let claim: NativeESignature.ClaimedSignature
+    let jobID: String
+    let changeOrderID: String?
+    var collapsesDetails = false
+
+    @State private var confirmation: NativeESignature.SignatureConfirmation = .unconfirmed
+    @State private var isChecking = false
+
+    var body: some View {
+        Group {
+            if case let .confirmed(signed) = confirmation {
+                if collapsesDetails {
+                    DisclosureGroup {
+                        NativeSignedRecordRows(signed: signed, jobID: jobID, changeOrderID: changeOrderID)
+                    } label: {
+                        NativeSignedTitle(signed: signed)
+                    }
+                } else {
+                    NativeSignedTitle(signed: signed)
+                    NativeSignedRecordRows(signed: signed, jobID: jobID, changeOrderID: changeOrderID)
+                }
+            } else {
+                unconfirmedRows
+            }
+        }
+        .task(id: claim.recordID) { await check() }
+    }
+
+    @ViewBuilder
+    private var unconfirmedRows: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Label(NativeESignature.statusLabel(confirmation) ?? NativeESignature.unconfirmedLabel,
+                  systemImage: confirmation == .noRecord ? "exclamationmark.triangle" : "clock")
+            if let detail = NativeESignature.statusDetail(confirmation) {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        if let signerName = claim.signerName {
+            LabeledContent("Customer", value: signerName)
+        }
+        if let approvedAt = claim.approvedAt {
+            LabeledContent("Approved", value: NativeESignature.displayTimestamp(approvedAt))
+        }
+        switch confirmation {
+        case .sealing, .unverifiable:
+            Button {
+                Task { await check() }
+            } label: {
+                Label(isChecking ? "Checking…" : "Check again", systemImage: "arrow.clockwise")
+            }
+            .disabled(isChecking)
+        default:
+            EmptyView()
+        }
+    }
+
+    private func check() async {
+        guard !isChecking else { return }
+        isChecking = true
+        let result = await store.checkSignatureRecord(
+            jobID: jobID, changeOrderID: changeOrderID, recordID: claim.recordID
+        )
+        isChecking = false
+        confirmation = NativeESignature.confirmation(for: claim, check: result)
+    }
+}
+
+/// A confirmed signature's mark, "Signed copy" (the sealed PDF through the
+/// share sheet) and audit trail, all from the Worker's sealed record.
+struct NativeSignedRecordRows: View {
+    @EnvironmentObject private var store: AppStore
+    let signed: NativeESignature.SignedApproval
+    let jobID: String
+    let changeOrderID: String?
+
+    @State private var isFetchingCopy = false
+    @State private var signedCopy: NativeSignedCopy?
+    @State private var liveTrail: [NativeESignature.AuditEvent]?
+    @State private var copyError: String?
+
+    var body: some View {
+        if let drawing = signed.drawing {
+            NativeSignatureMark(drawing: drawing, signerName: signed.signerName)
+        }
+        signedCopyButton
+        DisclosureGroup("Audit trail") {
+            auditTrail
+        }
+    }
+
+    private var signedCopyButton: some View {
         Button {
-            fetchCopy(signed)
+            fetchCopy()
         } label: {
             if isFetchingCopy {
                 Label("Preparing signed copy…", systemImage: "hourglass")
@@ -118,7 +201,7 @@ struct NativeApprovalEvidenceRows: View {
     }
 
     @ViewBuilder
-    private func auditTrail(_ signed: NativeESignature.SignedApproval) -> some View {
+    private var auditTrail: some View {
         ForEach(Array((liveTrail ?? signed.trail).enumerated()), id: \.offset) { _, event in
             VStack(alignment: .leading, spacing: 2) {
                 Text(event.label)
@@ -169,7 +252,7 @@ struct NativeApprovalEvidenceRows: View {
         return "\(time) · IP \(ip)"
     }
 
-    private func fetchCopy(_ signed: NativeESignature.SignedApproval) {
+    private func fetchCopy() {
         guard !isFetchingCopy else { return }
         isFetchingCopy = true
         Task {

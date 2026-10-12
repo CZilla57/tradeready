@@ -10445,6 +10445,9 @@ final class AppStore: ObservableObject {
 
     // Phase 19 seam for `NativeESignatureStore.swift`: a test transport and the owner session.
     var esignRecordServiceOverride: (any NativeESignatureRecordFetching)?
+    /// Sealed records the Worker confirmed, keyed by owner + link + record id
+    /// (`NativeESignatureStore.checkSignatureRecord`).
+    var esignConfirmedRecords: [String: NativeESignature.SealedRecord] = [:]
     var esignOwnerSubject: String? { authenticatedUserSubject }
     func esignOwnerCredentials() -> NativeSyncCredentials? { currentSyncCredentials() }
     func esignRefreshOwnerSession() async -> Bool { await refreshSyncSession() }

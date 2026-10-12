@@ -655,7 +655,7 @@
    "testSources": [
     {
      "path": "native/ESignatureTests",
-     "sha256": "e4d5c947904ce73c45348768a4a704d409864f46dda22a1d6fb35d4331045bb8"
+     "sha256": "5375451f3ebaed58e676b35a1c9f8031f35be75baeb4e340101b9d0fa4b9a71c"
     }
    ],
    "fixtures": []
@@ -2421,7 +2421,7 @@
   },
   "esignRoutesWorkers": {
    "path": "__tests__/esignRoutesWorkers.test.js",
-   "sha256": "f03853845e559a61e03d9eafd74983e2db1545ba5bf7fd9cde289bfcaf0ed7e4"
+   "sha256": "a240c9eb7cb22d8edc1672ca68c691e6d03e5b9d5fe7347f5e8c7a92e8eb0cd1"
   },
   "estimateApprovals": {
    "path": "__tests__/estimateApprovals.test.js",

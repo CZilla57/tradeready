@@ -91,6 +91,65 @@ extension AppStore {
         changeOrderID: String?,
         recordID: String
     ) async -> Result<NativeSignedCopy, NativeESignatureRecordError> {
+        let record: NativeSignedRecord
+        switch await fetchOwnerSignedRecord(jobID: jobID, changeOrderID: changeOrderID, recordID: recordID) {
+        case let .success(fetched): record = fetched
+        case let .failure(error): return .failure(error)
+        }
+        do {
+            let directory = FileManager.default.temporaryDirectory
+                .appending(path: "TradeReadySignedCopies", directoryHint: .isDirectory)
+                .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let url = directory.appending(path: record.pdfFilename, directoryHint: .notDirectory)
+            try record.pdfData.write(to: url, options: .atomic)
+            return .success(NativeSignedCopy(record: record, fileURL: url))
+        } catch {
+            return .failure(.saveFailed)
+        }
+    }
+
+    // MARK: Confirming a claimed signature (§11.11)
+
+    /// Asks the Worker whether it holds the sealed record an approval claims.
+    /// The job blob's signature keys are the owner's own writable copy, so the
+    /// app shows an approval as signed only after this returns `.found`.
+    /// A found record is immutable, so it is remembered for the signed-in
+    /// owner; anything else is asked again next time.
+    func checkSignatureRecord(
+        jobID: String,
+        changeOrderID: String?,
+        recordID: String
+    ) async -> NativeESignature.RecordCheck {
+        guard let subject = esignOwnerSubject else {
+            return .failed(NativeESignatureRecordError.rejectedSession.errorDescription ?? "")
+        }
+        let key = Self.esignRecordCacheKey(subject: subject, jobID: jobID, changeOrderID: changeOrderID, recordID: recordID)
+        if let cached = esignConfirmedRecords[key] { return .found(cached) }
+        switch await fetchOwnerSignedRecord(jobID: jobID, changeOrderID: changeOrderID, recordID: recordID) {
+        case let .success(record):
+            esignConfirmedRecords[key] = record.sealed
+            return .found(record.sealed)
+        case .failure(.notFound):
+            return .notFound
+        case .failure(.pending):
+            return .pending
+        case let .failure(error):
+            return .failed(error.errorDescription ?? "")
+        }
+    }
+
+    static func esignRecordCacheKey(subject: String, jobID: String, changeOrderID: String?, recordID: String) -> String {
+        [subject, jobID, changeOrderID ?? "", recordID].joined(separator: "\u{1F}")
+    }
+
+    /// One `POST /api/esign/record` round trip for the signed-in owner, with
+    /// one session refresh; fails when the account changed meanwhile.
+    private func fetchOwnerSignedRecord(
+        jobID: String,
+        changeOrderID: String?,
+        recordID: String
+    ) async -> Result<NativeSignedRecord, NativeESignatureRecordError> {
         guard let subject = esignOwnerSubject else { return .failure(.rejectedSession) }
         guard let service = configuredESignatureRecordService() else { return .failure(.invalidConfiguration) }
 
@@ -124,18 +183,7 @@ extension AppStore {
             return .failure(.unavailable)
         }
         guard subject == esignOwnerSubject else { return .failure(.accountChanged) }
-
-        do {
-            let directory = FileManager.default.temporaryDirectory
-                .appending(path: "TradeReadySignedCopies", directoryHint: .isDirectory)
-                .appending(path: UUID().uuidString, directoryHint: .isDirectory)
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let url = directory.appending(path: record.pdfFilename, directoryHint: .notDirectory)
-            try record.pdfData.write(to: url, options: .atomic)
-            return .success(NativeSignedCopy(record: record, fileURL: url))
-        } catch {
-            return .failure(.saveFailed)
-        }
+        return .success(record)
     }
 
     private func configuredESignatureRecordService() -> (any NativeESignatureRecordFetching)? {
