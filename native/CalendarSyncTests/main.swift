@@ -521,6 +521,97 @@ do {
     expect(mixed.prefix(5).allSatisfy { if case .delete = $0 { return true } else { return false } }, "deletes come first")
 }
 
+// MARK: - Mirror: ownership (adopt and remove decisions, review fix)
+
+private func withTag(_ event: Mirror.Existing, _ newTag: String?) -> Mirror.Existing {
+    var copy = event
+    copy.notes = newTag.map { event.notes?.replacingOccurrences(of: tag, with: $0) } ?? "Dentist"
+    return copy
+}
+
+do {
+    expect(Mirror.isMirrorCalendarTitle("TradeReady") && Mirror.isMirrorCalendarTitle("TradeReady Jobs")
+           && Mirror.isMirrorCalendarTitle("TradeReady Jobs 2") && Mirror.isMirrorCalendarTitle("TradeReady Jobs 17"),
+           "the titles the mirror creates are recognised")
+    expect(!Mirror.isMirrorCalendarTitle("Work") && !Mirror.isMirrorCalendarTitle("tradeready") && !Mirror.isMirrorCalendarTitle("TradeReady Jobs 1")
+           && !Mirror.isMirrorCalendarTitle("TradeReady Jobs X") && !Mirror.isMirrorCalendarTitle("TradeReady (old)"),
+           "other titles are not mirror titles")
+    expectEqual(Mirror.newCalendarTitle(existingTitles: ["Home", "Work"]), "TradeReady", "a free title is used as is")
+    expectEqual(Mirror.newCalendarTitle(existingTitles: ["TradeReady"]), "TradeReady Jobs", "a taken title gets a distinct one")
+    expectEqual(Mirror.newCalendarTitle(existingTitles: ["TradeReady", "TradeReady Jobs"]), "TradeReady Jobs 2", "and a taken distinct one is numbered")
+    expectEqual(Mirror.newCalendarTitle(existingTitles: ["TradeReady", "TradeReady Jobs", "TradeReady Jobs 2"]), "TradeReady Jobs 3", "numbering continues")
+
+    let want = desired([mjob("j1"), mjob("j2", date: "2026-10-07")])
+    let own1 = existing("e1", want[0])
+    let own2 = existing("e2", want[1])
+    let foreign = withTag(existing("f1", want[0]), otherTag)
+    let unmarked = withTag(existing("u1", want[0]), nil)
+    func candidate(_ id: String, _ events: [Mirror.Existing], title: String = "TradeReady", writable: Bool = true) -> Mirror.CalendarCandidate {
+        Mirror.CalendarCandidate(id: id, title: title, allowsModifications: writable, events: events)
+    }
+
+    expectEqual(Mirror.adoptableCalendarID(candidates: [candidate("c1", [own1, own2])], ownerTag: tag), "c1",
+                "a calendar whose every event carries this account's tag is adopted")
+    expectEqual(Mirror.adoptableCalendarID(candidates: [candidate("c1", [foreign, withTag(own2, otherTag)])], ownerTag: tag), nil,
+                "a same-title calendar holding another account's mirror is never adopted")
+    expectEqual(Mirror.adoptableCalendarID(candidates: [candidate("c1", [unmarked])], ownerTag: tag), nil,
+                "a same-title calendar of the owner's own events is never adopted")
+    expectEqual(Mirror.adoptableCalendarID(candidates: [candidate("c1", [own1, foreign])], ownerTag: tag), nil,
+                "a mixed calendar (own and another account's events) is never adopted")
+    expectEqual(Mirror.adoptableCalendarID(candidates: [candidate("c1", [own1, unmarked])], ownerTag: tag), nil,
+                "a calendar with one unmarked event is never adopted")
+    expectEqual(Mirror.adoptableCalendarID(candidates: [candidate("c1", [])], ownerTag: tag), nil,
+                "an empty calendar proves nothing and is never adopted")
+    expectEqual(Mirror.adoptableCalendarID(candidates: [candidate("c1", [own1], writable: false)], ownerTag: tag), nil,
+                "a read-only calendar is never adopted")
+    expectEqual(Mirror.adoptableCalendarID(candidates: [candidate("c1", [own1], title: "Work")], ownerTag: tag), nil,
+                "a calendar with another title is never adopted, even with this account's events")
+    expectEqual(Mirror.adoptableCalendarID(candidates: [candidate("c1", [own1], title: "TradeReady Jobs 2")], ownerTag: tag), "c1",
+                "a numbered mirror title is adoptable on proof")
+    expectEqual(Mirror.adoptableCalendarID(candidates: [candidate("c9", [own1]), candidate("c2", [own2]), candidate("c5", [foreign])], ownerTag: tag), "c2",
+                "several provable calendars resolve to the smallest id and a foreign one is skipped")
+
+    expectEqual(Mirror.removalDecision(events: [own1, own2], ownerTag: tag), .removeCalendar,
+                "every event this account's: the whole calendar goes")
+    expectEqual(Mirror.removalDecision(events: [], ownerTag: tag), .removeCalendar, "an empty mirror calendar goes")
+    expectEqual(Mirror.removalDecision(events: [own2, foreign, own1, unmarked], ownerTag: tag), .deleteEvents(eventIDs: ["e1", "e2"]),
+                "foreign or unmarked events present: only this account's events are deleted, the calendar stays")
+    expectEqual(Mirror.removalDecision(events: [foreign, unmarked], ownerTag: tag), .deleteEvents(eventIDs: []),
+                "nothing of this account's: nothing is deleted, the calendar stays")
+    expect(Mirror.isOwnEvent(notes: own1.notes, ownerTag: tag) && !Mirror.isOwnEvent(notes: foreign.notes, ownerTag: tag)
+           && !Mirror.isOwnEvent(notes: "tradeready-job:\(tag)", ownerTag: tag) && !Mirror.isOwnEvent(notes: nil, ownerTag: tag),
+           "isOwnEvent is the strict parsed-tag test")
+}
+
+// MARK: - Mirror: plan matches by job id, not by window (review fix)
+
+do {
+    let want = desired([mjob("j1")])
+    // The adapter's fetch window is in the device zone, so a job on the edge
+    // date can start outside it, or (here) outside the date window itself:
+    // the planner must still find its event by the job id in the marker.
+    for date in ["2026-09-02", "2026-09-03", "2026-04-01", "2027-06-01", "2026-04-02"] {
+        let moved = existing("e1", want[0]) { $0.start.date = date; $0.end.date = date }
+        let ops = Mirror.plan(desired: want, existing: [moved], ownerTag: tag, today: today)
+        expectEqual(ops, [.update(eventID: "e1", want[0])], "an event of a wanted job is matched by id wherever it starts (\(date)): updated, not duplicated")
+    }
+    let edge = desired([mjob("j1", date: "2026-09-03", start: "00:30", end: "01:30")])
+    let synced = existing("e1", edge[0])
+    expectEqual(Mirror.plan(desired: edge, existing: [synced], ownerTag: tag, today: today), [],
+                "an edge-date job whose event is fetched makes no operations on repeated passes")
+    // A duplicate outside the window still collapses onto one survivor.
+    let far = existing("e0", want[0], created: "2026-10-01T00:00:00Z") { $0.start.date = "2026-04-01"; $0.end.date = "2026-04-01" }
+    let near = existing("e1", want[0], created: "2026-10-02T00:00:00Z")
+    expectEqual(Mirror.plan(desired: want, existing: [far, near], ownerTag: tag, today: today), [.delete(eventID: "e1"), .update(eventID: "e0", want[0])],
+                "duplicates of a wanted job collapse onto the earliest, wherever they start")
+    // History outside the window for a job that is not wanted is left alone;
+    // inside the window it is removed.
+    let oldHistory = existing("old", desired([mjob("j0")])[0]) { $0.start.date = "2026-09-02"; $0.end.date = "2026-09-02" }
+    let recentOrphan = existing("recent", desired([mjob("j0")])[0]) { $0.start.date = "2026-09-04"; $0.end.date = "2026-09-04" }
+    expectEqual(Mirror.plan(desired: [], existing: [oldHistory, recentOrphan], ownerTag: tag, today: today), [.delete(eventID: "recent")],
+                "an event of a job that is not wanted is deleted only inside the mirror window")
+}
+
 if failures == 0 {
     print("PASS: native calendar sync tests (\(checks) checks)")
 } else {

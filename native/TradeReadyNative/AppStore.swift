@@ -9818,9 +9818,6 @@ final class AppStore: ObservableObject {
             guard await syncNowAndWait(trigger: .periodic) != nil else { return .failed }
         }
 
-        // Phase 26: keep the booking page's busy times fresh (48 h TTL).
-        await calendarSync.run(.background)
-
         // Match the React Native task order: cloud sync first, then safely
         // commit/acknowledge any exact-owner widget or Siri actions. Offline
         // sync is a no-op, but local action replay must still get its chance.
@@ -9828,6 +9825,11 @@ final class AppStore: ObservableObject {
         // Task 11.01 (contract §3.1 trigger 2): re-mirror after replay.
         // Non-forced (fix round 1): see `performForegroundRefresh`.
         refreshWidgetMirror(force: false)
+
+        // Phase 26: keep the booking page's busy times fresh (48 h TTL). Last,
+        // after the widget/Siri action replay: the calendar step can take
+        // 20-40 s and must not use up the background time the replay needs.
+        await calendarSync.run(.background)
         return .completed
     }
 

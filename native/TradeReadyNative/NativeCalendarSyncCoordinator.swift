@@ -22,7 +22,10 @@ import Security
 /// `source_mismatch` stops pushing until the owner chooses "Use this device".
 ///
 /// Outbound (Stage B): after each trigger the TradeReady calendar is found
-/// (never silently recreated), the mirror window read, planned and applied.
+/// by its stored id (never silently recreated), the mirror window read,
+/// planned and applied. A calendar is adopted or deleted only on proof that
+/// every event in it is this account's mirror (`NativeCalendarMirror`'s
+/// ownership rules); the adapter only executes those decisions.
 
 struct NativeCalendarSyncOwner: Equatable, Sendable {
     /// The verified, device-local account binding (keys the local state).
@@ -170,6 +173,9 @@ final class NativeCalendarSyncCoordinator {
     static let statusInterval: TimeInterval = 30 * 60
     static let settingsStatusInterval: TimeInterval = 60
     static let ownCommitQuietSeconds: TimeInterval = 2
+    /// Days added each side of the mirror window when existing events are
+    /// fetched (zones are at most 26 hours apart).
+    static let fetchMarginDays = 2
 
     weak var host: NativeCalendarSyncHost?
     private(set) var access: NativeCalendarAccess?
@@ -314,12 +320,14 @@ final class NativeCalendarSyncCoordinator {
     }
 
     /// Account deletion, best effort, before the scrub: removes the
-    /// TradeReady calendar when the mirror was on.
+    /// TradeReady calendar when the mirror was on and every event in it is
+    /// this account's; otherwise only this account's events go (the same rule
+    /// as "Remove calendar").
     func removeMirrorCalendarForAccountDeletion() {
         guard let owner = host?.calendarSyncOwner() else { return }
         activate(owner)
         guard state.mirrorEnabled, let id = state.mirrorCalendarID, let access, access.authorization.isUsable else { return }
-        try? access.removeMirrorCalendar(calendarID: id)
+        _ = removeMirrorContents(access: access, calendarID: id, owner: owner)
     }
 
     // MARK: Presentation
@@ -336,10 +344,13 @@ final class NativeCalendarSyncCoordinator {
     var otherDeviceActive: Bool { activateIfNeeded(); return state.otherDeviceActive }
     var mirrorAccountTitle: String? { activateIfNeeded(); return state.mirrorAccountTitle }
 
-    /// The calendar list for the settings page, the TradeReady calendar hidden.
+    /// The calendar list for the settings page. Only this account's mirror
+    /// calendar (by its stored id) is hidden: a calendar that merely shares
+    /// the title is the owner's, and its events count as busy, so it can be
+    /// unchecked.
     var selectableCalendars: [NativeCalendarInfo] {
         activateIfNeeded()
-        return calendarList.filter { $0.id != state.mirrorCalendarID && $0.title != NativeCalendarMirror.calendarTitle }
+        return calendarList.filter { $0.id != state.mirrorCalendarID }
     }
 
     func isCalendarIncluded(_ id: String) -> Bool {
@@ -538,9 +549,19 @@ final class NativeCalendarSyncCoordinator {
         guard granted.isUsable else { return .denied }
         var lookup = access.findMirrorCalendar(storedID: state.mirrorCalendarID)
         if lookup == .missing {
-            do { lookup = try access.createMirrorCalendar() } catch {
-                errorMessage = "The TradeReady calendar couldn't be created. Check that a calendar account on this device accepts new calendars."
+            // No calendars readable (for example, protected data unavailable):
+            // adopting or creating now could duplicate or mis-adopt.
+            guard !access.calendars().isEmpty else {
+                errorMessage = "Calendars couldn't be read right now. Try again in a moment."
                 return .failed
+            }
+            if let adopted = adoptableMirrorCalendar(access: access, owner: owner) {
+                lookup = adopted
+            } else {
+                do { lookup = try access.createMirrorCalendar() } catch {
+                    errorMessage = "The TradeReady calendar couldn't be created. Check that a calendar account on this device accepts new calendars."
+                    return .failed
+                }
             }
         }
         guard case let .found(id, accountTitle) = lookup else { return .failed }
@@ -563,7 +584,15 @@ final class NativeCalendarSyncCoordinator {
         beginBusy()
         defer { endBusy() }
         if removeCalendar, let id = state.mirrorCalendarID, let access {
-            do { try access.removeMirrorCalendar(calendarID: id) } catch {
+            switch removeMirrorContents(access: access, calendarID: id, owner: owner) {
+            case .removedCalendar:
+                break
+            case .removedOwnEventsOnly:
+                errorMessage = "TradeReady removed the jobs it added. The calendar was kept because it also holds events TradeReady didn't add."
+            case .unreadable:
+                errorMessage = "The TradeReady calendar couldn't be removed because calendars couldn't be read right now. Try again in a moment."
+                return false
+            case .failed:
                 errorMessage = "The TradeReady calendar couldn't be removed. Check calendar access in Settings and try again."
                 return false
             }
@@ -752,8 +781,18 @@ final class NativeCalendarSyncCoordinator {
         guard state.mirrorEnabled, let access, access.authorization.isUsable, let host else { return }
         switch access.findMirrorCalendar(storedID: state.mirrorCalendarID) {
         case .missing:
-            // Deleted outside the app: the mirror turns off with a notice and
-            // is never silently recreated (D15).
+            // No calendars readable (for example, protected data not yet
+            // available) is temporary: keep the mirror on and try again.
+            let readable = access.calendars()
+            guard !readable.isEmpty else { return }
+            // Present but not writable: not deleted, so it stays on.
+            if let id = state.mirrorCalendarID, readable.contains(where: { $0.id == id }) {
+                mirrorError = "The TradeReady calendar can't be edited right now. TradeReady will try again."
+                return
+            }
+            // Readable and the stored id is genuinely absent: deleted outside
+            // the app. The mirror turns off with a notice and is never
+            // silently recreated (D15).
             state.mirrorEnabled = false
             state.mirrorCalendarID = nil
             state.mirrorAccountTitle = nil
@@ -770,14 +809,18 @@ final class NativeCalendarSyncCoordinator {
             let current = now()
             let today = NativeCalendarBusy.naiveDate(current, calendar: calendar)
             let midnight = calendar.startOfDay(for: current)
-            guard let start = calendar.date(byAdding: .day, value: -NativeCalendarMirror.windowPastDays, to: midnight),
-                  let end = calendar.date(byAdding: .day, value: NativeCalendarMirror.windowFutureDays + 1, to: midnight) else { return }
+            // Jobs are wanted by schedule-zone date but fetched by device-zone
+            // instants. Two zones are at most 26 hours apart, so a day of
+            // margin is not enough: widen by `fetchMarginDays` each side. The
+            // planner matches by job id, so extra events do no harm.
+            let margin = Self.fetchMarginDays
+            guard let start = calendar.date(byAdding: .day, value: -(NativeCalendarMirror.windowPastDays + margin), to: midnight),
+                  let end = calendar.date(byAdding: .day, value: NativeCalendarMirror.windowFutureDays + 1 + margin, to: midnight) else { return }
+            let ownerTag = NativeCalendarMirror.ownerTag16(subject: owner.subject)
             let existing = access.mirrorEvents(calendarID: id, start: start, end: end)
             let desired = NativeCalendarMirror.desiredEvents(
-                jobs: host.calendarSyncJobs(), schedule: host.calendarSyncSchedule(), today: today,
-                ownerTag: NativeCalendarMirror.ownerTag16(subject: owner.subject))
-            let operations = NativeCalendarMirror.plan(desired: desired, existing: existing,
-                                                       ownerTag: NativeCalendarMirror.ownerTag16(subject: owner.subject), today: today)
+                jobs: host.calendarSyncJobs(), schedule: host.calendarSyncSchedule(), today: today, ownerTag: ownerTag)
+            let operations = NativeCalendarMirror.plan(desired: desired, existing: existing, ownerTag: ownerTag, today: today)
             guard !operations.isEmpty else {
                 mirrorError = nil
                 return
@@ -791,6 +834,64 @@ final class NativeCalendarSyncCoordinator {
                 mirrorError = "Some jobs couldn't be added to the TradeReady calendar. TradeReady will try again."
             }
         }
+    }
+
+    // MARK: Mirror ownership (adopt / remove)
+
+    /// The existing calendar this account may adopt, or nil. Nothing is
+    /// adopted by title: every candidate's events are read and
+    /// `NativeCalendarMirror.adoptableCalendarID` accepts one only when all of
+    /// them carry this account's tag.
+    private func adoptableMirrorCalendar(access: NativeCalendarAccess, owner: NativeCalendarSyncOwner) -> NativeMirrorCalendarLookup? {
+        let (from, to) = ownershipScanWindow()
+        let infos = access.calendars().filter { $0.allowsModifications && NativeCalendarMirror.isMirrorCalendarTitle($0.title) }
+        let candidates = infos.map {
+            NativeCalendarMirror.CalendarCandidate(
+                id: $0.id, title: $0.title, allowsModifications: $0.allowsModifications,
+                events: access.mirrorEvents(calendarID: $0.id, start: from, end: to))
+        }
+        guard let id = NativeCalendarMirror.adoptableCalendarID(
+            candidates: candidates, ownerTag: NativeCalendarMirror.ownerTag16(subject: owner.subject)),
+            let info = infos.first(where: { $0.id == id }) else { return nil }
+        return .found(id: id, accountTitle: info.accountTitle)
+    }
+
+    private enum MirrorRemoval {
+        case removedCalendar
+        case removedOwnEventsOnly
+        case unreadable
+        case failed
+    }
+
+    /// "Remove calendar" and account deletion: the whole calendar goes only
+    /// when every event in it carries this account's tag. Otherwise only this
+    /// account's events are deleted and the calendar stays. Calendars that
+    /// can't be read right now remove nothing.
+    private func removeMirrorContents(access: NativeCalendarAccess, calendarID: String, owner: NativeCalendarSyncOwner) -> MirrorRemoval {
+        guard !access.calendars().isEmpty else { return .unreadable }
+        let (from, to) = ownershipScanWindow()
+        let events = access.mirrorEvents(calendarID: calendarID, start: from, end: to)
+        do {
+            switch NativeCalendarMirror.removalDecision(events: events, ownerTag: NativeCalendarMirror.ownerTag16(subject: owner.subject)) {
+            case .removeCalendar:
+                try access.removeMirrorCalendar(calendarID: calendarID)
+                return .removedCalendar
+            case let .deleteEvents(ids):
+                if !ids.isEmpty {
+                    try access.apply(ids.map { .delete(eventID: $0) }, calendarID: calendarID)
+                    lastCommitAt = now()
+                }
+                return .removedOwnEventsOnly
+            }
+        } catch {
+            return .failed
+        }
+    }
+
+    private func ownershipScanWindow() -> (Date, Date) {
+        let current = now()
+        let span = Double(NativeCalendarMirror.ownershipScanYears) * 366 * 86_400
+        return (current.addingTimeInterval(-span), current.addingTimeInterval(span))
     }
 
     // MARK: Helpers

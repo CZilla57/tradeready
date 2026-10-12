@@ -6391,6 +6391,200 @@ struct StoreIntegrationTests {
                 expect(removed && access.removedCalendars.count == 1,
                        "26: Remove calendar deletes it")
             }
+
+            // MARK: Review fixes: the mirror never adopts, edits or deletes what it does not own
+
+            typealias World = CalendarMirrorWorldAccess
+            let ownTag = NativeCalendarMirror.ownerTag16(subject: "user-cal")
+            let otherTag = NativeCalendarMirror.ownerTag16(subject: "user-other")
+            func mirrorNotes(_ tag: String, _ job: String) -> String {
+                "Status: Scheduled\n\(NativeCalendarMirror.managedNote)\n\(NativeCalendarMirror.marker(ownerTag: tag, jobID: job))"
+            }
+            func worldStore(deviceZone: String = "America/Chicago", scheduleZone: String = "America/Chicago",
+                            now: String = "2026-10-05T13:00:00Z", jobs: [Canonical.Job] = [],
+                            calendars: [NativeCalendarInfo] = [World.info("cal-work", "Work")], tag: String)
+                throws -> (store: AppStore, access: World) {
+                let schedule = "{\"timeZone\":\"\(scheduleZone)\",\"bookableSlotsEnabled\":false}"
+                let (store, _) = try seed08Store(jobs: jobs, settings: settings08(schedule: schedule), tag: "cal26w-\(tag)")
+                seed08Owner(store, subject: "user-cal", binding: "bind-cal")
+                let access = World(deviceZone: deviceZone, calendars: calendars)
+                let clock = Clock(at(now))
+                let deviceCalendar = access.deviceCalendar
+                store.installCalendarSync(access: access, transport: CalendarSyncFakeTransport(),
+                                          stateBacking: NativeCalendarSyncMemoryBacking(),
+                                          now: { clock.now }, deviceCalendar: { deviceCalendar })
+                store.calendarSync.mirrorDebounceNanoseconds = 1_000_000
+                store.calendarSync.changeDebounceNanoseconds = 1_000_000
+                return (store, access)
+            }
+            let mirrorJob = [job08(id: "j-own", status: "scheduled", date: "2026-10-07", start: "09:00", end: "10:00")]
+
+            // Finding 1: a calendar is never adopted by title; refused for a
+            // same-title calendar of another account, of the owner, and a mixed one.
+            for (label, build) in [
+                ("another account's mirror", { (a: World) in
+                    a.addEvent(calendar: "cal-same", notes: mirrorNotes(otherTag, "j-a1"))
+                    a.addEvent(calendar: "cal-same", notes: mirrorNotes(otherTag, "j-a2")) }),
+                ("the owner's own events", { (a: World) in
+                    a.addEvent(calendar: "cal-same", notes: "Dentist")
+                    a.addEvent(calendar: "cal-same", notes: nil) }),
+                ("a mix of this account's and another's", { (a: World) in
+                    a.addEvent(calendar: "cal-same", notes: mirrorNotes(ownTag, "j-own"))
+                    a.addEvent(calendar: "cal-same", notes: mirrorNotes(otherTag, "j-a1")) }),
+                ("an empty calendar", { (_: World) in }),
+            ] as [(String, (World) -> Void)] {
+                let (store, access) = try worldStore(jobs: mirrorJob, calendars: [World.info("cal-same", "TradeReady"), World.info("cal-work", "Work")],
+                                                      tag: "adopt-\(label.count)")
+                build(access)
+                let before = access.events(in: "cal-same").map(\.id)
+                guard case .enabled = await store.calendarSync.enableMirror() else {
+                    expect(false, "26: the mirror enables beside a same-title calendar (\(label))")
+                    continue
+                }
+                let stored = store.calendarSync.mirrorAccountTitle != nil
+                expect(stored && access.createdTitles == ["TradeReady Jobs"],
+                       "26: a same-title calendar holding \(label) is not adopted; a distinctly titled one is created")
+                expect(access.events(in: "cal-same").map(\.id) == before && access.applied.flatMap { $0 }.allSatisfy {
+                    if case .create = $0 { return true } else { return false } },
+                       "26: nothing is written to the foreign calendar (\(label))")
+                // Remove calendar and account deletion never touch it either.
+                _ = await store.calendarSync.disableMirror(removeCalendar: true)
+                expect(access.hasCalendar("cal-same") && access.events(in: "cal-same").map(\.id) == before
+                           && access.removedCalendars == ["cal-new-1"],
+                       "26: Remove calendar deletes only the calendar this account created, not the same-title one (\(label))")
+                _ = await store.calendarSync.enableMirror()
+                do { try await store.testFinishAccountDeletionLocally() } catch { expect(false, "26: the deletion scrub threw \(error)") }
+                expect(access.hasCalendar("cal-same") && access.events(in: "cal-same").map(\.id) == before,
+                       "26: account deletion leaves the same-title calendar and its events alone (\(label))")
+            }
+
+            // Finding 1: provably this account's mirror (every event carries its tag) is adopted.
+            do {
+                let (store, access) = try worldStore(jobs: mirrorJob, calendars: [World.info("cal-mine", "TradeReady")], tag: "adopt-own")
+                access.addEvent(calendar: "cal-mine", notes: mirrorNotes(ownTag, "j-own"), date: "2026-10-07", minutes: 540)
+                access.addEvent(calendar: "cal-mine", notes: mirrorNotes(ownTag, "j-stale"), date: "2026-10-12")
+                guard case .enabled = await store.calendarSync.enableMirror() else {
+                    expect(false, "26: the mirror enables over this account's own calendar")
+                    throw StoreTestError.missingFixture
+                }
+                expect(access.createdTitles.isEmpty && store.calendarSync.mirrorEnabled,
+                       "26: a calendar whose every event carries this account's tag is adopted, not duplicated")
+                expect(access.events(in: "cal-mine").map(\.id).sorted().count == 1
+                           && access.events(in: "cal-mine").allSatisfy { NativeCalendarMirror.parseMarker($0.notes)?.jobID == "j-own" },
+                       "26: the adopted calendar is reconciled (the stale job's event removed, the wanted job's event kept once)")
+            }
+
+            // Removal and account deletion with foreign events: only this
+            // account's events go, the calendar and the rest stay.
+            for viaDeletion in [false, true] {
+                let (store, access) = try worldStore(jobs: mirrorJob, tag: "remove-mixed-\(viaDeletion)")
+                _ = await store.calendarSync.enableMirror()
+                let id = "cal-new-1"
+                access.addEvent(calendar: id, notes: "Lunch with Sam", date: "2026-10-09")
+                access.addEvent(calendar: id, notes: mirrorNotes(otherTag, "j-a1"), date: "2026-10-10")
+                expect(access.events(in: id).count == 3, "26: the calendar now holds the mirrored job and two foreign events")
+                if viaDeletion {
+                    do { try await store.testFinishAccountDeletionLocally() } catch { expect(false, "26: the deletion scrub threw \(error)") }
+                } else {
+                    let removed = await store.calendarSync.disableMirror(removeCalendar: true)
+                    expect(removed && !store.calendarSync.mirrorEnabled, "26: Remove calendar finishes with foreign events present")
+                    expect(store.calendarSync.errorMessage?.contains("kept") == true,
+                           "26: the owner is told the calendar was kept because it holds other events")
+                }
+                expect(access.removedCalendars.isEmpty && access.hasCalendar(id), "26: the calendar is not deleted when it holds foreign events (deletion: \(viaDeletion))")
+                let left = access.events(in: id).compactMap { $0.notes }
+                expect(left.count == 2 && left.contains("Lunch with Sam") && left.contains(mirrorNotes(otherTag, "j-a1")),
+                       "26: only this account's events are deleted; the others stay (deletion: \(viaDeletion))")
+            }
+            // All own: the whole calendar goes (already covered above for Remove and deletion).
+            // Unreadable calendars remove nothing and keep the mirror on.
+            do {
+                let (store, access) = try worldStore(jobs: mirrorJob, tag: "remove-unreadable")
+                _ = await store.calendarSync.enableMirror()
+                access.readable = false
+                let removed = await store.calendarSync.disableMirror(removeCalendar: true)
+                expect(!removed && store.calendarSync.mirrorEnabled && access.removedCalendars.isEmpty && access.hasCalendar("cal-new-1"),
+                       "26: Remove calendar with calendars unreadable removes nothing and keeps the mirror on")
+                do { try await store.testFinishAccountDeletionLocally() } catch { expect(false, "26: the deletion scrub threw \(error)") }
+                expect(access.removedCalendars.isEmpty && access.hasCalendar("cal-new-1"),
+                       "26: account deletion with calendars unreadable removes nothing")
+            }
+
+            // Finding 2: an edge-date job across zones produces no duplicate on repeated passes.
+            let zoneCases: [(device: String, schedule: String, now: String, date: String, start: String, end: String, label: String)] = [
+                ("America/Phoenix", "America/New_York", "2026-10-05T19:00:00Z", "2026-09-05", "00:30", "01:30", "Phoenix device, New York schedule, past edge"),
+                ("America/Phoenix", "Pacific/Auckland", "2026-10-05T19:00:00Z", "2026-09-05", "00:30", "01:30", "Phoenix device, Auckland schedule, past edge"),
+                ("Pacific/Auckland", "America/Phoenix", "2026-10-05T19:00:00Z", "2026-09-06", "23:00", "23:59", "Auckland device, Phoenix schedule, past edge"),
+                ("Pacific/Auckland", "America/Phoenix", "2026-10-05T19:00:00Z", "2027-04-04", "22:00", "23:30", "Auckland device, Phoenix schedule, future edge"),
+                ("America/Phoenix", "Pacific/Auckland", "2026-10-05T19:00:00Z", "2027-04-03", "23:00", "23:45", "Phoenix device, Auckland schedule, future edge"),
+                ("America/Phoenix", "America/New_York", "2026-10-05T19:00:00Z", "2027-04-03", "23:00", "23:45", "Phoenix device, New York schedule, future edge"),
+            ]
+            for (n, c) in zoneCases.enumerated() {
+                let job = [job08(id: "j-edge", status: "scheduled", date: c.date, start: c.start, end: c.end)]
+                let (store, access) = try worldStore(deviceZone: c.device, scheduleZone: c.schedule, now: c.now, jobs: job, tag: "edge-\(n)")
+                _ = await store.calendarSync.enableMirror()
+                for _ in 0..<4 { await store.calendarSync.run(.foreground) }
+                let mirrored = access.events(in: "cal-new-1").filter { NativeCalendarMirror.parseMarker($0.notes)?.jobID == "j-edge" }
+                expect(mirrored.count == 1, "26: \(c.label): one event after repeated passes, got \(mirrored.count)")
+                expect(access.applied.count == 1, "26: \(c.label): later passes write nothing, got \(access.applied.count) writes")
+            }
+
+            // Finding 3: a transient empty read never disables the mirror; only a
+            // readable store without the stored id does.
+            do {
+                let (store, access) = try worldStore(jobs: mirrorJob, tag: "transient")
+                _ = await store.calendarSync.enableMirror()
+                access.readable = false
+                await store.calendarSync.run(.foreground)
+                await store.calendarSync.run(.background)
+                expect(store.calendarSync.mirrorEnabled && store.calendarSync.notice == nil,
+                       "26: calendars unreadable for a moment: the mirror stays on and no deleted-notice appears")
+                access.readable = true
+                access.items.removeAll()
+                await store.calendarSync.run(.foreground)
+                expect(store.calendarSync.mirrorEnabled && access.events(in: "cal-new-1").count == 1,
+                       "26: when the calendars read again, the mirror carries on and restores the job's event")
+                access.calendarsValue.removeAll { $0.id == "cal-new-1" }
+                access.calendarsValue.append(World.info("cal-work", "Work"))
+                await store.calendarSync.run(.foreground)
+                expect(!store.calendarSync.mirrorEnabled && store.calendarSync.notice == .mirrorCalendarDeleted,
+                       "26: readable calendars without the stored id: the mirror turns off with the notice")
+            }
+            do {
+                let (store, access) = try worldStore(jobs: mirrorJob, tag: "enable-unreadable")
+                access.readable = false
+                let outcome = await store.calendarSync.enableMirror()
+                expect(outcome == .failed && access.createdTitles.isEmpty && !store.calendarSync.mirrorEnabled,
+                       "26: enabling the mirror while calendars are unreadable creates nothing")
+            }
+
+            // Finding 4: the picker hides only this account's mirror calendar.
+            do {
+                let (store, access) = try worldStore(jobs: mirrorJob,
+                                                     calendars: [World.info("cal-foreign", "TradeReady"), World.info("cal-work", "Work")], tag: "picker")
+                access.addEvent(calendar: "cal-foreign", notes: "Dentist")
+                _ = await store.calendarSync.enableMirror()
+                await store.calendarSync.run(.foreground)
+                let ids = store.calendarSync.selectableCalendars.map(\.id)
+                expect(ids.contains("cal-foreign") && ids.contains("cal-work") && !ids.contains("cal-new-1"),
+                       "26: the picker lists a same-title calendar that is not this account's mirror and hides the mirror itself")
+                await store.calendarSync.setCalendar("cal-foreign", included: false)
+                expect(!store.calendarSync.isCalendarIncluded("cal-foreign"), "26: the same-title calendar can be unchecked")
+            }
+
+            // Finding 5: BG refresh replays widget and Siri actions before the calendar step.
+            do {
+                let source = try String(contentsOf: URL(fileURLWithPath: #filePath)
+                    .deletingLastPathComponent().deletingLastPathComponent()
+                    .appendingPathComponent("TradeReadyNative/AppStore.swift"), encoding: .utf8)
+                if let body = source.range(of: "private func runBackgroundRefresh()"),
+                   let replay = source.range(of: "replayVerifiedWidgetActionsIfPossible()", range: body.upperBound..<source.endIndex),
+                   let calendar = source.range(of: "await calendarSync.run(.background)", range: body.upperBound..<source.endIndex) {
+                    expect(replay.lowerBound < calendar.lowerBound, "26: the BG refresh runs the calendar step after the widget/Siri action replay")
+                } else {
+                    expect(false, "26: runBackgroundRefresh holds the replay and the calendar step")
+                }
+            }
         }
 
         if failures == 0 { print("PASS: canonical AppStore integration tests") }
@@ -6584,6 +6778,116 @@ final class CalendarSyncFakeAccess: NativeCalendarAccess {
 
     func startObservingChanges(_ handler: @escaping @MainActor () -> Void) { observing = true }
     func stopObservingChanges() { observing = false }
+}
+
+/// Review-fix model of the device calendar store: several calendars with
+/// titles and events, real instants (so the fetch window filters like
+/// EventKit's does), id-only lookup, collision-free creation, and the
+/// adapter's marker guard on update and delete. `readable == false` models
+/// protected data being unavailable (no calendars, no events).
+@MainActor
+final class CalendarMirrorWorldAccess: NativeCalendarAccess {
+    struct Item {
+        var id: String
+        var calendarID: String
+        var notes: String?
+        var fields: NativeCalendarMirror.Fields
+    }
+
+    var readable = true
+    var calendarsValue: [NativeCalendarInfo]
+    var items: [Item] = []
+    var deviceCalendar: Calendar
+    var applied: [[NativeCalendarMirror.Operation]] = []
+    var removedCalendars: [String] = []
+    var createdTitles: [String] = []
+    private var next = 0
+
+    init(deviceZone: String, calendars: [NativeCalendarInfo] = [CalendarMirrorWorldAccess.info("cal-work", "Work")]) {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: deviceZone)!
+        deviceCalendar = cal
+        calendarsValue = calendars
+    }
+
+    nonisolated static func info(_ id: String, _ title: String, writable: Bool = true) -> NativeCalendarInfo {
+        NativeCalendarInfo(id: id, title: title, accountTitle: "iCloud", kind: .standard, allowsModifications: writable)
+    }
+
+    func addEvent(calendar: String, notes: String?, date: String = "2026-10-20", minutes: Int = 600, title: String = "Event") {
+        next += 1
+        let fields = NativeCalendarMirror.Fields(
+            title: title, location: nil, notes: notes ?? "", url: "", isAllDay: false,
+            start: .init(date: date, minutes: minutes), end: .init(date: date, minutes: minutes + 60), timeZoneID: nil)
+        items.append(Item(id: "w-\(next)", calendarID: calendar, notes: notes, fields: fields))
+    }
+
+    func events(in calendarID: String) -> [Item] { items.filter { $0.calendarID == calendarID } }
+    func hasCalendar(_ id: String) -> Bool { calendarsValue.contains { $0.id == id } }
+
+    private func instants(_ fields: NativeCalendarMirror.Fields) -> (Date, Date) {
+        var cal = deviceCalendar
+        if !fields.isAllDay, let id = fields.timeZoneID, let zone = TimeZone(identifier: id) { cal.timeZone = zone }
+        func date(_ value: NativeCalendarMirror.NaiveDateTime) -> Date {
+            let (y, m, d) = NativeSchedule.parseDateComponents(value.date)!
+            return cal.date(from: DateComponents(year: y, month: m, day: d, hour: value.minutes / 60, minute: value.minutes % 60))!
+        }
+        return (date(fields.start), date(fields.end))
+    }
+
+    var authorization: NativeCalendarAuthorization { .fullAccess }
+    func requestFullAccess() async -> NativeCalendarAuthorization { .fullAccess }
+    func calendars() -> [NativeCalendarInfo] { readable ? calendarsValue : [] }
+    func samples(start: Date, end: Date) -> [NativeCalendarBusy.Sample] { [] }
+
+    func findMirrorCalendar(storedID: String?) -> NativeMirrorCalendarLookup {
+        guard readable, let storedID, let info = calendarsValue.first(where: { $0.id == storedID }), info.allowsModifications else { return .missing }
+        return .found(id: info.id, accountTitle: info.accountTitle)
+    }
+
+    func createMirrorCalendar() throws -> NativeMirrorCalendarLookup {
+        let title = NativeCalendarMirror.newCalendarTitle(existingTitles: calendarsValue.map(\.title))
+        createdTitles.append(title)
+        let id = "cal-new-\(createdTitles.count)"
+        calendarsValue.append(Self.info(id, title))
+        return .found(id: id, accountTitle: "iCloud")
+    }
+
+    func mirrorEvents(calendarID: String, start: Date, end: Date) -> [NativeCalendarMirror.Existing] {
+        guard readable else { return [] }
+        return items.filter { $0.calendarID == calendarID }.compactMap { item in
+            let (s, e) = instants(item.fields)
+            guard s < end, e > start else { return nil }
+            return NativeCalendarMirror.Existing(eventID: item.id, externalID: nil, creationDate: nil, notes: item.notes, fields: item.fields)
+        }
+    }
+
+    func apply(_ operations: [NativeCalendarMirror.Operation], calendarID: String) throws {
+        applied.append(operations)
+        for operation in operations {
+            switch operation {
+            case let .create(desired):
+                next += 1
+                items.append(Item(id: "w-\(next)", calendarID: calendarID, notes: desired.fields.notes, fields: desired.fields))
+            case let .update(eventID, desired):
+                // The adapter's guard: in this calendar and carrying a marker.
+                guard let i = items.firstIndex(where: { $0.id == eventID && $0.calendarID == calendarID && NativeCalendarMirror.parseMarker($0.notes) != nil }) else { continue }
+                items[i].fields = desired.fields
+                items[i].notes = desired.fields.notes
+            case let .delete(eventID):
+                items.removeAll { $0.id == eventID && $0.calendarID == calendarID && NativeCalendarMirror.parseMarker($0.notes) != nil }
+            }
+        }
+    }
+
+    func removeMirrorCalendar(calendarID: String) throws {
+        removedCalendars.append(calendarID)
+        calendarsValue.removeAll { $0.id == calendarID }
+        items.removeAll { $0.calendarID == calendarID }
+    }
+
+    func startObservingChanges(_ handler: @escaping @MainActor () -> Void) {}
+    func stopObservingChanges() {}
 }
 
 @MainActor

@@ -91,7 +91,7 @@ struct NativeCalendarSyncSettingsView: View {
             Button("Keep calendar") { perform { await disableMirror(remove: false) } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Remove calendar deletes the TradeReady calendar and its events from every device on that calendar account. Keep calendar leaves it as it is, without further updates.")
+            Text("Remove calendar deletes the TradeReady calendar and its events from every device on that calendar account. If the calendar also holds events TradeReady didn't add, only the jobs TradeReady added are removed and the calendar stays. Keep calendar leaves it as it is, without further updates.")
         }
         .alert("Calendar sync", isPresented: alertBinding) {
             Button("OK", role: .cancel) { alertMessage = nil; sync.clearError() }

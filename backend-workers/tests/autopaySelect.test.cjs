@@ -170,3 +170,39 @@ describe('autopay housekeeping selection', () => {
     assert.equal(r.revokePlanGone.length, 0);
   });
 });
+
+describe('autopay pre-charge gate — liveVerdict on the fresh read (review fix, spec §13.7)', () => {
+  const { liveVerdict } = require('../lib/autopay/selectInvoicesToCharge.js');
+  const e = W.enrollmentRow();
+  const claim = { enrollment_id: e.id, amount_cents: 12000 };
+  const live = (over = {}) => ({ invoiceRow: W.invoiceRow({ due: DUE }), enrollment: e, plan: W.planRow(), accountId: ACCOUNT, ...over });
+  const why = (over = {}, extra = {}) => {
+    const v = liveVerdict({ claim, snapshot: e, live: live(over), now: OPEN, ...extra });
+    return v.charge ? 'charge' : v.reason;
+  };
+
+  test('charges only when the live state still matches the claim', () => {
+    assert.equal(why(), 'charge');
+    assert.equal(why({ invoiceRow: null }), 'invoice_gone');
+    assert.equal(why({ invoiceRow: W.invoiceRow({ due: DUE }, { deleted: true }) }), 'invoice_gone');
+    assert.equal(why({ invoiceRow: W.invoiceRow({ due: DUE, paid: true, payments: [{ id: 'c', amount: 120, date: DUE, method: 'cash' }] }) }), 'paid');
+    assert.equal(why({ invoiceRow: W.invoiceRow({ due: DUE, payments: [{ id: 'c', amount: 70, date: DUE, method: 'cash' }] }) }), 'balance_changed');
+    assert.equal(why({ invoiceRow: W.invoiceRow({ due: DUE, amount: 150 }) }), 'balance_changed', 'never more than claimed, never a stale amount');
+    assert.equal(why({ enrollment: null }), 'enrollment_inactive');
+    assert.equal(why({ enrollment: { ...e, status: 'revoked' } }), 'enrollment_inactive');
+    assert.equal(why({ enrollment: { ...e, payment_method_id: 'pm_other' } }), 'card_changed');
+    assert.equal(why({ accountId: null }), 'account_switched');
+    assert.equal(why({ plan: W.planRow({ autopayEnabled: false }) }), 'autopay_disabled');
+    assert.equal(why({ enrollment: { ...e, max_amount_cents: 10000 } }), 'above_authorized');
+    assert.equal(why({}, { now: new Date(OPEN.getTime() - 60e3) }), 'outside_window');
+  });
+
+  test('a completed pay-page session blocks the charge until its ledger entry lands', () => {
+    const cs = { id: 'cs_9', status: 'complete', metadata: { invoiceId: 'inv1' } };
+    assert.equal(why({}, { completedSessions: [cs] }), 'pay_page_pending');
+    assert.equal(why({}, { completedSessions: [{ ...cs, metadata: { invoiceId: 'inv2' } }] }), 'charge');
+    assert.equal(why({}, { completedSessions: [{ ...cs, status: 'expired' }] }), 'charge');
+    const booked = W.invoiceRow({ due: DUE, paid: true, payments: [{ id: 'stripe_cs_9', amount: 120, date: DUE, method: 'stripe' }] });
+    assert.equal(why({ invoiceRow: booked }, { completedSessions: [cs] }), 'paid');
+  });
+});

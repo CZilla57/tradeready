@@ -273,7 +273,7 @@
    "testSources": [
     {
      "path": "native/BookingIntakeTests",
-     "sha256": "65cbc7cf789fe4513ffa63aaf5df05fab18666359337457a4fc823e0cfed5b5b"
+     "sha256": "41bb1dc4a0df13c7d543186a51b0ca5cc7dab0a7a5ce5864a441de7cf8abcbcf"
     }
    ],
    "fixtures": []
@@ -375,7 +375,7 @@
    "testSources": [
     {
      "path": "native/CalendarSyncTests",
-     "sha256": "4e9db703f962843a24799b948bb6bc6535448f7a032a7e84e00322e0cc6000e3"
+     "sha256": "545c8aa5991675b912bd1ff13b5660e72e6752317e1acf7d36b30f48fdd6bebd"
     }
    ],
    "fixtures": []
@@ -397,7 +397,7 @@
    "testSources": [
     {
      "path": "native/CampaignTests",
-     "sha256": "186e3d9310cb096e76de354542b271536adf52ab03d394c164e4ad2b92ec31bb"
+     "sha256": "67a0b6d959f7e3e2cb0393ad65ee45ffd7dc69836bd8b21eac822ab931fadf74"
     }
    ],
    "fixtures": []
@@ -575,7 +575,7 @@
    "testSources": [
     {
      "path": "native/CustomerTagsTests",
-     "sha256": "cc4a68a2e91536df2dc2697211a6a5b54301b1f53314f5a87d76120a9a2fd0c4"
+     "sha256": "6b06f989e9d4cefc1f261e878deb7c3bdd4eed8272a5674d79da7bf49e6a864e"
     }
    ],
    "fixtures": []
@@ -1528,7 +1528,7 @@
    "testSources": [
     {
      "path": "native/ReferralTests",
-     "sha256": "3427bed7fb99532b4bffaa8dea86194a303d9fd75f5665b0c84d8995080c6040"
+     "sha256": "ed228bae781dd947b6f44215035763eb5591f3db162111facee7399657fed3b3"
     }
    ],
    "fixtures": [
@@ -1726,7 +1726,7 @@
    "testSources": [
     {
      "path": "native/StoreIntegrationTests",
-     "sha256": "e279d9a45dc401ec715129330a7180ed47f6a8514dddec011cb73bcd8f26c3d9"
+     "sha256": "5508821ef16144722ed45b9e66e9508a83119d3a3a1bff9fd060158b9dda9ddc"
     },
     {
      "path": "native/CanonicalTests",
