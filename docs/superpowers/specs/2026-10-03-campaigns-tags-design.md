@@ -1,7 +1,7 @@
 # Past-Customer Campaigns & Customer Tags (Roadmap Phase 33) — Design Spec
 
 **Date:** 2026-10-03
-**Status:** SCOPED. Builds on `feat/campaigns`, stacked on the build-order branches before it (`feat/quote-options` → `feat/lead-source` → `feat/quote-expiration` → `feat/job-forms` → `feat/properties-equipment` → `feat/referrals` → the Phase 24/28 branch). Owner go-ahead 2026-10-03: "continue working until all features on the roadmap are properly completed … implemented in the most beneficial way to the user". Code map verified 2026-10-03 against `feat/quote-expiration` at HEAD `e922d51` (Phase 27 committed) plus its uncommitted Phase 32 work. Phases 20, 21, 24, 28 and 34 are scoped but not built on this tree.
+**Status:** Stage 1 and the §9.1 Worker slice BUILT 2026-10-03/04; verified, reviewed and committed 2026-10-12 on local `feat/campaigns`, stacked on `feat/tips`. Gate green on its own branch tip against the master baseline (accessibility-audit and layout-metrics fail on master too); Worker `npm test`, doc reference check and the Release compile pass. Independent review: no P1; two P2s (opt-out per contact, referral share opt-out) fixed on `fix/campaigns-optout` (`2ee4b4c`). Stage 2 (server email, §10) deferred by the owner. Nothing pushed, deployed or applied. Owner ship steps: §13. Build record: §16.
 **Origin:** `docs/post-launch-feature-roadmap.md` Phase 33, build order #9 ("None if sent from the phone; existing Resend if bulk email")
 **Builds on:** lead source (`2026-10-02-lead-source-design.md`, built), referral program (`2026-10-03-referral-program-design.md`, scoped, build #6), contextual AI (`2026-08-07-contextual-ai-design.md`), reviewed outreach (`NativeInvoiceOutreach`), bulk invoice reminders, review requests, booking link, `maintenance_due` Today insight
 **Build target:** native SwiftUI app, a small Worker validator change, `book.html` in `CZilla57/tradeready-legal`, and one Supabase migration **file** (not applied). **No React Native changes. No deploys. No new provider.** Stage 2 (§10, server-side email) is designed here but is **not** part of v1 and needs owner approval before any of it is built.
@@ -734,7 +734,7 @@ Stage 1, native only, on `feat/campaigns` (stacked on Phase 20 forms, Phase 27 l
 
 ### 16.4 Left for later
 
-- **§9.1 Worker** (after Phase 34's booking work merges):
+- **§9.1 Worker** (after Phase 34's booking work merges; DONE, see 16.7):
   - `cleanCampaignCode` in `BW/lib/booking/validate.js` beside `leadSource` and `referralCode`;
   - the notify-owner email line in `BW/lib/booking/notifyOwner.js`;
   - the Jest files listed in §12.
@@ -777,3 +777,12 @@ Stage 1, native only, on `feat/campaigns` (stacked on Phase 20 forms, Phase 27 l
 - **Overlapping campaigns.** `liveCheck` also takes the campaign, all campaigns and today: a recipient another campaign sent to on or after this one's `frozenOn`, inside `excludeContactedWithinDays`, is skipped with the new skip reason `recently_contacted` ("contacted recently"). Pending-only overlaps still do not block at freeze.
 - **Tags.** `normalize` turns `|` into a space as well as `,` and `;`, so every stored tag survives export (`; `) and import (`,;|`).
 - **Intake.** A booking with a referral code that resolves to a referrer and a campaign code now fills a matched blank-source customer's `leadSource` and `referredByCustomerId` exactly like a referral-only booking (§9.2 row 2).
+
+### 16.7 Worker slice and Phase 34 merge items (2026-10-04, recorded 2026-10-12)
+
+§9.1 was built after this record's first draft and committed in `18b28a1`; 16.4's "§9.1 Worker" and three of its four "On merging Phase 34" items are done:
+
+- **§9.1 Worker.** `cleanCampaignCode` in `BW/lib/booking/validate.js` stores `campaignCode` only when it matches the 16-character Crockford form in 16.3; `BW/lib/booking/notifyOwner.js` adds one fixed line ("Came in through one of your campaign links…") that never echoes the code or names a campaign. Tests: `BW/tests/campaignCode.test.cjs`, plus root Jest `__tests__/bookingValidateCampaign.test.js`, `__tests__/bookingNotifyCampaign.test.js`, `__tests__/bookingSlotsReserve.test.js`. At build time `npm test` 127/127 and those Jest files 84/84.
+- **Deviation:** `cleanCampaignCode` rejects any non-ASCII input before lowercasing, so a lookalike such as the Kelvin sign cannot lowercase into a valid code.
+- **Phase 34 merge items done:** a referral code beats a campaign code at intake (chain merge, then 16.6 Intake); `referredByCustomerId` is typed in segments (`NativeCampaignSegments.swift`); the referral share's opt-out block (16.6).
+- **Still open:** one shared code encoder (`NativeAttributionCode` and `NativeReferrals.makeCode` both remain; works, refactor only). §9.3 `book.html` `?c=` is legal-repo work for the owner.

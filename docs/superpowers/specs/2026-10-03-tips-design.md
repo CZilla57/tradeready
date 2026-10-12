@@ -1,7 +1,7 @@
 # Tips on Online Payments (Roadmap Phase 28) — Design Spec
 
 **Date:** 2026-10-03
-**Status:** SCOPED. Builds on `feat/tips`, stacked on `feat/autopay` (Phase 24, `2026-10-03-card-on-file-autopay-design.md`), which is stacked on the earlier build-order branches. In `CZilla57/tradeready-legal` the `pay.html` changes go on a `feat/tips` branch on top of that repo's `feat/autopay`. Owner go-ahead 2026-10-03: "continue working until all features on the roadmap are properly completed … implemented in the most beneficial way to the user". The code map was verified 2026-10-03 against the main checkout on `feat/quote-expiration` (HEAD `e922d51` plus another agent's uncommitted Phase 32 work). Line numbers in `AppStore.swift` and `SettingsView.swift` will drift.
+**Status:** BUILT 2026-10-03; verified, reviewed and committed 2026-10-12 on local `feat/tips`, stacked on `feat/autopay`. Gate green on its own branch tip against the master baseline (accessibility-audit and layout-metrics fail on master too); Worker `npm test`, doc reference check and the Release compile pass. Fable review: no P1/P2; P3s (replayed checkout key, overpayment inside webhook lag, docs) fixed in `8e938b9`. Nothing pushed, deployed or applied. Owner ship steps: §9. Build record: §13.
 **Origin:** `docs/post-launch-feature-roadmap.md` Phase 28, build order #8 ("None (existing Stripe)"), "consider bundling with #24".
 **Builds on:**
 - the Phase 24 pay page and per-visit Checkout Session (autopay spec §1, §4.2–§4.5): this phase adds a step to it
