@@ -6,31 +6,39 @@
 //   2. A key in the query string → 400 key_in_query (before routing, so a
 //      key pasted into any URL is refused, not silently ignored).
 //   3. Unknown path → 404 not_found. /v1/openapi.json is public.
-//   4. Bearer parse. No well-formed key → the per-IP failed-auth block
-//      (429 rate_limited while blocked) or 401 invalid_key, no database
-//      contact. A well-formed key is never rejected by the IP block.
-//   5. Per-key-hash memory guards (no database contact): a hash the RPC has
-//      repeatedly called unknown → 401 invalid_key; a hash the RPC has said
-//      is over its limit → 429 rate_limited until its reset. A hash outside
-//      the positive cache (recently authorized) from an IP over the failure
-//      threshold gets only a small RPC budget per window → 429 beyond it.
-//      Known-good hashes always go to the RPC (revocation is still checked).
-//   6. api_key_authorize RPC → 401 key_revoked | key_expired | invalid_key,
-//      429 rate_limited, 503 unavailable. From here on the request has an
-//      owner and every outcome is logged against the key.
-//   7. Scope → 403 insufficient_scope.
-//   8. Query parameters → 400 invalid_parameter | invalid_cursor.
-//   9. GET-only reads scoped to the resolved owner → 200 | 404 | 500.
+//   4. API_KEY_TAG_SECRET unset (or shorter than 44 characters) → 503
+//      not_configured for every authenticated route. Fail closed: there is
+//      no untagged-key path.
+//   5. Bearer parse, then the key's HMAC tag (keys.js verifyApiKey). A
+//      missing, malformed or forged key → the per-client junk counter (429
+//      rate_limited past its limit) or 401 invalid_key. It costs no token,
+//      no cache entry and no RPC. Only tag-valid keys go further, and each
+//      names its key id and owner.
+//   6. Per-key-hash memory guards (no database contact): a hash the RPC
+//      called unknown, revoked or expired → the same 401 for the rest of its
+//      life (all three are final for a tag-valid key); a hash the RPC said is over its limit →
+//      429 rate_limited until its reset. Then admission (auth.js
+//      createApiGuard): at most 4 RPCs in flight per hash, else 429; and a
+//      hash outside the positive cache also takes one client, one owner and
+//      one isolate token (shared pool, or the reserve for an owner holding
+//      none), else 429. All taken before the RPC is awaited.
+//   7. api_key_authorize RPC → 401 key_revoked | key_expired | invalid_key,
+//      429 rate_limited, 503 unavailable (also when the row's id or owner is
+//      not the one the tag names). From here on the request has an owner
+//      and every outcome is logged against the key.
+//   8. Scope → 403 insufficient_scope.
+//   9. Query parameters → 400 invalid_parameter | invalid_cursor.
+//  10. GET-only reads scoped to the resolved owner → 200 | 404 | 500.
 //
 // Every response carries TradeReady-Api-Version and Cache-Control: no-store
 // (openapi.json is the one cacheable document). Responses that resolved a
 // key also carry X-RateLimit-Limit/Remaining/Reset for its minute window.
 
 const { API_VERSION, RESOURCES, RESOURCE_NAMES, expandRow, invoiceLedger, toPublic, isoUtc } = require('./resources.js');
-const { parseBearer, keyInQuery, hasScope, sha256Hex, RESOURCE_SCOPE } = require('./keys.js');
+const { parseBearer, keyInQuery, hasScope, sha256Hex, tagSecretFrom, verifyApiKey, RESOURCE_SCOPE } = require('./keys.js');
 const { encodeCursor, decodeCursor } = require('./cursor.js');
 const store = require('./store.js');
-const { authorizeKey, logApiRequest } = require('./auth.js');
+const { authorizeKey, logApiRequest, clientKey } = require('./auth.js');
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -52,6 +60,7 @@ const ERRORS = Object.freeze({
   method_not_allowed: [405, 'The TradeReady API is read-only. Use GET.'],
   rate_limited: [429, 'Rate limit reached. Retry after the number of seconds in the Retry-After header.'],
   unavailable: [503, 'The API is temporarily unavailable. Try again later.'],
+  not_configured: [503, 'The API is not configured to accept keys right now. Try again later.'],
   server_error: [500, 'Something went wrong on our side. Try again later.'],
 });
 const ERROR_CODES = Object.freeze(Object.keys(ERRORS));
@@ -232,8 +241,8 @@ async function readSingle(env, auth, route, { nowMs }) {
 
 // req: { method, url, authorization, ip } where ip is cf-connecting-ip only
 // (never x-forwarded-for, which the caller controls).
-// deps: { nowMs, failureGuard }.
-async function handleV1(req, env, { nowMs = Date.now(), failureGuard }) {
+// deps: { nowMs, guard } where guard is createApiGuard() (auth.js).
+async function handleV1(req, env, { nowMs = Date.now(), guard }) {
   const base = { 'TradeReady-Api-Version': API_VERSION, 'Cache-Control': 'no-store' };
   const respond = (status, body, extra = {}) => ({ status, body, headers: { ...base, ...extra } });
   const fail = (code, extra = {}, message) =>
@@ -247,9 +256,9 @@ async function handleV1(req, env, { nowMs = Date.now(), failureGuard }) {
   } catch {
     return fail('not_found');
   }
-  const ipKey = req.ip || 'unknown';
+  const client = clientKey(req.ip);
   if (keyInQuery(url.searchParams)) {
-    failureGuard.fail(ipKey, nowMs);
+    guard.junkRequest(client, nowMs); // counted; always 400, never 429
     return fail('key_in_query');
   }
   const route = matchRoute(url.pathname);
@@ -265,66 +274,94 @@ async function handleV1(req, env, { nowMs = Date.now(), failureGuard }) {
     return respond(200, OPENAPI_DOCUMENT, { 'Cache-Control': 'public, max-age=3600' });
   }
 
-  const bearer = parseBearer(req.authorization);
-  if (bearer.error) {
-    // Junk traffic only: a request with a well-formed key never reaches this
-    // block, so the IP guard cannot lock out valid keys on a shared address.
-    const blockedFor = failureGuard.blockedFor(ipKey, nowMs);
-    if (blockedFor > 0) return fail('rate_limited', { 'Retry-After': String(blockedFor) });
-    failureGuard.fail(ipKey, nowMs);
+  // Fail closed before reading any key: without the tag secret no key can be
+  // verified, and there is no untagged fallback.
+  const tagSecret = tagSecretFrom(env);
+  if (!tagSecret) {
+    console.error('[api/v1] API_KEY_TAG_SECRET is not configured');
+    return fail('not_configured');
+  }
+
+  // Junk traffic only: a request with a tag-valid key never meets the junk
+  // counter, so junk from a shared address cannot lock out valid keys.
+  const junk = () => {
+    const wait = guard.junkRequest(client, nowMs);
+    if (wait > 0) return fail('rate_limited', { 'Retry-After': String(wait) });
     return fail('invalid_key', WWW_AUTHENTICATE);
+  };
+  const bearer = parseBearer(req.authorization);
+  if (bearer.error) return junk(); // no HMAC for a missing or malformed key
+  // The junk counter is read before the HMAC. A client already over its junk
+  // limit still gets its key's tag checked (a tag-valid key must pass), but a
+  // forgery from it is answered 429 without touching the counter again.
+  const junkWait = guard.junkBlocked(client, nowMs);
+  // The tag is checked before anything is spent: a forged or random key
+  // never takes a token, never enters a cache and never reaches the RPC.
+  const tagged = await verifyApiKey(tagSecret, bearer.key);
+  if (!tagged) {
+    if (junkWait > 0) return fail('rate_limited', { 'Retry-After': String(junkWait) });
+    return junk();
   }
 
   // Only the hash is ever remembered, never the key.
   const keyHash = sha256Hex(bearer.key);
-  const shed = failureGuard.keyShed(keyHash, nowMs);
+  const shed = guard.keyShed(keyHash, nowMs);
   if (shed && shed.error === 'rate_limited') {
     return fail('rate_limited', { 'Retry-After': String(shed.retryAfter), ...rateHeaders(shed.rate) });
   }
-  if (shed) {
-    failureGuard.fail(ipKey, nowMs);
-    return fail(shed.error, WWW_AUTHENTICATE);
-  }
+  if (shed) return fail(shed.error, WWW_AUTHENTICATE);
 
-  // A hash this isolate has seen authorize recently is never held to the IP
-  // budget, but it still goes to the RPC below (revocation and expiry are
-  // checked on every request). Any other hash from a blocked address gets a
-  // small RPC budget per window, so a flood of distinct random well-formed
-  // keys cannot reach the database unbounded.
-  let spentBudget = false;
-  if (!failureGuard.isKnownKey(keyHash, nowMs)) {
-    const blockedFor = failureGuard.blockedFor(ipKey, nowMs);
-    if (blockedFor > 0) {
-      if (!failureGuard.takeIpBudget(ipKey, nowMs)) return fail('rate_limited', { 'Retry-After': String(blockedFor) });
-      spentBudget = true;
+  // Admission, decided synchronously BEFORE the RPC is awaited, so a burst of
+  // concurrent requests is bounded by what is admitted, not by what has come
+  // back. Every hash gets at most a few RPCs in flight. A positively cached
+  // hash still goes to the RPC (revocation, expiry and rate limits are
+  // checked every time) without spending tokens; any other hash also spends
+  // a client token, an owner token and an isolate token.
+  const slot = guard.takeInFlight(keyHash);
+  if (!slot) return fail('rate_limited', { 'Retry-After': '1' });
+  let ticket = null;
+  if (!guard.isKnownKey(keyHash, nowMs)) {
+    const taken = guard.takeTokens(client, nowMs, tagged.ownerId);
+    if (!taken.ticket) {
+      guard.releaseInFlight(slot);
+      return fail('rate_limited', { 'Retry-After': String(taken.retryAfter) });
     }
+    ticket = taken.ticket;
   }
-  // Only unknown/revoked/expired answers keep the credit.
-  const refund = () => { if (spentBudget) failureGuard.refundIpBudget(ipKey); };
 
   let auth;
   try {
     auth = await authorizeKey(env, { keyHash, route: route.template, ip: req.ip || null });
   } catch (err) {
     console.error('[api/v1] authorize failed:', err.message);
-    refund();
+    auth = { kind: 'unavailable' };
+  } finally {
+    guard.releaseInFlight(slot);
+  }
+  // The row must be the one the tag names. A mismatch means the database and
+  // the tag secret disagree: fail closed, keep the tokens.
+  if (auth.kind === 'ok' && (auth.keyId.toLowerCase() !== tagged.keyId || auth.userId.toLowerCase() !== tagged.ownerId)) {
+    console.error('[api/v1] authorized key does not match its tag');
+    auth = { kind: 'unavailable' };
+  }
+  // Only a live key's answer gives the tokens back; denials, outages and
+  // transport failures keep them, so an outage cannot make the bound infinite.
+  if (auth.kind === 'ok' || auth.kind === 'rate_limited') guard.refundTokens(ticket);
+  if (auth.kind === 'unavailable') {
+    guard.rpcFailed(nowMs);
     return fail('unavailable');
   }
-  if (auth.kind !== 'denied') refund();
-  if (auth.kind === 'unavailable') return fail('unavailable');
   if (auth.kind === 'denied') {
-    failureGuard.fail(ipKey, nowMs);
-    failureGuard.forgetKey(keyHash);
-    if (auth.error === 'invalid_key') failureGuard.unknownKey(keyHash, nowMs);
+    guard.deniedKey(keyHash, auth.error, nowMs, tagged.ownerId);
     return fail(auth.error, WWW_AUTHENTICATE);
   }
   if (auth.kind === 'rate_limited') {
-    failureGuard.knownKey(keyHash, nowMs); // only a live key is ever rate limited
-    failureGuard.rateLimitedKey(keyHash, { retryAfter: auth.retryAfter, rate: auth.rate }, nowMs);
+    guard.knownKey(keyHash, nowMs, tagged.ownerId); // only a live key is ever rate limited
+    guard.rateLimitedKey(keyHash, { retryAfter: auth.retryAfter, rate: auth.rate }, nowMs);
     return fail('rate_limited', { 'Retry-After': String(auth.retryAfter), ...rateHeaders(auth.rate) });
   }
 
-  failureGuard.knownKey(keyHash, nowMs);
+  guard.knownKey(keyHash, nowMs, tagged.ownerId);
   const out = await serveAuthorized(env, auth, route, url.searchParams, { nowMs, fail, respond });
   out.headers = { ...out.headers, ...rateHeaders(auth.rate) };
   await logApiRequest(env, {

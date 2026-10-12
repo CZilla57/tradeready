@@ -27,7 +27,7 @@ declare
   api_tables constant text[] := array['api_keys', 'api_access_log', 'api_usage_counters'];
   rpcs constant text[] := array[
     'public.api_key_authorize(text,text,text)',
-    'public.api_key_admin(uuid,text,uuid,text,uuid,text,text[],integer,text,text,integer)',
+    'public.api_key_admin(uuid,text,uuid,text,uuid,text,text[],integer,text,text,integer,uuid)',
     'public.api_key_public(public.api_keys)'
   ];
   hidden_columns constant text[] := array['key_hash', 'operation_id', 'request_hash'];
@@ -104,7 +104,7 @@ begin
     end if;
   end loop;
   foreach fn in array array['public.api_key_authorize(text,text,text)',
-                            'public.api_key_admin(uuid,text,uuid,text,uuid,text,text[],integer,text,text,integer)'] loop
+                            'public.api_key_admin(uuid,text,uuid,text,uuid,text,text[],integer,text,text,integer,uuid)'] loop
     select count(*) into n from pg_proc p
      where p.oid = to_regprocedure(fn) and p.prosecdef
        and exists (select 1 from unnest(coalesce(p.proconfig, '{}')) s where s like 'search_path=%');
@@ -114,12 +114,31 @@ begin
   -- 4b. The working-key ceiling (5 live + 5 grace) is in the admin RPC:
   -- rotate ends its own grace predecessor and trims grace keys to the cap.
   select count(*) into n from pg_proc p
-   where p.oid = to_regprocedure('public.api_key_admin(uuid,text,uuid,text,uuid,text,text[],integer,text,text,integer)')
+   where p.oid = to_regprocedure('public.api_key_admin(uuid,text,uuid,text,uuid,text,text[],integer,text,text,integer,uuid)')
      and p.prosrc like '%c_max_live%constant integer := 5%'
      and p.prosrc like '%c_max_grace%constant integer := 5%'
      and p.prosrc like '%offset c_max_grace%'
      and p.prosrc like '%g.replaced_by = v_old.id%';
   if n <> 1 then raise exception 'api_key_admin lacks the grace-key cap (c_max_grace / offset / predecessor end)'; end if;
+
+  -- 4c. Self-verifying keys: the admin RPC inserts the key id the Worker
+  -- tagged into the raw key, and the pre-tag signature is gone.
+  select count(*) into n from pg_proc p
+   where p.oid = to_regprocedure('public.api_key_admin(uuid,text,uuid,text,uuid,text,text[],integer,text,text,integer,uuid)')
+     and p.prosrc like '%p_new_key_id is null%'
+     and p.prosrc like '%(p_new_key_id, p_user_id, p_key_hash%';
+  if n <> 1 then raise exception 'api_key_admin does not insert the Worker-chosen key id (p_new_key_id)'; end if;
+
+  -- 4d. Durable per-owner mint limit (20 per rolling 24 hours, create + rotate).
+  select count(*) into n from pg_proc p
+   where p.oid = to_regprocedure('public.api_key_admin(uuid,text,uuid,text,uuid,text,text[],integer,text,text,integer,uuid)')
+     and p.prosrc like '%c_max_mints_per_day constant integer := 20%'
+     and p.prosrc like '%interval ''24 hours''%'
+     and p.prosrc like '%''mint_limit''%';
+  if n <> 1 then raise exception 'api_key_admin lacks the durable mint limit (c_max_mints_per_day)'; end if;
+  if to_regprocedure('public.api_key_admin(uuid,text,uuid,text,uuid,text,text[],integer,text,text,integer)') is not null then
+    raise exception 'STALE api_key_admin overload without p_new_key_id still exists';
+  end if;
 
   -- 5. Account deletion cascades: every API table reaches auth.users with
   -- ON DELETE CASCADE (counters through api_keys).

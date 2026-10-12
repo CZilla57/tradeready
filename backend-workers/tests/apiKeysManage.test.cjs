@@ -3,7 +3,9 @@
 // rotate pairing, replay, ownership) are proven on a real PostgreSQL by
 // supabase/verify/local/api_keys.sh. These tests pin the Worker side: the
 // raw key appears exactly once (the 200 body) and never in any request the
-// Worker makes; the RPC gets the hash and display prefix; replays never
+// Worker makes; it is tagged with API_KEY_TAG_SECRET and embeds the new key
+// id and the owner; without the secret nothing is minted (503); the RPC gets
+// the hash, the display prefix and the new key id; replays never
 // return a secret; list/activity never select key_hash; every error maps to
 // the contract's code; and the route is JWT-authed with appCors.
 
@@ -13,14 +15,22 @@ const assert = require('node:assert/strict');
 const { apiKeysManageCore, toKeySummary, requestHash } = require('../lib/api/keyAdmin.js');
 const keys = require('../lib/api/keys.js');
 
-const ENV = { SUPABASE_URL: 'https://supa.test', SUPABASE_SERVICE_ROLE_KEY: 'srk', SUPABASE_ANON_KEY: 'anon' };
+const TAG_SECRET = 'tag-secret-for-manage-tests-0123456789-abcdefgh';
+const ENV = { SUPABASE_URL: 'https://supa.test', SUPABASE_SERVICE_ROLE_KEY: 'srk', SUPABASE_ANON_KEY: 'anon', API_KEY_TAG_SECRET: TAG_SECRET };
 const OWNER = '11111111-1111-4111-8111-111111111111';
 const KEY_ID = '22222222-2222-4222-8222-222222222222';
 const NEW_ID = '33333333-3333-4333-8333-333333333333';
 const OP = '0193f123-0000-4000-8000-000000000001';
 const NOW = Date.parse('2026-10-03T18:00:00Z');
+// randomBytes(n) is called for 16 bytes (the key id) then 32 (the secret part).
+const ID_BYTES = Buffer.alloc(16, 0x3c);
 const BYTES = Buffer.alloc(32, 0x5a);
-const SECRET = keys.generateApiKey(BYTES);
+const randomBytes = (n) => (n === 16 ? ID_BYTES : n === 32 ? BYTES : assert.fail(`unexpected randomBytes(${n})`));
+const MINTED_ID = keys.newKeyId(ID_BYTES); // 3c3c3c3c-3c3c-4c3c-bc3c-3c3c3c3c3c3c
+let SECRET;
+before(async () => {
+  SECRET = await keys.mintApiKey(TAG_SECRET, { keyId: MINTED_ID, ownerId: OWNER, randomBytes: BYTES });
+});
 const realFetch = global.fetch;
 afterEach(() => { global.fetch = realFetch; });
 
@@ -59,19 +69,19 @@ function backend({ rpc = [], rest = () => [], rpcStatus = 200 } = {}) {
 }
 
 const run = (body, over = {}) =>
-  apiKeysManageCore(ENV, { userId: OWNER, body, nowMs: NOW, randomBytes: () => BYTES, ...over });
+  apiKeysManageCore(ENV, { userId: OWNER, body, nowMs: NOW, randomBytes, ...over });
 
 const createBody = (over = {}) => ({ action: 'create', operationId: OP, name: '  Books ', scopes: ['invoices:read', 'customers:read'], ...over });
 
 describe('create', () => {
   test('mints server-side, sends only hash + prefix, returns the secret once', async () => {
-    const calls = backend({ rpc: [{ ok: true, decision: 'committed', key: keyRow() }] });
+    const calls = backend({ rpc: [{ ok: true, decision: 'committed', key: keyRow({ id: MINTED_ID }) }] });
     const out = await run(createBody());
     assert.equal(out.status, 200);
     assert.equal(out.json.secret, SECRET);
     assert.deepEqual(Object.keys(out.json), ['ok', 'key', 'secret']);
     assert.deepEqual(out.json.key, {
-      id: KEY_ID, name: 'Books', prefix: 'trk_WlpaWlpa', scopes: ['customers:read', 'invoices:read'],
+      id: MINTED_ID, name: 'Books', prefix: 'trk_WlpaWlpa', scopes: ['customers:read', 'invoices:read'],
       createdAt: '2026-10-01T00:00:00.000Z', expiresAt: '2027-10-01T00:00:00.000Z', revokedAt: null,
       lastUsedAt: null, replacedBy: null, status: 'active',
     });
@@ -83,13 +93,55 @@ describe('create', () => {
     assert.deepEqual(sent.p_scopes, ['customers:read', 'invoices:read'], 'canonical order');
     assert.equal(sent.p_expiry_days, 365, 'default expiry is 1 year');
     assert.equal(sent.p_operation_id, OP);
+    assert.equal(sent.p_new_key_id, MINTED_ID, 'the row id is the id the key embeds');
     assert.ok(!calls[0].raw.includes(SECRET), 'the raw key never reaches the database');
     assert.ok(!calls[0].raw.includes(SECRET.slice(4)), 'not even its body');
+    assert.ok(!calls[0].raw.includes(TAG_SECRET), 'nor the tag secret');
+    // The secret is a tagged key naming its own row and owner.
+    assert.deepEqual(await keys.verifyApiKey(TAG_SECRET, out.json.secret), { keyId: MINTED_ID, ownerId: OWNER });
+  });
+
+  test('without API_KEY_TAG_SECRET (or with a short one) create and rotate mint nothing: 503 before any database contact', async () => {
+    const errs = [];
+    const orig = console.error;
+    console.error = (...a) => errs.push(a.join(' '));
+    try {
+      for (const env of [{ ...ENV, API_KEY_TAG_SECRET: undefined }, { ...ENV, API_KEY_TAG_SECRET: 'x'.repeat(43) }]) {
+        for (const body of [createBody(), { action: 'rotate', operationId: OP, keyId: KEY_ID }]) {
+          const calls = backend({ rpc: [{ ok: true, key: keyRow({ id: MINTED_ID }) }] });
+          const out = await apiKeysManageCore(env, { userId: OWNER, body, nowMs: NOW, randomBytes });
+          assert.deepEqual(out, { status: 503, json: { error: 'unavailable' } });
+          assert.equal(calls.length, 0);
+        }
+      }
+    } finally {
+      console.error = orig;
+    }
+    assert.ok(errs.every((e) => e.includes('API_KEY_TAG_SECRET')));
+    // list and revoke do not mint, so they still work.
+    backend({ rpc: [{ ok: true, decision: 'committed', key: keyRow({ revoked_at: '2026-10-03T18:00:00+00:00' }) }] });
+    const revoked = await apiKeysManageCore({ ...ENV, API_KEY_TAG_SECRET: undefined }, { userId: OWNER, body: { action: 'revoke', keyId: KEY_ID }, nowMs: NOW, randomBytes });
+    assert.equal(revoked.status, 200);
+  });
+
+  test('a committed row under any other id than the minted one never hands out the secret', async () => {
+    backend({ rpc: [{ ok: true, decision: 'committed', key: keyRow({ id: KEY_ID }) }] });
+    const errs = [];
+    const orig = console.error;
+    console.error = (...a) => errs.push(a.join(' '));
+    let out;
+    try {
+      out = await run(createBody());
+    } finally {
+      console.error = orig;
+    }
+    assert.deepEqual(out, { status: 500, json: { error: 'server_error' } });
+    assert.ok(!errs.join('').includes(SECRET));
   });
 
   test('expiry choices map to 90 / 365 / none', async () => {
     for (const [expiry, days] of [['90d', 90], ['1y', 365], ['none', null]]) {
-      const calls = backend({ rpc: [{ ok: true, key: keyRow() }] });
+      const calls = backend({ rpc: [{ ok: true, key: keyRow({ id: MINTED_ID }) }] });
       await run(createBody({ expiry }));
       assert.equal(calls[0].body.p_expiry_days, days, expiry);
     }
@@ -101,7 +153,7 @@ describe('create', () => {
     const c = requestHash({ action: 'create', name: 'Books', scopes: ['customers:read'], expiry: '90d' });
     assert.equal(a, b);
     assert.notEqual(a, c);
-    const calls = backend({ rpc: [{ ok: true, key: keyRow() }, { ok: true, key: keyRow() }] });
+    const calls = backend({ rpc: [{ ok: true, key: keyRow({ id: MINTED_ID }) }, { ok: true, key: keyRow({ id: MINTED_ID }) }] });
     await run(createBody());
     await run(createBody({ name: 'Books', scopes: ['customers:read', 'invoices:read', 'customers:read'] }));
     assert.equal(calls[0].body.p_request_hash, calls[1].body.p_request_hash, 'normalized intents hash the same');
@@ -119,6 +171,12 @@ describe('create', () => {
     assert.deepEqual(await run(createBody()), { status: 409, json: { error: 'key_limit', maxLiveKeys: 5 } });
     backend({ rpc: [{ ok: false, error: 'operation_conflict' }] });
     assert.deepEqual(await run(createBody()), { status: 409, json: { error: 'operation_conflict' } });
+    // The durable mint limit (20 per owner per rolling 24 h) keeps the app's
+    // existing 429 contract; no secret is returned.
+    backend({ rpc: [{ ok: false, error: 'mint_limit' }] });
+    assert.deepEqual(await run(createBody()), { status: 429, json: { error: 'rate_limited' } });
+    backend({ rpc: [{ ok: false, error: 'mint_limit' }] });
+    assert.deepEqual(await run({ action: 'rotate', operationId: OP, keyId: KEY_ID }), { status: 429, json: { error: 'rate_limited' } });
     backend({ rpc: [{ ok: false, error: 'invalid_args' }] });
     assert.deepEqual(await run(createBody()), { status: 400, json: { error: 'invalid_request' } });
     backend({ rpc: [{ message: 'function not found' }], rpcStatus: 404 });
@@ -173,19 +231,21 @@ describe('rotate and revoke', () => {
       rpc: [{
         ok: true,
         decision: 'committed',
-        key: keyRow({ id: NEW_ID, key_prefix: SECRET.slice(0, 12), created_at: '2026-10-03T18:00:00+00:00' }),
-        previous: keyRow({ replaced_by: NEW_ID, expires_at: '2026-10-04T18:00:00+00:00' }),
+        key: keyRow({ id: MINTED_ID, key_prefix: SECRET.slice(0, 12), created_at: '2026-10-03T18:00:00+00:00' }),
+        previous: keyRow({ id: KEY_ID, replaced_by: MINTED_ID, expires_at: '2026-10-04T18:00:00+00:00' }),
       }],
     });
     const out = await run({ action: 'rotate', operationId: OP, keyId: KEY_ID });
     assert.equal(out.status, 200);
     assert.deepEqual(Object.keys(out.json), ['ok', 'key', 'previous', 'secret']);
     assert.equal(out.json.secret, SECRET);
-    assert.equal(out.json.key.id, NEW_ID);
+    assert.equal(out.json.key.id, MINTED_ID);
     assert.equal(out.json.previous.status, 'expiring');
-    assert.equal(out.json.previous.replacedBy, NEW_ID);
+    assert.equal(out.json.previous.replacedBy, MINTED_ID);
     assert.equal(calls[0].body.p_grace_seconds, 86400, 'default grace is 24 hours');
     assert.equal(calls[0].body.p_key_id, KEY_ID);
+    assert.equal(calls[0].body.p_new_key_id, MINTED_ID);
+    assert.deepEqual(await keys.verifyApiKey(TAG_SECRET, out.json.secret), { keyId: MINTED_ID, ownerId: OWNER });
     assert.ok(!calls[0].raw.includes(SECRET));
   });
 
@@ -203,6 +263,7 @@ describe('rotate and revoke', () => {
     assert.equal(out.json.secret, undefined);
     assert.equal(calls[0].body.p_key_hash, null);
     assert.equal(calls[0].body.p_operation_id, null);
+    assert.equal(calls[0].body.p_new_key_id, null);
     backend({ rpc: [{ ok: false, error: 'not_found' }] });
     assert.deepEqual(await run({ action: 'revoke', keyId: KEY_ID }), { status: 404, json: { error: 'not_found' } });
   });
@@ -307,7 +368,10 @@ describe('route wiring (full Worker fetch)', () => {
       const u = String(url);
       seen.push({ u, body: init.body || '' });
       if (u.endsWith('/auth/v1/user')) return jsonRes({ id: user });
-      if (u.endsWith('/rpc/api_key_admin')) return jsonRes({ ok: true, decision: 'committed', key: keyRow() });
+      if (u.endsWith('/rpc/api_key_admin')) {
+        // A faithful RPC: the row is stored under the id the Worker chose.
+        return jsonRes({ ok: true, decision: 'committed', key: keyRow({ id: JSON.parse(init.body).p_new_key_id }) });
+      }
       if (u.includes('/rest/v1/api_keys')) return jsonRes([]);
       throw new Error(`unexpected ${u}`);
     };
@@ -317,8 +381,11 @@ describe('route wiring (full Worker fetch)', () => {
     });
     assert.equal(res.status, 200);
     const body = await res.json();
-    assert.match(body.secret, /^trk_[A-Za-z0-9_-]{43}$/);
+    assert.match(body.secret, /^trk_[A-Za-z0-9_-]{107}$/);
     assert.equal(body.secret.slice(0, 12), JSON.parse(seen[1].body).p_key_prefix);
+    // Minted from the route's CSPRNG, tagged, naming the stored row and the JWT's user.
+    assert.deepEqual(await keys.verifyApiKey(TAG_SECRET, body.secret), { keyId: body.key.id, ownerId: user });
+    assert.equal(JSON.parse(seen[1].body).p_new_key_id, body.key.id);
     for (const s of seen) assert.ok(!s.body.includes(body.secret), 'secret never sent anywhere');
     let last;
     for (let i = 0; i < 10; i++) {
