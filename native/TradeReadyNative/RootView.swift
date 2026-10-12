@@ -231,7 +231,7 @@ struct NativeMainTabs: View {
             Button { store.isCoachPresented = true } label: {
                 Image(systemName: "sparkles").font(.title2).padding(6)
             }
-            .buttonStyle(.borderedProminent)
+            .tradeReadyProminentButtonStyle()
             .buttonBorderShape(.circle)
             .shadow(radius: 4, y: 2)
             .accessibilityLabel("Ask Coach")
