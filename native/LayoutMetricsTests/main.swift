@@ -605,7 +605,9 @@ func testNavigationStructure(sources: [SourceFile]) {
     if let rootView = file(sources, "RootView.swift") {
         expect(tabViews.first?.hasPrefix("N/RootView.swift") == true, "the TabView is RootView's")
         let tabs = rootView.occurrences(of: "tag").filter { rootView.code[$0 - 1] == "." }.count
-        expectEqual(tabs, 6, "RootView keeps six tabs in every size class")
+        // Five since a4db097 (charter row 31): Money is the fifth tab and Coach
+        // is a sheet behind a floating button.
+        expectEqual(tabs, 5, "RootView keeps five tabs in every size class")
     }
 
     // Views whose own body is a NavigationStack. A stack inside the type's
