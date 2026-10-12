@@ -1008,7 +1008,7 @@
    "testSources": [
     {
      "path": "native/LayoutMetricsTests",
-     "sha256": "f5a4cd99adedf412dc83f6bfcdb2cf26292feab17d5a3ef745432b0be49b5750"
+     "sha256": "3b1b63e0d76240996c67607ccf3c73594644fe8793791218bd9d7339dc68919e"
     }
    ],
    "fixtures": []
