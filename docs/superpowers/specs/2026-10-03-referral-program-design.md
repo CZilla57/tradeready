@@ -1,7 +1,7 @@
 # Referral Program (Roadmap Phase 34) — Design Spec
 
 **Date:** 2026-10-03
-**Status:** SCOPED. Builds on `feat/referrals`, stacked on the build-order branches before it (`feat/quote-options` → `feat/lead-source` → the Phase 32 branch → `feat/job-forms` → `feat/properties-equipment`). Owner go-ahead 2026-10-03: "continue working until all features on the roadmap are properly completed … implemented in the most beneficial way to the user". Code map verified 2026-10-03 against the `feat/lead-source` working tree, where Phase 27 is still uncommitted.
+**Status:** BUILT 2026-10-03; verified, reviewed and committed 2026-10-12 on local `feat/referrals`, stacked on `feat/properties-equipment`. Gate green on its own branch tip against the master baseline (accessibility-audit and layout-metrics fail on master too); Worker `npm test`, doc reference check and the Release compile pass. Independent review: no P1/P2; one P3 left for an owner rule (a referral re-pointed or removed after its credit is applied can double-credit; see the roadmap ledger). Nothing pushed, deployed or applied. Build record: §10.
 **Origin:** `docs/post-launch-feature-roadmap.md` Phase 34, build order #6 (needs #27)
 **Builds on:** lead source (`2026-10-02-lead-source-design.md`), booking link (`2026-08-04-booking-link-design.md`, `2026-08-07-calendar-availability-booking-design.md`), review requests, customer merge, invoice-from-job, Today insights, coach grounding
 **Build target:** native SwiftUI app, the Worker, and `book.html` in `CZilla57/tradeready-legal`. **No React Native changes. No migration. No deploys.**
