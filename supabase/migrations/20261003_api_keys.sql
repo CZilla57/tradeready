@@ -19,6 +19,11 @@
 -- - Keys are stored as sha256(raw key) hex only. The raw key exists once, in
 --   the Worker's create/rotate response, and is never written anywhere — no
 --   replay table holds it (unlike portal_operations).
+-- - Keys are self-verifying (spec §2, §14.4a #5): the Worker tags each key
+--   with an HMAC over its own api_keys.id, the owner id and its random part,
+--   using a Worker secret the database never sees. So the Worker chooses the
+--   new key's id and passes it to api_key_admin (p_new_key_id); the table
+--   stores no tag, no secret and nothing new beyond that id.
 -- - All writes are service-role only (the Worker). Clients get read-only
 --   metadata: api_keys WITHOUT key_hash and the operation bookkeeping
 --   columns (column-level grants), and their own api_access_log rows.
@@ -270,12 +275,29 @@ grant execute on function public.api_key_authorize(text, text, text) to service_
 --   the ones expiring soonest are ended now. An owner therefore never has
 --   more than 5 live + 5 grace = 10 working keys, however often they rotate.
 -- revoke: sets revoked_at once (never cleared); idempotent.
+-- Mint limit: at most c_max_mints_per_day (20) keys minted per owner per
+--   rolling 24 hours, create and rotate together, counted from api_keys rows
+--   (revoked and expired rows included; rows are never deleted except by
+--   account deletion). Over it: mint_limit (the Worker answers 429
+--   rate_limited). A replayed operation still answers already_completed.
+--   Why 20: an owner's ceiling is 5 live keys, and creating all five and
+--   rotating all five is 10 mints; 20 leaves room for mistakes. It bounds how
+--   fast one account can produce dead (revoked or expired) keys, which are
+--   what is left to spend the Worker's in-memory authorize budget once keys
+--   are self-verifying (spec §14.4a #5, #6).
+-- Key id: create/rotate insert the new row under p_new_key_id, the id the
+--   Worker embedded (and tagged) in the raw key. It is required; a collision
+--   is operation_conflict like any other unique violation.
 -- Replay: create/rotate carry the app's operationId. A committed id answers
 --   already_completed with the key's id and prefix (no secret exists to
 --   return); the same id with a different request is operation_conflict.
 --
 -- Envelope: {ok:true, decision, key, previous?} | {ok:false, error, key?}
 -- where key/previous are the public metadata columns (never key_hash).
+
+-- The pre-tag signature minted keys without an id the Worker chose; drop it
+-- if an earlier draft of this file created it, so only one admin RPC exists.
+drop function if exists public.api_key_admin(uuid, text, uuid, text, uuid, text, text[], integer, text, text, integer);
 
 create or replace function public.api_key_admin(
   p_user_id        uuid,
@@ -288,7 +310,8 @@ create or replace function public.api_key_admin(
   p_expiry_days    integer,
   p_key_hash       text,
   p_key_prefix     text,
-  p_grace_seconds  integer
+  p_grace_seconds  integer,
+  p_new_key_id     uuid
 )
 returns jsonb
 language plpgsql
@@ -298,11 +321,13 @@ as $$
 declare
   c_max_live  constant integer := 5;
   c_max_grace constant integer := 5;
+  c_max_mints_per_day constant integer := 20;
   v_now       timestamptz := now();
   v_existing  record;
   v_old       public.api_keys;
   v_new       public.api_keys;
   v_live      integer;
+  v_minted    integer;
 begin
   if coalesce(
        nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role',
@@ -330,8 +355,8 @@ begin
       'key', public.api_key_public(v_old));
   end if;
 
-  -- create / rotate need an operation id, the new key's hash and prefix.
-  if p_operation_id is null or p_request_hash is null
+  -- create / rotate need an operation id, the new key's id, hash and prefix.
+  if p_operation_id is null or p_request_hash is null or p_new_key_id is null
      or p_key_hash is null or p_key_hash !~ '^[0-9a-f]{64}$'
      or p_key_prefix is null or char_length(p_key_prefix) <> 12 then
     return jsonb_build_object('ok', false, 'error', 'invalid_args');
@@ -347,6 +372,16 @@ begin
     end if;
     return jsonb_build_object('ok', false, 'error', 'already_completed',
       'key', jsonb_build_object('id', v_existing.id, 'key_prefix', v_existing.key_prefix));
+  end if;
+
+  -- Durable mint limit (create + rotate), after replay so a retried commit
+  -- still gets its already_completed answer.
+  select count(*) into v_minted
+    from public.api_keys k
+   where k.user_id = p_user_id
+     and k.created_at > v_now - interval '24 hours';
+  if v_minted >= c_max_mints_per_day then
+    return jsonb_build_object('ok', false, 'error', 'mint_limit');
   end if;
 
   if p_action = 'create' then
@@ -366,9 +401,9 @@ begin
       return jsonb_build_object('ok', false, 'error', 'key_limit');
     end if;
     insert into public.api_keys
-      (user_id, key_hash, key_prefix, name, scopes, expires_at, expiry_days, operation_id, request_hash)
+      (id, user_id, key_hash, key_prefix, name, scopes, expires_at, expiry_days, operation_id, request_hash)
     values
-      (p_user_id, p_key_hash, p_key_prefix, btrim(p_name), p_scopes,
+      (p_new_key_id, p_user_id, p_key_hash, p_key_prefix, btrim(p_name), p_scopes,
        case when p_expiry_days is null then null else v_now + make_interval(days => p_expiry_days) end,
        p_expiry_days, p_operation_id, p_request_hash)
     returning * into v_new;
@@ -391,9 +426,9 @@ begin
   end if;
 
   insert into public.api_keys
-    (user_id, key_hash, key_prefix, name, scopes, expires_at, expiry_days, operation_id, request_hash)
+    (id, user_id, key_hash, key_prefix, name, scopes, expires_at, expiry_days, operation_id, request_hash)
   values
-    (p_user_id, p_key_hash, p_key_prefix, v_old.name, v_old.scopes,
+    (p_new_key_id, p_user_id, p_key_hash, p_key_prefix, v_old.name, v_old.scopes,
      case when v_old.expiry_days is null then null else v_now + make_interval(days => v_old.expiry_days) end,
      v_old.expiry_days, p_operation_id, p_request_hash)
   returning * into v_new;
@@ -438,7 +473,8 @@ begin
     'key', public.api_key_public(v_new), 'previous', public.api_key_public(v_old));
 exception when unique_violation then
   -- A racing create/rotate with the same operation id (the advisory lock
-  -- makes this a cross-owner collision only) or a key-hash collision.
+  -- makes this a cross-owner collision only), or a key-hash or key-id
+  -- collision.
   return jsonb_build_object('ok', false, 'error', 'operation_conflict');
 end;
 $$;
@@ -466,7 +502,7 @@ $$;
 revoke all on function public.api_key_public(public.api_keys) from public, anon, authenticated;
 grant execute on function public.api_key_public(public.api_keys) to service_role;
 
-revoke all on function public.api_key_admin(uuid, text, uuid, text, uuid, text, text[], integer, text, text, integer)
+revoke all on function public.api_key_admin(uuid, text, uuid, text, uuid, text, text[], integer, text, text, integer, uuid)
   from public, anon, authenticated;
-grant execute on function public.api_key_admin(uuid, text, uuid, text, uuid, text, text[], integer, text, text, integer)
+grant execute on function public.api_key_admin(uuid, text, uuid, text, uuid, text, text[], integer, text, text, integer, uuid)
   to service_role;

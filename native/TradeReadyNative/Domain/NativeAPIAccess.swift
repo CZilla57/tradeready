@@ -228,11 +228,14 @@ struct NativeAPIActivityEvent: Equatable, Identifiable, Sendable {
 /// crash breadcrumbs and analytics can never carry it by accident.
 struct NativeAPIKeySecret: Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     static let keyPrefix = "trk_"
-    static let bodyLength = 43
+    /// 107 base64url characters over 80 bytes: key id, owner id, 32 random
+    /// bytes and a 128-bit server HMAC tag (§2, 2026-10-12). The app checks
+    /// the shape only; the tag is the Worker's to verify.
+    static let bodyLength = 107
 
     private let raw: String
 
-    /// `nil` unless `raw` is `trk_` plus 43 base64url characters (§2).
+    /// `nil` unless `raw` is `trk_` plus 107 base64url characters (§2).
     init?(_ raw: String) {
         guard Self.isWellFormed(raw) else { return nil }
         self.raw = raw
