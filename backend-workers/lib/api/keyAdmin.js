@@ -4,9 +4,13 @@
 // per-user rate limit; everything else is here and tested.
 //
 // Invariants:
-// - The raw key is minted from Worker CSPRNG bytes, returned exactly once in
-//   the create/rotate 200 body, and NEVER written anywhere: the RPC receives
-//   only its sha256 hash and its 12-character display prefix. There is no
+// - The raw key is minted from Worker CSPRNG bytes and tagged with
+//   API_KEY_TAG_SECRET (keys.js mintApiKey; the key embeds its own api_keys
+//   id and the owner id), returned exactly once in the create/rotate 200
+//   body, and NEVER written anywhere: the RPC receives only its sha256 hash,
+//   its 12-character display prefix and the new key id. Without the tag
+//   secret create/rotate answer 503 `unavailable` before any database
+//   contact — an untagged key is never minted. There is no
 //   replay table holding it (unlike portal_operations), so a replayed
 //   operationId gets 409 already_completed with the key's id and prefix and
 //   no secret — the price of never storing the raw key (decision D4).
@@ -175,8 +179,9 @@ async function activityCore(env, { userId, body }) {
   };
 }
 
-// randomBytes: () => Buffer(32), injected so tests are deterministic and the
-// route uses node:crypto's CSPRNG.
+// randomBytes: (n) => Buffer(n), injected so tests are deterministic and the
+// route uses node:crypto's CSPRNG. Called for 16 bytes (the key id) and 32
+// bytes (the secret part).
 async function apiKeysManageCore(env, { userId, body, nowMs = Date.now(), randomBytes }) {
   const b = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
   if (!ACTIONS.has(b.action)) return ERR(400, 'invalid_request');
@@ -199,6 +204,7 @@ async function apiKeysManageCore(env, { userId, body, nowMs = Date.now(), random
       p_key_hash: null,
       p_key_prefix: null,
       p_grace_seconds: null,
+      p_new_key_id: null,
     });
   }
 
@@ -238,15 +244,32 @@ async function apiKeysManageCore(env, { userId, body, nowMs = Date.now(), random
     };
   }
 
-  const secret = keys.generateApiKey(randomBytes());
+  const tagSecret = keys.tagSecretFrom(env);
+  if (!tagSecret) {
+    console.error('[api-keys/manage] API_KEY_TAG_SECRET is not configured');
+    return ERR(503, 'unavailable');
+  }
+  const keyId = keys.newKeyId(randomBytes(keys.KEY_ID_BYTES));
+  const secret = await keys.mintApiKey(tagSecret, {
+    keyId,
+    ownerId: userId.toLowerCase(),
+    randomBytes: randomBytes(keys.KEY_RANDOM_BYTES),
+  });
   const out = await mutate(env, nowMs, {
     p_user_id: userId,
     p_operation_id: operationId,
     p_key_hash: keys.sha256Hex(secret),
     p_key_prefix: keys.displayPrefix(secret),
+    p_new_key_id: keyId,
     ...rpcArgs,
   });
   if (out.status !== 200) return out;
+  // The key embeds its id: a committed row under any other id would hold a
+  // key whose tag names a different row. Never hand that secret out.
+  if (out.json.key.id.toLowerCase() !== keyId) {
+    console.error('[api-keys/manage] committed key id does not match the minted key id');
+    return ERR(500, 'server_error');
+  }
   // The one and only place the raw key appears.
   return { status: 200, json: { ...out.json, secret } };
 }

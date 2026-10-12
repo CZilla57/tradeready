@@ -4,7 +4,7 @@
 
 const { describe, test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { createHash } = require('node:crypto');
+const { createHash, createHmac } = require('node:crypto');
 
 const keys = require('../lib/api/keys.js');
 const { encodeCursor, decodeCursor } = require('../lib/api/cursor.js');
@@ -21,33 +21,107 @@ function jsonRes(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body, text: async () => JSON.stringify(body) };
 }
 
-describe('key format (§2)', () => {
-  test('trk_ + 43 base64url chars over 32 bytes; 12-char display prefix', () => {
-    const bytes = Buffer.alloc(32, 0xab);
-    const key = keys.generateApiKey(bytes);
-    assert.match(key, /^trk_[A-Za-z0-9_-]{43}$/);
-    assert.equal(key.length, 47);
-    assert.equal(key.slice(4), bytes.toString('base64url'));
+describe('key format (§2): self-verifying tagged keys', () => {
+  const TAG_SECRET = 'tag-secret-for-tests-0123456789abcdef';
+  const KEY_ID = '22222222-2222-4222-8222-222222222222';
+  const OWNER = '11111111-1111-4111-8111-111111111111';
+  const BODY = Buffer.alloc(32, 0xab);
+  // An independent oracle for the tag (node:crypto, not WebCrypto).
+  const oracle = (secret, keyId, ownerId, body) => {
+    const signed = Buffer.concat([Buffer.from(keyId.replace(/-/g, ''), 'hex'), Buffer.from(ownerId.replace(/-/g, ''), 'hex'), body]);
+    const tag = createHmac('sha256', secret).update(Buffer.concat([Buffer.from('tradeready-api-key-v1\0'), signed])).digest().subarray(0, 16);
+    return `trk_${Buffer.concat([signed, tag]).toString('base64url')}`;
+  };
+  const mint = (over = {}) => keys.mintApiKey(TAG_SECRET, { keyId: KEY_ID, ownerId: OWNER, randomBytes: BODY, ...over });
+
+  test('trk_ + 107 base64url chars over key id | owner id | 32 random bytes | 128-bit HMAC tag', async () => {
+    const key = await mint();
+    assert.match(key, /^trk_[A-Za-z0-9_-]{107}$/);
+    assert.equal(key.length, 111);
+    assert.equal(key, oracle(TAG_SECRET, KEY_ID, OWNER, BODY), 'matches the node:crypto oracle byte for byte');
+    const bytes = Buffer.from(key.slice(4), 'base64url');
+    assert.equal(bytes.length, 80);
+    assert.equal(bytes.subarray(0, 16).toString('hex'), KEY_ID.replace(/-/g, ''));
+    assert.equal(bytes.subarray(16, 32).toString('hex'), OWNER.replace(/-/g, ''));
+    assert.deepEqual(bytes.subarray(32, 64), BODY);
     assert.equal(keys.displayPrefix(key), key.slice(0, 12));
-    assert.equal(keys.displayPrefix(key).length, 12);
     assert.ok(keys.isWellFormedKey(key));
-    assert.throws(() => keys.generateApiKey(Buffer.alloc(16)), /32 random bytes/);
-    assert.throws(() => keys.generateApiKey('not bytes'));
+    assert.deepEqual(await keys.verifyApiKey(TAG_SECRET, key), { keyId: KEY_ID, ownerId: OWNER });
   });
 
-  test('two keys from different bytes never share a hash; the hash is sha256 hex', () => {
-    const a = keys.generateApiKey(Buffer.alloc(32, 1));
-    const b = keys.generateApiKey(Buffer.alloc(32, 2));
+  test('minting refuses a missing or short secret, bad ids and wrong-size bytes', async () => {
+    await assert.rejects(keys.mintApiKey(undefined, { keyId: KEY_ID, ownerId: OWNER, randomBytes: BODY }), /API_KEY_TAG_SECRET/);
+    await assert.rejects(keys.mintApiKey('x'.repeat(31), { keyId: KEY_ID, ownerId: OWNER, randomBytes: BODY }), /API_KEY_TAG_SECRET/);
+    await assert.rejects(mint({ keyId: 'nope' }), /UUID/);
+    await assert.rejects(mint({ ownerId: undefined }), /UUID/);
+    await assert.rejects(mint({ randomBytes: Buffer.alloc(16) }), /32 random bytes/);
+    await assert.rejects(mint({ randomBytes: 'not bytes' }), /32 random bytes/);
+  });
+
+  test('verification rejects every forgery, an untagged key and a non-canonical spelling', async () => {
+    const key = await mint();
+    const bytes = Buffer.from(key.slice(4), 'base64url');
+    const spell = (b) => `trk_${b.toString('base64url')}`;
+    const rejected = [];
+    // Every single-bit flip anywhere in the 80 bytes (id, owner, body or tag).
+    for (let i = 0; i < 80; i++) {
+      for (let bit = 0; bit < 8; bit++) {
+        const b = Buffer.from(bytes);
+        b[i] ^= 1 << bit;
+        rejected.push(await keys.verifyApiKey(TAG_SECRET, spell(b)));
+      }
+    }
+    assert.equal(rejected.length, 640);
+    assert.ok(rejected.every((r) => r === null), 'no single-bit forgery verifies');
+    // Another owner's id or key id under the same body and tag.
+    assert.equal(await keys.verifyApiKey(TAG_SECRET, spell(Buffer.concat([bytes.subarray(0, 16), Buffer.alloc(16, 9), bytes.subarray(32)]))), null);
+    // Right shape, wrong secret.
+    assert.equal(await keys.verifyApiKey(TAG_SECRET, oracle('another-secret-0123456789abcdef!!', KEY_ID, OWNER, BODY)), null);
+    assert.equal(await keys.verifyApiKey('another-secret-0123456789abcdef!!', key), null);
+    // The last character carries 2 spare bits: a second spelling of the same bytes is refused.
+    const last = key[key.length - 1];
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    const idx = alphabet.indexOf(last);
+    const twin = key.slice(0, -1) + alphabet[idx ^ 1];
+    assert.deepEqual(Buffer.from(twin.slice(4), 'base64url'), bytes, 'same bytes');
+    assert.equal(await keys.verifyApiKey(TAG_SECRET, twin), null, 'non-canonical spelling');
+    // The pre-tag format (trk_ + 43 over 32 bytes) and junk.
+    for (const bad of [`trk_${BODY.toString('base64url')}`, `trk_${'A'.repeat(107)}`, '', null, key.slice(0, -1), `${key}A`]) {
+      assert.equal(await keys.verifyApiKey(TAG_SECRET, bad), null, String(bad).slice(0, 20));
+    }
+    // No secret, no verification.
+    assert.equal(await keys.verifyApiKey(undefined, key), null);
+    assert.equal(await keys.verifyApiKey('short', key), null);
+  });
+
+  test('the tag secret is read from env and must be at least 32 characters', () => {
+    assert.equal(keys.tagSecretFrom({}), null);
+    assert.equal(keys.tagSecretFrom(undefined), null);
+    assert.equal(keys.tagSecretFrom({ API_KEY_TAG_SECRET: 'x'.repeat(31) }), null);
+    assert.equal(keys.tagSecretFrom({ API_KEY_TAG_SECRET: 'x'.repeat(32) }), 'x'.repeat(32));
+    assert.equal(keys.tagSecretFrom({ API_KEY_TAG_SECRET: 42 }), null);
+  });
+
+  test('new key ids are UUID v4 from 16 random bytes', () => {
+    assert.equal(keys.newKeyId(Buffer.alloc(16, 0xff)), 'ffffffff-ffff-4fff-bfff-ffffffffffff');
+    assert.equal(keys.newKeyId(Buffer.alloc(16, 0)), '00000000-0000-4000-8000-000000000000');
+    assert.throws(() => keys.newKeyId(Buffer.alloc(15)), /16 random bytes/);
+  });
+
+  test('two keys from different bytes never share a hash; the hash is sha256 hex', async () => {
+    const a = await mint({ randomBytes: Buffer.alloc(32, 1) });
+    const b = await mint({ randomBytes: Buffer.alloc(32, 2) });
     assert.notEqual(keys.sha256Hex(a), keys.sha256Hex(b));
     assert.equal(keys.sha256Hex(a), createHash('sha256').update(a).digest('hex'));
     assert.match(keys.sha256Hex(a), /^[0-9a-f]{64}$/);
   });
 
-  test('Bearer parsing: only "Bearer trk_<43>" passes, and every failure is the same invalid_key', () => {
-    const key = keys.generateApiKey(Buffer.alloc(32, 7));
+  test('Bearer parsing: only "Bearer trk_<107>" passes, and every failure is the same invalid_key', async () => {
+    const key = await mint({ randomBytes: Buffer.alloc(32, 7) });
     assert.deepEqual(keys.parseBearer(`Bearer ${key}`), { key });
     for (const bad of [undefined, '', key, `Basic ${key}`, `Bearer`, `Bearer ${key.slice(0, -1)}`, `Bearer ${key}x`,
-      `Bearer sk_${key.slice(3)}`, `Bearer ${key} extra`, `bearer ${key}`, `Bearer trk_${'!'.repeat(43)}`]) {
+      `Bearer sk_${key.slice(3)}`, `Bearer ${key} extra`, `bearer ${key}`, `Bearer trk_${'!'.repeat(107)}`,
+      `Bearer trk_${'A'.repeat(43)}`]) {
       assert.deepEqual(keys.parseBearer(bad), { error: 'invalid_key' }, String(bad));
     }
   });
@@ -161,9 +235,11 @@ describe('request contract helpers (§5)', () => {
   });
 
   test('stable error vocabulary', () => {
+    // not_configured (2026-10-12): API_KEY_TAG_SECRET unset, so no key can be verified (fail closed).
     assert.deepEqual([...v1.ERROR_CODES].sort(), ['invalid_cursor', 'invalid_key', 'invalid_parameter', 'insufficient_scope',
-      'key_expired', 'key_in_query', 'key_revoked', 'method_not_allowed', 'not_found', 'rate_limited', 'server_error',
-      'unavailable'].sort());
+      'key_expired', 'key_in_query', 'key_revoked', 'method_not_allowed', 'not_configured', 'not_found', 'rate_limited',
+      'server_error', 'unavailable'].sort());
+    assert.equal(v1.ERRORS.not_configured[0], 503);
     assert.equal(v1.ERRORS.insufficient_scope[0], 403);
     assert.equal(v1.ERRORS.rate_limited[0], 429);
     assert.equal(v1.ERRORS.unavailable[0], 503);
@@ -272,8 +348,8 @@ describe('request guard: windows and limits (§14.4a)', () => {
 
   test('the numbers live in one place', () => {
     assert.deepEqual({ ...GUARD_LIMITS }, {
-      WINDOW_MS: 60_000, CLIENT_TOKENS: 10, GLOBAL_TOKENS: 60, KNOWN_IN_FLIGHT: 4, KNOWN_TTL_MS: 3_600_000,
-      DENIED_TTL_MS: 60_000, JUNK_LIMIT: 20, MAX_CLIENTS: 2000, MAX_JUNK_CLIENTS: 2000, MAX_KNOWN_KEYS: 1000,
+      WINDOW_MS: 60_000, CLIENT_TOKENS: 10, OWNER_TOKENS: 10, GLOBAL_TOKENS: 60, KNOWN_IN_FLIGHT: 4, KNOWN_TTL_MS: 3_600_000,
+      DENIED_TTL_MS: 60_000, JUNK_LIMIT: 20, MAX_CLIENTS: 2000, MAX_OWNERS: 2000, MAX_JUNK_CLIENTS: 2000, MAX_KNOWN_KEYS: 1000,
       MAX_IN_FLIGHT_KEYS: 1000, MAX_DENIED_KEYS: 2000, MAX_LIMITED_KEYS: 2000,
     });
     assert.ok(Object.isFrozen(GUARD_LIMITS));
@@ -326,6 +402,25 @@ describe('request guard: windows and limits (§14.4a)', () => {
     assert.ok(h.takeTokens('z', t0 + 60_001).retryAfter, 'no cross-window refund (isolate bucket)');
   });
 
+  test('owner bucket: 10 per owner per window across clients, all-or-none with the client and isolate buckets, refunded once', () => {
+    const g = createApiGuard();
+    const t0 = 4_000_000;
+    const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const tickets = [];
+    for (let i = 0; i < 10; i++) tickets.push(g.takeTokens(`ip-${i}`, t0, A).ticket);
+    assert.ok(tickets.every(Boolean));
+    assert.deepEqual(g.takeTokens('ip-new', t0 + 15_000, A), { retryAfter: 45 }, 'owner bucket empty');
+    assert.equal(g.globalTokensUsed(t0 + 15_000), 10, 'the owner refusal took no isolate token');
+    assert.equal(g.sizes().clients, 10, 'nor a client token');
+    assert.ok(g.takeTokens('ip-new', t0 + 15_000, 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb').ticket, 'another owner is unaffected');
+    g.refundTokens(tickets[0]);
+    g.refundTokens(tickets[0]);
+    assert.ok(g.takeTokens('ip-x', t0 + 16_000, A).ticket, 'one owner token came back');
+    assert.ok(g.takeTokens('ip-y', t0 + 16_000, A).retryAfter, 'only one');
+    assert.ok(g.takeTokens('ip-z', t0 + 60_000, A).ticket, 'a new owner window');
+    assert.equal(g.sizes().owners, 2);
+  });
+
   test('in flight: 4 slots per known hash, released once, entry gone at zero', () => {
     const g = createApiGuard();
     const slots = Array.from({ length: 4 }, () => g.takeInFlight(H1));
@@ -354,18 +449,24 @@ describe('request guard: windows and limits (§14.4a)', () => {
     assert.ok(g.takeInFlight(H2), 'room again once H1 is idle');
   });
 
-  test('negative cache: the first denial is remembered for 60 s with its own code, and leaves the positive cache', () => {
+  test('negative cache: revoked/expired for the key\'s life, unknown for 60 s, each with its own code; leaves the positive cache', () => {
+    // Changed 2026-10-12 (§14.4a #5): revoked and expired are one-way, so they
+    // no longer lapse after 60 s.
     const g = createApiGuard();
     const t0 = 5_000_000;
+    const YEAR = 365 * 86_400_000;
     g.knownKey(H1, t0);
     g.deniedKey(H1, 'key_revoked', t0 + 1);
     assert.equal(g.isKnownKey(H1, t0 + 2), false);
     assert.deepEqual(g.keyShed(H1, t0 + 59_999), { error: 'key_revoked' });
-    assert.equal(g.keyShed(H1, t0 + 60_001), null);
+    assert.deepEqual(g.keyShed(H1, t0 + 60_001), { error: 'key_revoked' });
+    assert.deepEqual(g.keyShed(H1, t0 + 10 * YEAR), { error: 'key_revoked' });
     g.deniedKey(H2, 'key_expired', t0);
-    assert.deepEqual(g.keyShed(H2, t0), { error: 'key_expired' });
+    assert.deepEqual(g.keyShed(H2, t0 + 10 * YEAR), { error: 'key_expired' });
     g.deniedKey('c'.repeat(64), 'invalid_key', t0);
     assert.deepEqual(g.keyShed('c'.repeat(64), t0), { error: 'invalid_key' });
+    assert.deepEqual(g.keyShed('c'.repeat(64), t0 + 59_999), { error: 'invalid_key' });
+    assert.equal(g.keyShed('c'.repeat(64), t0 + 60_000), null, 'unknown: 60 s only');
     g.deniedKey('d'.repeat(64), 'something_else', t0);
     assert.equal(g.keyShed('d'.repeat(64), t0), null);
     g.knownKey(H2, t0 + 5);
@@ -394,12 +495,12 @@ describe('request guard: windows and limits (§14.4a)', () => {
 
   test('only sha256 hex is accepted as a guard key, so a presented key is never remembered', () => {
     const g = createApiGuard();
-    const raw = `trk_${'Z'.repeat(43)}`;
+    const raw = `trk_${'Z'.repeat(107)}`;
     g.deniedKey(raw, 'invalid_key', 1);
     g.rateLimitedKey(raw, { retryAfter: 30 }, 1);
     g.knownKey(raw, 1);
     assert.equal(g.takeInFlight(raw), null);
-    assert.deepEqual(g.sizes(), { clients: 0, junk: 0, knownKeys: 0, inFlight: 0, deniedKeys: 0, limitedKeys: 0 });
+    assert.deepEqual(g.sizes(), { clients: 0, owners: 0, junk: 0, knownKeys: 0, inFlight: 0, deniedKeys: 0, limitedKeys: 0 });
   });
 });
 

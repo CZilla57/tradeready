@@ -42,11 +42,13 @@ OWNER=11111111-1111-1111-1111-111111111111
 OTHER=22222222-2222-2222-2222-222222222222
 h() { echo "encode(extensions.digest('$1','sha256'),'hex')"; }
 op() { printf '00000000-0000-4000-8000-%012d' "$1"; }
-admin() { # action op_n key_id name scopes expiry_days hash_seed prefix grace [owner]
+admin() { # action op_n key_id name scopes expiry_days hash_seed prefix grace [owner] [new_key_id]
   # The request hash covers the whole intent, like the Worker's requestHash.
+  # The new key's id is the Worker's choice (it is tagged into the raw key);
+  # a fresh UUID unless the caller names one.
   rh="md5(concat_ws('|', '$1', $3::text, $4::text, $5::text, $6::text, $9::text))"
   [ "$2" = null ] && rh=null
-  pq -c "select public.api_key_admin('${10:-$OWNER}', '$1', $2, $rh, $3, $4, $5, $6, $7, $8, $9)"
+  pq -c "select public.api_key_admin('${10:-$OWNER}', '$1', $2, $rh, $3, $4, $5, $6, $7, $8, $9, ${11:-gen_random_uuid()})"
 }
 
 echo "== compile and re-run"
@@ -65,13 +67,18 @@ pq -q -c "revoke select (key_hash) on public.api_keys from authenticated" >/dev/
 pq -q -c "grant execute on function public.api_key_authorize(text,text,text) to authenticated" >/dev/null
 pq -f "$MIG/verify/20261003_api_keys_verify.sql" >/dev/null 2>&1 && bad "verify SQL missed a client EXECUTE grant" || ok "verify SQL flags a client EXECUTE grant"
 pq -q -c "revoke execute on function public.api_key_authorize(text,text,text) from authenticated" >/dev/null
+# And a stale pre-tag admin overload (no p_new_key_id) left behind.
+pq -q -c "create function public.api_key_admin(uuid,text,uuid,text,uuid,text,text[],integer,text,text,integer) returns jsonb language sql as 'select null::jsonb'" >/dev/null
+pq -f "$MIG/verify/20261003_api_keys_verify.sql" >/dev/null 2>&1 && bad "verify SQL missed a stale pre-tag api_key_admin" || ok "verify SQL flags a stale pre-tag api_key_admin"
+pq -q -f "$MIG/20261003_api_keys.sql" >/dev/null 2>&1 && ok "re-applying the migration drops the stale overload" || bad "re-apply after stale overload"
+pq -f "$MIG/verify/20261003_api_keys_verify.sql" >/dev/null 2>&1 && ok "verify SQL passes again" || bad "verify SQL after re-apply"
 
 pq -q -c "insert into auth.users values ('$OWNER'), ('$OTHER')" >/dev/null
 
 echo "== client sessions are refused"
 out=$(pq -c "set role anon; select public.api_key_authorize(repeat('a',64),'/v1/jobs',null)" 2>&1 >/dev/null)
 case "$out" in *"permission denied"*) ok "anon cannot call api_key_authorize";; *) bad "anon authorize: $out";; esac
-out=$(pq -c "set role authenticated; select public.api_key_admin('$OWNER','revoke',null,null,null,null,null,null,null,null,null)" 2>&1 >/dev/null)
+out=$(pq -c "set role authenticated; select public.api_key_admin('$OWNER','revoke',null,null,null,null,null,null,null,null,null,null)" 2>&1 >/dev/null)
 case "$out" in *"permission denied"*) ok "authenticated cannot call api_key_admin";; *) bad "authenticated admin: $out";; esac
 r=$(pq -c "select set_config('request.jwt.claims', '{\"role\":\"authenticated\"}', true); select public.api_key_authorize(repeat('a',64),'/v1/jobs',null)" | tail -1)
 eq "a client JWT reaching authorize anyway is refused" "$r" '{"ok": false, "error": "forbidden"}'
@@ -96,12 +103,23 @@ eq "an unknown scope is invalid_args" "$r" '{"ok": false, "error": "invalid_args
 eq "stored hash is the sha256 hex, no raw key column exists" \
   "$(pq -c "select (key_hash = $(h k1))::text || '/' || (select count(*) from information_schema.columns where table_name='api_keys' and column_name ilike '%raw%')::text from public.api_keys where operation_id = '$(op 1)'")" "true/0"
 
+r=$(admin create "'$(op 300)'" null "'No id'" "array['jobs:read']" null "$(h k300)" "'trk_AAAAA300'" null "$OTHER" null)
+eq "create without the Worker's key id is invalid_args" "$r" '{"ok": false, "error": "invalid_args"}'
+TAGGED_ID=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee
+r=$(admin create "'$(op 301)'" null "'Tagged id'" "array['jobs:read']" null "$(h k301)" "'trk_AAAAA301'" null "$OTHER" "'$TAGGED_ID'")
+case "$r" in *"\"id\": \"$TAGGED_ID\""*) ok "create stores the key under the Worker's key id";; *) bad "create id: $r";; esac
+r=$(admin create "'$(op 302)'" null "'Same id'" "array['jobs:read']" null "$(h k302)" "'trk_AAAAA302'" null "$OTHER" "'$TAGGED_ID'")
+eq "a key-id collision is operation_conflict" "$r" '{"ok": false, "error": "operation_conflict"}'
+pq -q -c "delete from public.api_keys where user_id = '$OTHER'" >/dev/null  # later checks expect OTHER to own no keys yet
+
 K1=$(pq -c "select id from public.api_keys where operation_id = '$(op 1)'")
 K2=$(pq -c "select id from public.api_keys where operation_id = '$(op 2)'")
 
 echo "== rotate"
-r=$(admin rotate "'$(op 8)'" "'$K1'" null null null "$(h k8)" "'trk_AAAAAAA8'" 86400)
+ROT_ID=bbbbbbbb-cccc-4ddd-8eee-ffffffffffff
+r=$(admin rotate "'$(op 8)'" "'$K1'" null null null "$(h k8)" "'trk_AAAAAAA8'" 86400 "$OWNER" "'$ROT_ID'")
 case "$r" in *'"previous"'*'"replaced_by"'*) ok "rotate returns key and previous";; *) bad "rotate: $r";; esac
+eq "rotate stores the replacement under the Worker's key id" "$(pq -c "select id from public.api_keys where operation_id = '$(op 8)'")" "$ROT_ID"
 eq "old key: replaced, expiring in 24h, new key inherits name/scopes/lifetime" \
   "$(pq -c "select (o.replaced_by = n.id)::text || '/' || (o.expires_at between now() + interval '23 hours 59 minutes' and now() + interval '24 hours 1 minute')::text || '/' || (n.name = o.name and n.scopes = o.scopes and n.expiry_days = o.expiry_days)::text from public.api_keys o, public.api_keys n where o.id = '$K1' and n.operation_id = '$(op 8)'")" "true/true/true"
 r=$(admin create "'$(op 9)'" null "'After rotate'" "array['jobs:read']" null "$(h k9)" "'trk_AAAAAAA9'" null)

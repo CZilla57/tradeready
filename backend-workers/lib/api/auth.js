@@ -114,56 +114,71 @@ async function logApiRequest(env, { userId, keyId, route, status, ip }) {
 }
 
 // In-memory request guard (spec §6, §14.4a), per isolate. A load guard, not a
-// security boundary (keys are 256-bit): it bounds how many authorize RPCs a
-// caller can cause, before the RPC is ever awaited.
+// security boundary (keys carry 256 random bits): it bounds how many
+// authorize RPCs a caller can cause, before the RPC is ever awaited.
+//
+// Only tag-valid keys reach it (keys.js verifyApiKey, checked in v1.js before
+// any of this): a forged, random or untagged key is answered 401 without a
+// token, a cache entry or an RPC. So everything below is spent only by keys
+// the Worker itself minted, and each one names its owner.
 //
 //   Client key. The IPv4 address, or the IPv6 /64 prefix (one subscriber's
 //   allocation), from cf-connecting-ip. Requests without the header share one
 //   bucket (accepted: Cloudflare always sets it).
 //
+//   Per-hash in flight. At most KNOWN_IN_FLIGHT RPCs run at once for one key
+//   hash, whether or not it is in the positive cache; excess is 429 from
+//   memory (Retry-After: 1). The slot is taken before the RPC and released in
+//   a `finally`.
+//
 //   Positive cache. A sha256 hash that authorized (or was rate limited, which
 //   only a live key can be) on this isolate in the last 60 minutes. It never
 //   skips the RPC (revocation, expiry and rate limits are checked on every
-//   admitted request); it only lets the hash bypass the token buckets. At most
-//   KNOWN_IN_FLIGHT of its RPCs run at once; excess is 429 from memory.
+//   admitted request); it only lets the hash bypass the token buckets.
 //
-//   Token buckets. Any other well-formed key must take one token from its
-//   client's bucket AND one from the isolate-wide bucket, synchronously before
-//   the RPC is awaited; if either is empty, 429 from memory with Retry-After to
-//   that window's end. Both tokens are refunded only when the RPC answers `ok`
-//   or `rate_limited` (a live key), and only to the window that issued them.
-//   Denials, `unavailable` and transport failures keep them. So per isolate
-//   and window: at most CLIENT_TOKENS RPCs per client and GLOBAL_TOKENS in all
-//   for hashes outside the positive cache, whatever the RPC answers.
+//   Token buckets. Any other key must take one token from its client's
+//   bucket, one from its OWNER's bucket and one from the isolate-wide bucket,
+//   synchronously before the RPC is awaited; if any is empty, 429 from memory
+//   with Retry-After to that window's end. All three are refunded only when
+//   the RPC answers `ok` or `rate_limited` (a live key), and only to the
+//   window that issued them. Denials, `unavailable` and transport failures
+//   keep them. So per isolate and window, hashes outside the positive cache
+//   cause at most CLIENT_TOKENS RPCs per client, OWNER_TOKENS per owner and
+//   GLOBAL_TOKENS in all, plus one more per refunded admission (a live key's
+//   answer gives its tokens back), whatever the RPC answers.
 //
-//   Negative cache. The first unknown/revoked/expired answer for a hash is
-//   remembered for DENIED_TTL_MS and answered from memory (no token, no RPC);
-//   the denial also removes the hash from the positive cache.
+//   Negative cache. The first revoked or expired answer for a hash is
+//   remembered for the rest of the key's life (both are one-way), and an
+//   unknown answer for DENIED_TTL_MS; either is answered from memory (no
+//   token, no RPC). The denial also removes the hash from the positive cache.
 //
 //   Rate-limited shed. A `rate_limited` answer makes that hash 429 from memory
 //   (same Retry-After and X-RateLimit-*) until the reported reset.
 //
-//   Junk counter. Requests with a missing or malformed key, or a key in the
-//   query string, count per client; past JUNK_LIMIT in a window, missing or
-//   malformed keys get 429 until the window ends. It never touches a request
-//   that carries a well-formed key.
+//   Junk counter. Requests with a missing, malformed or forged key, or a key
+//   in the query string, count per client; past JUNK_LIMIT in a window,
+//   missing, malformed or forged keys get 429 until the window ends. It never
+//   touches a request that carries a tag-valid key.
 //
 // Every structure is its own capped Map that evicts its own oldest entries,
-// so churn in one cannot evict another. Evicting a client's bucket is
-// harmless: the isolate-wide bucket still bounds the RPCs. The in-flight map
-// never evicts (its entries are all busy); at its cap a new hash is refused. Only sha256 hex
-// hashes enter the per-hash maps (anything else is ignored), never a key.
+// so churn in one cannot evict another. Evicting a client's or an owner's
+// bucket is harmless: the isolate-wide bucket still bounds the RPCs. The
+// in-flight map never evicts (its entries are all busy); at its cap a new
+// hash is refused. Only sha256 hex hashes enter the per-hash maps (anything
+// else is ignored), never a key.
 
 // Every window and limit of the guard, in one place.
 const GUARD_LIMITS = Object.freeze({
   WINDOW_MS: 60_000, // one window for the token buckets and the junk counter
   CLIENT_TOKENS: 10, // RPCs per client per window, hashes outside the positive cache
+  OWNER_TOKENS: 10, // RPCs per owner (from the key's tag) per window, hashes outside the positive cache
   GLOBAL_TOKENS: 60, // RPCs per isolate per window, hashes outside the positive cache
-  KNOWN_IN_FLIGHT: 4, // concurrent RPCs per positively cached hash
+  KNOWN_IN_FLIGHT: 4, // concurrent RPCs per key hash (cached or not)
   KNOWN_TTL_MS: 3_600_000, // positive cache lifetime (refreshed by each success)
-  DENIED_TTL_MS: 60_000, // negative cache lifetime (unknown, revoked, expired)
-  JUNK_LIMIT: 20, // keyless/malformed/query-key requests per client per window
+  DENIED_TTL_MS: 60_000, // negative cache lifetime for an unknown key (revoked/expired: the key's life)
+  JUNK_LIMIT: 20, // keyless/malformed/forged/query-key requests per client per window
   MAX_CLIENTS: 2000, // per-client token buckets
+  MAX_OWNERS: 2000, // per-owner token buckets
   MAX_JUNK_CLIENTS: 2000, // per-client junk counters
   MAX_KNOWN_KEYS: 1000, // positive cache
   MAX_IN_FLIGHT_KEYS: 1000, // busy known hashes at once (an entry exists only while busy; refused past it)
@@ -174,6 +189,10 @@ const GUARD_LIMITS = Object.freeze({
 const HASH_RE = /^[0-9a-f]{64}$/;
 const NO_IP_CLIENT = 'no-ip';
 const NEGATIVE_ERRORS = DENIED_ERRORS;
+// One-way denials: a revoked key is never un-revoked and an expired key never
+// un-expires, so these are remembered for the rest of the key's life (until
+// evicted at the map cap). An unknown hash is remembered for DENIED_TTL_MS.
+const DEAD_ERRORS = new Set(['key_revoked', 'key_expired']);
 
 // Expands an IPv6 address to its /64 prefix ("2001:db8:1:2::/64"); an
 // IPv4-mapped address is its IPv4 client. Null when it does not parse.
@@ -219,6 +238,7 @@ function setBounded(map, key, value, max, isExpired) {
 function createApiGuard(overrides = {}) {
   const L = { ...GUARD_LIMITS, ...overrides };
   const clients = new Map(); // client -> { start, used } token bucket
+  const owners = new Map(); // owner id -> { start, used } token bucket
   const junk = new Map(); // client -> { start, count }
   const knownKeys = new Map(); // key hash -> expiry ms (positive cache)
   const inFlight = new Map(); // key hash -> { count } while its RPCs run
@@ -246,26 +266,43 @@ function createApiGuard(overrides = {}) {
     },
 
     // For a hash outside the positive cache, before the RPC: one token from
-    // the client's bucket and one from the isolate's, or neither.
+    // the client's bucket, one from the owner's (when an owner is given) and
+    // one from the isolate's, or none.
     //   { ticket }       admitted; pass the ticket to refundTokens
     //   { retryAfter }   a bucket is empty; answer 429
-    takeTokens(client, now = Date.now()) {
+    takeTokens(client, now = Date.now(), owner = null) {
       let c = clients.get(client);
       if (!current(c, now)) c = { start: now, used: 0 };
+      let o = null;
+      if (typeof owner === 'string' && owner !== '') {
+        o = owners.get(owner);
+        if (!current(o, now)) o = { start: now, used: 0 };
+      }
       if (!current(globalWindow, now)) globalWindow = { start: now, used: 0 };
       const g = globalWindow;
       const clientEmpty = c.used >= L.CLIENT_TOKENS;
+      const ownerEmpty = Boolean(o) && o.used >= L.OWNER_TOKENS;
       const globalEmpty = g.used >= L.GLOBAL_TOKENS;
-      if (clientEmpty || globalEmpty) {
-        return { retryAfter: Math.max(clientEmpty ? secondsLeft(c, now) : 0, globalEmpty ? secondsLeft(g, now) : 0) };
+      if (clientEmpty || ownerEmpty || globalEmpty) {
+        return {
+          retryAfter: Math.max(
+            clientEmpty ? secondsLeft(c, now) : 0,
+            ownerEmpty ? secondsLeft(o, now) : 0,
+            globalEmpty ? secondsLeft(g, now) : 0
+          ),
+        };
       }
       c.used += 1;
       g.used += 1;
       setBounded(clients, client, c, L.MAX_CLIENTS, (v) => !current(v, now));
-      return { ticket: { client, clientWindow: c, globalWindow: g, refunded: false } };
+      if (o) {
+        o.used += 1;
+        setBounded(owners, owner, o, L.MAX_OWNERS, (v) => !current(v, now));
+      }
+      return { ticket: { client, clientWindow: c, owner: o ? owner : null, ownerWindow: o, globalWindow: g, refunded: false } };
     },
 
-    // The RPC called the key live (`ok` or `rate_limited`): give both tokens
+    // The RPC called the key live (`ok` or `rate_limited`): give every token
     // back, each only to the window that issued it and only if that window is
     // still the bucket's current one (an ended window has been replaced).
     refundTokens(ticket) {
@@ -273,13 +310,20 @@ function createApiGuard(overrides = {}) {
       ticket.refunded = true;
       const c = ticket.clientWindow;
       if (clients.get(ticket.client) === c && c.used > 0) c.used -= 1;
+      const o = ticket.ownerWindow;
+      if (o && owners.get(ticket.owner) === o && o.used > 0) o.used -= 1;
       const g = ticket.globalWindow;
       if (globalWindow === g && g.used > 0) g.used -= 1;
     },
 
-    // For a positively cached hash: a slot, or null when KNOWN_IN_FLIGHT of
-    // its RPCs are already running (or MAX_IN_FLIGHT_KEYS hashes are busy).
-    // Release it in a `finally`.
+    // Test hook: isolate tokens spent in the current window.
+    globalTokensUsed(now = Date.now()) {
+      return current(globalWindow, now) ? globalWindow.used : 0;
+    },
+
+    // For any tag-valid hash: a slot, or null when KNOWN_IN_FLIGHT of its RPCs
+    // are already running (or MAX_IN_FLIGHT_KEYS hashes are busy). Release it
+    // in a `finally` (or at once when the request is refused afterwards).
     takeInFlight(keyHash) {
       if (!HASH_RE.test(keyHash)) return null;
       let e = inFlight.get(keyHash);
@@ -321,13 +365,15 @@ function createApiGuard(overrides = {}) {
       setBounded(knownKeys, keyHash, now + L.KNOWN_TTL_MS, L.MAX_KNOWN_KEYS, (until) => until <= now);
     },
 
-    // The RPC said unknown, revoked or expired: answer it from memory for
-    // DENIED_TTL_MS, and drop it from the positive cache.
+    // The RPC said unknown, revoked or expired: answer it from memory (an
+    // unknown hash for DENIED_TTL_MS, a revoked or expired one for the rest
+    // of its life), and drop it from the positive cache.
     deniedKey(keyHash, error, now = Date.now()) {
       if (!HASH_RE.test(keyHash)) return;
       knownKeys.delete(keyHash);
       if (!NEGATIVE_ERRORS.has(error)) return;
-      setBounded(deniedKeys, keyHash, { until: now + L.DENIED_TTL_MS, error }, L.MAX_DENIED_KEYS, (v) => v.until <= now);
+      const until = DEAD_ERRORS.has(error) ? Infinity : now + L.DENIED_TTL_MS;
+      setBounded(deniedKeys, keyHash, { until, error }, L.MAX_DENIED_KEYS, (v) => v.until <= now);
     },
 
     // The RPC said this key is over its limit; `retryAfter` is whole seconds
@@ -362,6 +408,7 @@ function createApiGuard(overrides = {}) {
     sizes() {
       return {
         clients: clients.size,
+        owners: owners.size,
         junk: junk.size,
         knownKeys: knownKeys.size,
         inFlight: inFlight.size,

@@ -26,7 +26,7 @@ enum NativeSensitiveData {
         "gsk_", "appl_", "goog_", "amzn_", "strp_", "rcb_", "phc_", "phx_",
         "sb_secret_", "sb_publishable_", "AIza", "eyJ", "ghp_", "gho_", "github_pat_",
         "EAAA", "sq0atp-", "sq0atb-", "sq0csp-", "sq0csb-",
-        // Phase 23: TradeReady API keys (`trk_` + 43 characters).
+        // Phase 23: TradeReady API keys (`trk_` + 107 characters).
         "trk_",
     ]
 

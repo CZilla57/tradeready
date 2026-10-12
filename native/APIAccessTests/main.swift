@@ -28,8 +28,8 @@ private struct TransportFailure: Error {}
 
 // MARK: - Fixtures
 
-private let rawSecret = "trk_Ab3dE9fQ" + String(repeating: "k", count: 35)
-private let rotatedSecret = "trk_Zz9yX8wV" + String(repeating: "m", count: 35)
+private let rawSecret = "trk_Ab3dE9fQ" + String(repeating: "k", count: 99)
+private let rotatedSecret = "trk_Zz9yX8wV" + String(repeating: "m", count: 99)
 private let keyID = "6f1c2a3b-4d5e-4f60-8a7b-8c9d0e1f2a3b"
 private let newKeyID = "7a2d3b4c-5e6f-4a71-9b8c-9dae0f1a2b3c"
 private let opID = "21111111-2222-4333-8555-666666666666"
@@ -317,12 +317,14 @@ struct APIAccessTests {
         }
 
         // The secret: format, and it never prints or reflects.
-        expect(NativeAPIKeySecret(rawSecret) != nil, "secret: trk_ + 43 base64url is well formed")
-        for bad in ["trk_" + String(repeating: "a", count: 42), "trk_" + String(repeating: "a", count: 44),
-                    "trk_" + String(repeating: "a", count: 42) + "+", "trx_" + String(repeating: "a", count: 43),
-                    "trk_" + String(repeating: "a", count: 42) + "é", ""] {
+        expect(NativeAPIKeySecret(rawSecret) != nil, "secret: trk_ + 107 base64url is well formed")
+        for bad in ["trk_" + String(repeating: "a", count: 106), "trk_" + String(repeating: "a", count: 108),
+                    "trk_" + String(repeating: "a", count: 106) + "+", "trx_" + String(repeating: "a", count: 107),
+                    "trk_" + String(repeating: "a", count: 106) + "é", ""] {
             expect(NativeAPIKeySecret(bad) == nil, "secret: malformed value refused (\(bad.count) chars)")
         }
+        // The pre-tag format (trk_ + 43) is no longer a key.
+        expect(NativeAPIKeySecret("trk_" + String(repeating: "a", count: 43)) == nil, "secret: the untagged 43-character format is refused")
         if let secret = NativeAPIKeySecret(rawSecret) {
             expectEqual(secret.revealedValue, rawSecret, "secret: the sheet can show it")
             var dumped = ""

@@ -17,6 +17,9 @@ RESEND_API_KEY=placeholder
 GROQ_API_KEY=placeholder
 # Phase 23 open API: HMAC key for /v1 list cursors (any long random string locally).
 API_CURSOR_SECRET=placeholder-local-cursor-secret
+# Phase 23 open API: HMAC key that tags API keys (at least 32 characters; /v1
+# answers 503 not_configured without it). Keys minted locally verify only here.
+API_KEY_TAG_SECRET=placeholder-local-api-key-tag-secret-0123
 
 # Optional overrides (unset on Vercel today unless the dashboard says otherwise)
 # ESTIMATE_PUBLIC_ORIGIN=

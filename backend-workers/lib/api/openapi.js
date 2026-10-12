@@ -59,7 +59,7 @@ function errorResponses(codes) {
 }
 
 const AUTH_ERRORS = ['invalid_key', 'key_revoked', 'key_expired', 'key_in_query', 'insufficient_scope',
-  'invalid_parameter', 'method_not_allowed', 'rate_limited', 'unavailable', 'server_error'];
+  'invalid_parameter', 'method_not_allowed', 'rate_limited', 'unavailable', 'not_configured', 'server_error'];
 
 function scopeNote(resource) {
   return resource === 'account' ? 'any scope' : RESOURCE_SCOPE[resource];
