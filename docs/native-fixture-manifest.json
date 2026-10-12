@@ -120,7 +120,7 @@
    "testSources": [
     {
      "path": "native/APIAccessTests",
-     "sha256": "114d1838ae661d0716dd8bfb0bc2486ab4582484e2750e29bba818901a810ad1"
+     "sha256": "c7b569867019a7e36daa408ef9f01e026e29624a7d78ebd80359e0c4d317d81a"
     }
    ],
    "fixtures": []
@@ -273,7 +273,7 @@
    "testSources": [
     {
      "path": "native/BookingIntakeTests",
-     "sha256": "65cbc7cf789fe4513ffa63aaf5df05fab18666359337457a4fc823e0cfed5b5b"
+     "sha256": "41bb1dc4a0df13c7d543186a51b0ca5cc7dab0a7a5ce5864a441de7cf8abcbcf"
     }
    ],
    "fixtures": []
@@ -375,7 +375,7 @@
    "testSources": [
     {
      "path": "native/CalendarSyncTests",
-     "sha256": "4e9db703f962843a24799b948bb6bc6535448f7a032a7e84e00322e0cc6000e3"
+     "sha256": "545c8aa5991675b912bd1ff13b5660e72e6752317e1acf7d36b30f48fdd6bebd"
     }
    ],
    "fixtures": []
@@ -397,7 +397,7 @@
    "testSources": [
     {
      "path": "native/CampaignTests",
-     "sha256": "186e3d9310cb096e76de354542b271536adf52ab03d394c164e4ad2b92ec31bb"
+     "sha256": "67a0b6d959f7e3e2cb0393ad65ee45ffd7dc69836bd8b21eac822ab931fadf74"
     }
    ],
    "fixtures": []
@@ -575,7 +575,7 @@
    "testSources": [
     {
      "path": "native/CustomerTagsTests",
-     "sha256": "cc4a68a2e91536df2dc2697211a6a5b54301b1f53314f5a87d76120a9a2fd0c4"
+     "sha256": "6b06f989e9d4cefc1f261e878deb7c3bdd4eed8272a5674d79da7bf49e6a864e"
     }
    ],
    "fixtures": []
@@ -655,7 +655,7 @@
    "testSources": [
     {
      "path": "native/ESignatureTests",
-     "sha256": "e4d5c947904ce73c45348768a4a704d409864f46dda22a1d6fb35d4331045bb8"
+     "sha256": "5375451f3ebaed58e676b35a1c9f8031f35be75baeb4e340101b9d0fa4b9a71c"
     }
    ],
    "fixtures": []
@@ -1539,7 +1539,7 @@
    "testSources": [
     {
      "path": "native/ReferralTests",
-     "sha256": "3427bed7fb99532b4bffaa8dea86194a303d9fd75f5665b0c84d8995080c6040"
+     "sha256": "ed228bae781dd947b6f44215035763eb5591f3db162111facee7399657fed3b3"
     }
    ],
    "fixtures": [
@@ -1737,7 +1737,7 @@
    "testSources": [
     {
      "path": "native/StoreIntegrationTests",
-     "sha256": "e279d9a45dc401ec715129330a7180ed47f6a8514dddec011cb73bcd8f26c3d9"
+     "sha256": "5508821ef16144722ed45b9e66e9508a83119d3a3a1bff9fd060158b9dda9ddc"
     },
     {
      "path": "native/CanonicalTests",
@@ -2432,7 +2432,7 @@
   },
   "esignRoutesWorkers": {
    "path": "__tests__/esignRoutesWorkers.test.js",
-   "sha256": "f03853845e559a61e03d9eafd74983e2db1545ba5bf7fd9cde289bfcaf0ed7e4"
+   "sha256": "a240c9eb7cb22d8edc1672ca68c691e6d03e5b9d5fe7347f5e8c7a92e8eb0cd1"
   },
   "estimateApprovals": {
    "path": "__tests__/estimateApprovals.test.js",
@@ -2656,7 +2656,7 @@
   },
   "openApiWorkers": {
    "path": "__tests__/openApiWorkers.test.js",
-   "sha256": "7dd394537d8b5f9ca91d2987ff76ccb65703a7dd9d1f93eaf20f571fa76e0ad7"
+   "sha256": "e9841323dcd927b5f2d8ca20b277b64e853da7a3a19c47ad22272913f0916cf1"
   },
   "paymentLink": {
    "path": "__tests__/paymentLink.test.js",

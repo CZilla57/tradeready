@@ -307,7 +307,9 @@ function writeDocument(L, { document, documentType, selection, subtitle }) {
   }
 
   const options = isPlainObject(s.options) && Array.isArray(s.options.tiers) ? s.options : null;
-  if (isPlainObject(selection)) {
+  // A "chosen option" exists only on an estimate whose document offered
+  // options; a selection on any other document is never printed (§11.11).
+  if (options && documentType === 'estimate' && isPlainObject(selection)) {
     L.heading(`Chosen option: ${selection.tierName || ''}`);
     for (const li of lineItemsOf(selection.lineItems)) L.amountRow(li.label, money(li.amount));
     L.rule();

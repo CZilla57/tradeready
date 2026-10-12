@@ -6,14 +6,18 @@
 // on approved). Refuses 409 when the tradesperson already recorded an
 // on-site manual decision — a stale link can't override it.
 //
-// Phase 19 (e-signatures, spec §3.5): the same signature path as respond.js,
-// with documentType "change_order". An e-signed approval is written with the
-// conditional write (updateJobIfUnchanged, re-read on conflict) so two
-// concurrent approvals can never seal two different records for one link;
-// the legacy path keeps its unconditional upsert. Flags off → unchanged.
+// Phase 19 (e-signatures, spec §3.5, §11.11): the same signature path as
+// respond.js, with documentType "change_order": the record is built from
+// Worker-validated inputs only (a change order never carries a selection,
+// whatever the stored approval holds) and stored in signature_pending before
+// the decision; no stored evidence, no decision (503). An e-signed approval
+// is written with the conditional write (updateJobIfUnchanged, re-read on
+// conflict) so two concurrent approvals can never land two signatures for one
+// link; the legacy path keeps its unconditional upsert. Flags off → unchanged
+// apart from the merge dropping planted signature keys.
 
 import { fetchJob, upsertJob, updateJobIfUnchanged, constantTimeEqual } from '../../../lib/estimateStore.js';
-import { nextApproval, RESPOND_WRITE_ATTEMPTS } from './respond.js';
+import { nextApproval, signatureOf, RESPOND_WRITE_ATTEMPTS } from './respond.js';
 import { createRateLimiter } from '../../../lib/guards.js';
 import { applyCors } from '../../../lib/estimate/cors.js';
 import { snapshotDigest } from '../../../lib/estimate/quoteOptions.js';
@@ -22,7 +26,9 @@ import { esignV2, esignActive, esignRequireConsent } from '../../../lib/esign/fl
 import { edgeClientIp } from '../../../lib/esign/ip.js';
 import { fail, parseSignatureFields, validateTypedName } from '../../../lib/esign/validate.js';
 import { signApproval, tokenSha256 } from '../../../lib/esign/record.js';
-import { eventsAtSigning, finishSigning } from '../../../lib/esign/service.js';
+import {
+  eventsAtSigning, finishSigning, lockedSignature, storeEvidence, EVIDENCE_NOT_STORED,
+} from '../../../lib/esign/service.js';
 import { logEvent } from '../../../lib/esign/store.js';
 
 const allow = createRateLimiter({ limit: 10 });
@@ -54,8 +60,11 @@ export async function changeRespondHandler(c) {
     sig = parsed.value;
   }
   const edgeIp = edgeClientIp(c);
-  const recordId = crypto.randomUUID();
+  let recordId = crypto.randomUUID();
+  let evidence = null; // { recordId, digest } stored in signature_pending
   const userAgent = String(c.req.header('user-agent') || '').slice(0, 300);
+  // One server clock read per request, so a retried write keeps the record.
+  const consentAt = new Date().toISOString();
   let trail = null;
 
   for (let attempt = 0; attempt < RESPOND_WRITE_ATTEMPTS; attempt += 1) {
@@ -101,11 +110,17 @@ export async function changeRespondHandler(c) {
     }
 
     let merged = nextApproval(existing, { decision, signerName: typedName, declineReason }, {
-      consentAt: new Date().toISOString(),
+      consentAt,
       ip: signing ? edgeIp : ip,
       userAgent,
     });
-    if (merged === existing) return ok(c, merged); // approved lock — nothing to write
+    if (merged === existing) {
+      // Approved lock: echo the Worker-held record, never the blob's claims.
+      const locked = await lockedSignature(c.env, existing, {
+        userId: row.user_id, jobId: String(jobId), changeOrderId: String(changeOrderId), tokenHash: tokenSha256(existing.token),
+      });
+      return ok(c, merged, locked);
+    }
 
     let signed = null;
     if (signing) {
@@ -114,16 +129,36 @@ export async function changeRespondHandler(c) {
           userId: row.user_id, jobId: String(jobId), changeOrderId: String(changeOrderId), tokenHash: tokenSha256(existing.token),
         });
       }
-      signed = signApproval(merged, {
-        recordId,
-        consent: sig.consent,
-        drawn: sig.drawn,
-        email: sig.email,
-        events: trail,
+      const inputs = {
+        documentType: 'change_order',
         jobId: String(jobId),
         changeOrderId: String(changeOrderId),
-        documentType: 'change_order',
-      });
+        token: existing.token,
+        snapshot: existing.snapshot,
+        selection: null,
+        consentVersion: sig.consent ? sig.consent.version : null,
+        signedAt: consentAt,
+        typedName,
+        drawn: sig.drawn,
+        email: sig.email,
+        ip: edgeIp,
+        userAgent,
+        events: trail,
+      };
+      signed = signApproval(merged, { ...inputs, recordId });
+      // The record changed on a retry (snapshot moved under the same token):
+      // a new id, so the earlier pending row is never named by a decision.
+      if (evidence && evidence.digest !== signed.digest) {
+        recordId = crypto.randomUUID();
+        signed = signApproval(merged, { ...inputs, recordId });
+        evidence = null;
+      }
+      if (!evidence) {
+        if (!(await storeEvidence(c.env, { userId: row.user_id, record: signed.record, digest: signed.digest }))) {
+          return c.json(EVIDENCE_NOT_STORED, 503);
+        }
+        evidence = { recordId, digest: signed.digest };
+      }
       merged = signed.approval;
     }
     const next = cos.slice();
@@ -156,7 +191,7 @@ export async function changeRespondHandler(c) {
       const { recordPending } = await finishSigning(c, {
         userId: row.user_id, record: signed.record, digest: signed.digest, email: sig.email, ip: edgeIp, userAgent,
       });
-      return ok(c, merged, { recordPending });
+      return ok(c, merged, signatureOf(signed, recordPending));
     }
     // Version moved between read and write: re-read and re-validate.
   }
@@ -164,13 +199,14 @@ export async function changeRespondHandler(c) {
   return c.json({ error: 'Please try again in a moment.' }, 409);
 }
 
-function ok(c, approval, { recordPending = false } = {}) {
+// `signature`: the Worker-held record's view or null (never the blob's keys).
+function ok(c, approval, signature = null) {
   const out = { ok: true, decision: approval.decision, consentAt: approval.consentAt };
-  if (approval.decision === 'approved' && approval.signatureRecordId) {
-    out.recordId = approval.signatureRecordId;
-    out.recordDigest = approval.recordDigest;
-    out.signatureMethod = approval.signatureMethod;
-    if (recordPending) out.recordPending = true;
+  if (approval.decision === 'approved' && signature) {
+    out.recordId = signature.recordId;
+    out.recordDigest = signature.recordDigest;
+    out.signatureMethod = signature.signatureMethod;
+    if (signature.recordPending) out.recordPending = true;
   }
   return c.json(out, 200);
 }

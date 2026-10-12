@@ -13,12 +13,15 @@
 --    token hash + job + change order, NULLS NOT DISTINCT: PostgreSQL 15+).
 --    `record` is the canonical record JSON, `record_digest` its SHA-256,
 --    `seal` the base64 Ed25519 signature over the digest bytes.
--- 2. public.signature_pending — Worker-captured evidence of a signature
---    whose first seal or insert failed: the record built when the customer
---    signed, waiting to be sealed lazily. Same per-link uniqueness. SERVICE
---    ROLE ONLY (RLS on, no policy, no client grant): a seal is only ever made
---    from a row the Worker wrote, never from the owner-writable job blob
---    (spec §11.10, security review 2026-10-03).
+-- 2. public.signature_pending — Worker-captured evidence of a signature:
+--    the record built when the customer signed, stored BEFORE the decision
+--    is written (spec §11.11, security review 2026-10-04) and sealed from
+--    here if the first seal fails. Unique per record id only: a link may
+--    hold rows whose decision never landed (a lost race, a refused retry),
+--    and a row is sealed only when the link's landed decision names its id.
+--    SERVICE ROLE ONLY (RLS on, no policy, no client grant): a seal is only
+--    ever made from a row the Worker wrote, never from the owner-writable job
+--    blob (spec §11.10, security review 2026-10-03).
 -- 3. public.signature_events — the audit log per link: link_created,
 --    viewed, declined, signed, copy_emailed, copy_email_failed,
 --    copy_downloaded. Each row names its job and change order; the Worker
@@ -86,13 +89,15 @@ create table if not exists public.signature_pending (
   signed_at              timestamptz not null,
   created_at             timestamptz not null default now(),
   constraint signature_pending_document_kind
-    check ((document_type = 'change_order') = (change_order_id is not null)),
-  constraint signature_pending_one_per_link
-    unique nulls not distinct (approval_token_sha256, job_id, change_order_id)
+    check ((document_type = 'change_order') = (change_order_id is not null))
+  -- No per-link uniqueness (§11.11): the Worker inserts with on_conflict=id
+  -- and reads a row only by the id its landed decision names.
 );
 
 create index if not exists signature_pending_owner_job
   on public.signature_pending (user_id, job_id);
+create index if not exists signature_pending_link
+  on public.signature_pending (approval_token_sha256, job_id, change_order_id);
 
 create table if not exists public.signature_events (
   id                     bigint generated always as identity primary key,

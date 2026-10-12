@@ -1,10 +1,17 @@
 // The canonical signature record (spec §3.5, record version 1). Pure.
 //
-// ONE builder, recordFromApproval, used by respond / change-respond (via
-// signApproval) on the approval the Worker itself just merged from validated
-// inputs. It is never run on an approval read back from the job blob: the
-// owner can write that blob, so a lazy seal uses only the record the Worker
-// stored in `signature_pending` at signing time (service.js, spec §11.10).
+// ONE builder, buildRecord, called by respond / change-respond (through
+// signApproval) with EXPLICIT, Worker-validated inputs only: the typed name,
+// consent, drawing and email the customer submitted, the server clock, the
+// edge IP and user agent of the signing request, the trail read for this
+// link, the frozen snapshot the customer was shown (digest-checked by the
+// route) and the selection the server itself resolved from the customer's
+// submitted choice against that snapshot. Nothing is read from the stored
+// approval (`jobs.data.approval`): the owner's JWT can write that blob, so a
+// field planted there (a `selection`, a signer, a trail) must never reach a
+// sealed record (spec §11.10, §11.11). A lazy seal uses only the record the
+// Worker stored in `signature_pending` before the decision was written
+// (service.js).
 // recordDigest = SHA-256 of quoteOptions.canonicalJson(record), the encoding
 // the snapshot digest uses.
 //
@@ -16,7 +23,7 @@
 //   - events[].actor: 'owner' on link_created (no owner IP is recorded).
 
 const { createHash } = require('node:crypto');
-const { canonicalJson, snapshotDigest } = require('../estimate/quoteOptions.js');
+const { canonicalJson, snapshotDigest, hasSnapshotOptions, resolveSelection } = require('../estimate/quoteOptions.js');
 const { signingTexts } = require('./texts.js');
 
 const RECORD_VERSION = 1;
@@ -80,69 +87,95 @@ function buildEvidence({ consentVersion = null, drawn = null, email = null, even
   };
 }
 
-function hasEvidence(approval) {
-  return isPlainObject(approval)
-    && approval.decision === 'approved'
-    && isRecordId(approval.signatureRecordId)
-    && isPlainObject(approval.signatureEvidence)
-    && approval.signatureEvidence.v === EVIDENCE_VERSION;
-}
-
 function signatureMethodFor(drawn) {
   return drawn ? 'typed_drawn' : 'typed';
 }
 
-// Returns the canonical record object, or null when the approval carries no
-// e-signature evidence (a legacy typed-name approval).
-function recordFromApproval({ approval, jobId, changeOrderId = null, documentType }) {
-  if (!hasEvidence(approval)) return null;
-  const ev = approval.signatureEvidence;
-  const snapshot = approval.snapshot;
-  const t = ev.consentVersion ? signingTexts(snapshot, documentType, ev.consentVersion) : null;
+const DOCUMENT_TYPES = ['estimate', 'change_order'];
+
+// The only selection a record may carry: the customer's choice re-resolved
+// against the frozen snapshot. A change order, or an estimate without
+// options, has none, whatever the caller passes. An options estimate must be
+// signed with a choice that resolves to exactly `selection`.
+function sealedSelection(snapshot, documentType, selection) {
+  if (documentType !== 'estimate' || !hasSnapshotOptions(snapshot)) return null;
+  if (!isPlainObject(selection)) throw new Error('an options estimate is signed only with a resolved choice');
+  const again = resolveSelection(snapshot, { tierId: selection.tierId, addOnIds: selection.addOnIds });
+  if (again.error || canonicalJson(again.selection) !== canonicalJson(selection)) {
+    throw new Error('the selection does not resolve against the signed snapshot');
+  }
+  return again.selection;
+}
+
+// Returns the canonical record. Throws on inputs the routes never produce
+// (a programming error, never a customer error).
+function buildRecord({
+  recordId, documentType, jobId, changeOrderId = null, token, snapshot, selection = null,
+  consentVersion = null, signedAt, typedName, drawn = null, email = null, ip = null, userAgent = '', events = [],
+}) {
+  if (!isRecordId(recordId)) throw new Error('record id must be a v4 uuid');
+  if (!DOCUMENT_TYPES.includes(documentType)) throw new Error('unknown document type');
+  if ((documentType === 'change_order') !== (changeOrderId != null)) throw new Error('change order id iff change order');
+  if (typeof token !== 'string' || !token) throw new Error('record without a token');
+  if (!isPlainObject(snapshot)) throw new Error('record without a snapshot');
+  if (typeof typedName !== 'string' || !typedName) throw new Error('record without a typed name');
+  if (!isoAt(signedAt) || isoAt(signedAt) !== signedAt) throw new Error('signedAt must be an ISO timestamp');
+  const t = consentVersion ? signingTexts(snapshot, documentType, consentVersion) : null;
   return {
     recordVersion: RECORD_VERSION,
-    recordId: approval.signatureRecordId,
+    recordId,
     documentType,
     jobId: String(jobId),
     changeOrderId: changeOrderId == null ? null : String(changeOrderId),
-    approvalTokenSha256: tokenSha256(approval.token),
+    approvalTokenSha256: tokenSha256(token),
     document: snapshot,
     documentDigest: snapshotDigest(snapshot),
-    selection: isPlainObject(approval.selection) ? approval.selection : null,
+    selection: sealedSelection(snapshot, documentType, selection),
     consent: t
-      ? { version: t.version, text: t.disclosureText, textSha256: sha256Hex(t.disclosureText), acceptedAt: approval.consentAt }
+      ? { version: t.version, text: t.disclosureText, textSha256: sha256Hex(t.disclosureText), acceptedAt: signedAt }
       : null,
     intent: t ? { text: t.intent, textSha256: sha256Hex(t.intent) } : null,
     signer: {
-      typedName: approval.signerName,
-      drawn: ev.drawn || null,
-      email: ev.email || null,
+      typedName,
+      drawn: drawn || null,
+      email: email || null,
     },
-    signatureMethod: signatureMethodFor(ev.drawn),
-    signedAt: approval.consentAt,
-    ip: typeof approval.ip === 'string' && approval.ip ? approval.ip : null,
-    userAgent: typeof approval.userAgent === 'string' ? approval.userAgent : '',
+    signatureMethod: signatureMethodFor(drawn),
+    signedAt,
+    ip: typeof ip === 'string' && ip ? ip : null,
+    userAgent: typeof userAgent === 'string' ? userAgent : '',
     context: CONTEXT_REMOTE_LINK,
-    events: Array.isArray(ev.events) ? ev.events : [],
+    events: Array.isArray(events) ? events : [],
     renderer: RENDERER,
   };
 }
 
-// Adds the server-owned e-signature keys to an approval the decision merge
-// just produced (respond / change-respond, approve only) and builds the
-// record those keys describe. Pure: `recordId` is pre-minted by the caller.
-// Returns { approval, record, digest }.
-function signApproval(merged, { recordId, consent = null, drawn = null, email = null, events = [], jobId, changeOrderId = null, documentType }) {
+// The e-signed approval the routes write: the decision merge's result with
+// every signature-bearing key taken FROM THE RECORD (so the stored approval
+// and the sealed record agree by construction), plus the server-owned keys.
+// Pure: `recordId` is pre-minted by the caller. Returns { approval, record,
+// digest }.
+function signApproval(merged, inputs) {
+  const record = buildRecord(inputs);
+  const digest = recordDigest(record);
   const approval = {
     ...merged,
-    signatureRecordId: recordId,
-    signatureMethod: signatureMethodFor(drawn),
-    signatureEvidence: buildEvidence({ consentVersion: consent ? consent.version : null, drawn, email, events }),
+    consentAt: record.signedAt,
+    signerName: record.signer.typedName,
+    ip: record.ip,
+    userAgent: record.userAgent,
+    signatureRecordId: record.recordId,
+    signatureMethod: record.signatureMethod,
+    signatureEvidence: buildEvidence({
+      consentVersion: record.consent ? record.consent.version : null,
+      drawn: record.signer.drawn,
+      email: record.signer.email,
+      events: record.events,
+    }),
+    recordDigest: digest,
   };
-  delete approval.recordDigest;
-  const record = recordFromApproval({ approval, jobId, changeOrderId, documentType });
-  const digest = recordDigest(record);
-  approval.recordDigest = digest;
+  if (record.selection) approval.selection = record.selection;
+  else delete approval.selection;
   return { approval, record, digest };
 }
 
@@ -166,9 +199,9 @@ module.exports = {
   isoAt,
   eventsForRecord,
   buildEvidence,
-  hasEvidence,
   signatureMethodFor,
-  recordFromApproval,
+  sealedSelection,
+  buildRecord,
   signApproval,
   canonicalRecordJson,
   recordDigest,

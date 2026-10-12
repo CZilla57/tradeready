@@ -378,7 +378,8 @@ The coordinator is owned by `AppStore`. AppStore gets only hooks, to stay clear 
 
 **Outbound (Stage B)**
 - After each trigger: ensure the calendar exists, fetch the mirror window, plan, and apply.
-- If the stored calendar can't be found by identifier, or by title "TradeReady" among writable calendars, the mirror is turned **off** with a notice. It is never silently recreated.
+- The mirror calendar is found by its stored identifier only, never by title (§11.7). When calendars are readable and the stored identifier is genuinely absent, the mirror is turned **off** with a notice. It is never silently recreated. When no calendar can be read (for example, protected data is unavailable), nothing changes and the next pass tries again.
+- An existing calendar is adopted (after sign-out or reinstall) only when it is provably this account's mirror; otherwise a new one is created (§11.7).
 
 ### 4.5 UI
 
@@ -416,7 +417,7 @@ The coordinator is owned by `AppStore`. AppStore gets only hooks, to stay clear 
 ### 4.7 Account boundary
 
 - **Sign-out:** stops both directions and wipes the §2.1 keys. The server row stays and goes stale, so booking fails closed until the owner turns checks on with another device. The Today row on other devices says so. The TradeReady calendar stays; it is the owner's data in their own account.
-- **Account deletion:** cascades the row. On this device, the TradeReady calendar is also removed when the mirror was on, best effort, as a step in the existing scrub.
+- **Account deletion:** cascades the row. On this device, when the mirror was on, the TradeReady calendar is also removed, best effort, as a step in the existing scrub, but only when every event in it carries this account's tag; otherwise only this account's events are deleted and the calendar stays (§11.7).
 
 ## 5. Privacy and platform
 
@@ -750,3 +751,17 @@ No compiler warning points at a Phase 26 file. None of these runners touched rea
 ### 11.6 Review fixes
 
 - **A loose `tradeready-job:` no longer hides busy time (parser differential).** The busy rules dropped any event, in any calendar, whose notes merely contained `tradeready-job:`, so an invite or pasted note could make a busy period bookable. Outside the mirror calendar, an event is now left out only when `NativeCalendarMirror.parseMarker` accepts its notes and the tag equals this account's `ownerTag16` (reconcile's own test). `Sample` keeps only the parsed tag, and `countsAsBusy`/`busySamples` take `mirrorOwnerTag`, which the coordinator derives from the owner's server user id. Tests are in `native/CalendarSyncTests` (free text, malformed and foreign markers stay busy; this account's marker in another calendar is skipped; the other exclusions hold) and in the `native/StoreIntegrationTests` Phase 26 section (what is pushed).
+
+### 11.7 Review fixes: calendar ownership (2026-10-04)
+
+Branch `fix/calendar-mirror`. Rules, in `NativeCalendarMirror` (pure, host-tested); the EventKit adapter only executes them.
+
+- **Never adopt by title.** `findMirrorCalendar` looks up the stored identifier only. After sign-out or reinstall (no stored id) the coordinator reads every event of each calendar titled "TradeReady", "TradeReady Jobs" or "TradeReady Jobs N" and `adoptableCalendarID` accepts one only when it is writable, holds at least one event, and every event's parsed marker carries this account's `ownerTag16`. A same-title calendar of another account, of the owner, a mixed one and an empty one are all refused, and a new calendar is created. `newCalendarTitle` picks "TradeReady", or "TradeReady Jobs" (then "TradeReady Jobs 2", ...) when the title is taken.
+- **Removal.** "Remove calendar" and account deletion go through `removalDecision`: the whole calendar is deleted only when every event in it carries this account's tag. Otherwise only this account's tagged events are deleted, the calendar stays, and the owner is told. Calendars that can't be read remove nothing. "Remove calendar" in settings says so.
+- **Edit and delete guard.** The planner only emits operations for events with this account's tag; the adapter also refuses an update or delete of an event outside the mirror calendar or without a mirror marker.
+- **Scan window.** Ownership is judged over today ± 5 years, read in 3-year slices (EventKit truncates a predicate at 4 years). A foreign event farther out than that is not seen; this is the residual.
+- **Zone duplicates.** Existing events are fetched over the mirror window widened by 2 days each side (device zone vs schedule zone can differ by 26 hours), and `plan` matches them to jobs by the job id in the marker, not by window membership. An event of a job that is no longer wanted is deleted only when it starts inside [today − 30, today + 180].
+- **Transient empty read.** `syncMirror` turns the mirror off with the "deleted" notice only when calendars are readable and the stored id is absent; no readable calendars, or a present but read-only calendar, leaves it on (as the inbound path does).
+- **Picker.** Settings hides only this account's mirror calendar (by stored id), so a same-title calendar that is not the mirror can be unchecked.
+- **BG refresh order.** The calendar step now runs after the widget/Siri action replay in `runBackgroundRefresh`.
+- Tests: `native/CalendarSyncTests` (adoption, removal, planner by job id) and the `native/StoreIntegrationTests` Phase 26 section (foreign, own-events and mixed calendars; removal and account deletion with foreign events; unreadable calendars; edge-date jobs under Phoenix, New York and Auckland over repeated passes; transient empty read; picker; BG order).

@@ -479,7 +479,6 @@ private struct NativeAPIKeyRevealSheet: View {
                     if scenePhase == .active {
                         Text(reveal.secret.revealedValue)
                             .font(.body.monospaced())
-                            .textSelection(.enabled)
                             .privacySensitive()
                             .accessibilityLabel("API key")
                             .accessibilityValue(reveal.secret.revealedValue)

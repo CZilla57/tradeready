@@ -13,7 +13,7 @@
 # applying the migration to the project and running the verify script there.
 #
 # Usage:  sh supabase/verify/esign_records.sh   (needs PostgreSQL 15+ on PATH:
-#         the per-link unique constraints use NULLS NOT DISTINCT)
+#         the per-link record constraint uses NULLS NOT DISTINCT)
 # Own cluster on port 54331 (override with PGPORT_SCRATCH), removed at exit.
 # Never point it at a real database.
 

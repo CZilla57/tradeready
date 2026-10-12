@@ -5,16 +5,20 @@
 // deleted here; the migration's trigger refuses updates and only the
 // auth.users cascade deletes.
 //
-// A link is (owner, job, change order, token hash). Records and pending rows
-// are unique per (token hash, job, change order); every read filters on the
-// job and change order, and on the owner wherever the caller knows it, so a
-// token reused on another job (or learned by another owner) never reaches
-// this link's record, pending signature or trail.
+// A link is (owner, job, change order, token hash). Records are unique per
+// (token hash, job, change order); pending rows are unique per record id
+// only (spec §11.11: they are stored before the decision, so a link may hold
+// rows whose decision never landed), and a pending row is only ever read by
+// that id. Every read filters on the job and change order, and on the owner
+// wherever the caller knows it, so a token reused on another job (or learned
+// by another owner) never reaches this link's record, pending signature or
+// trail.
 //
 // Raw approval tokens never reach these tables — only their SHA-256.
 
 const MAX_LIVE_EVENTS = 200;
 const LINK_CONFLICT = 'approval_token_sha256,job_id,change_order_id';
+const PENDING_CONFLICT = 'id';
 const RECORD_COLUMNS = 'id,user_id,approval_token_sha256,job_id,change_order_id,document_type,record,record_digest,seal_alg,seal_key_id,seal,signed_at';
 const PENDING_COLUMNS = 'id,user_id,approval_token_sha256,job_id,change_order_id,document_type,record,record_digest,signed_at';
 
@@ -55,11 +59,10 @@ function linkQuery({ userId = null, jobId, changeOrderId = null, tokenHash = nul
   return parts.join('&');
 }
 
-// Insert-if-absent per link. Returns true when THIS call created the row,
-// false when that link already had one (idempotent re-seal). Throws on any
-// other failure.
-async function insertIfAbsent(env, table, row) {
-  const res = await fetch(rest(env, `${table}?on_conflict=${LINK_CONFLICT}`), {
+// Insert-if-absent on `conflict`. Returns true when THIS call created the
+// row, false when it already existed. Throws on any other failure.
+async function insertIfAbsent(env, table, row, conflict) {
+  const res = await fetch(rest(env, `${table}?on_conflict=${conflict}`), {
     method: 'POST',
     headers: {
       ...headers(env),
@@ -73,14 +76,16 @@ async function insertIfAbsent(env, table, row) {
   return Array.isArray(rows) && rows.length > 0;
 }
 
+// Per link: false when that link already has a record (idempotent re-seal).
 function insertRecord(env, row) {
-  return insertIfAbsent(env, 'signature_records', row);
+  return insertIfAbsent(env, 'signature_records', row, LINK_CONFLICT);
 }
 
-// The Worker-captured evidence of a signature whose first seal or insert
-// failed (spec §3.5 step 4). The only input a lazy seal ever uses.
+// The Worker-captured evidence of a signature, stored BEFORE its decision is
+// written (spec §11.11). The only input a lazy seal ever uses. Per record id:
+// false only for an id that already exists.
 function insertPending(env, row) {
-  return insertIfAbsent(env, 'signature_pending', row);
+  return insertIfAbsent(env, 'signature_pending', row, PENDING_CONFLICT);
 }
 
 async function selectOne(env, table, columns, query) {
@@ -90,24 +95,36 @@ async function selectOne(env, table, columns, query) {
   return Array.isArray(rows) && rows.length ? rows[0] : null;
 }
 
-// The sealed record of one link, or (owner-scoped, no token) the newest for
-// that job / change order; `recordId` pins one.
+// The sealed record of one link (unique per link), or with `recordId` that
+// record only. Owner-scoped callers always pin a record id (record.js route).
 function fetchRecordForLink(env, link) {
   return selectOne(env, 'signature_records', RECORD_COLUMNS, `${linkQuery(link)}&order=signed_at.desc`);
 }
 
+// One pending row: always pinned by its record id (the id a landed decision
+// names) as well as the link, never "the newest for this link".
 function fetchPendingForLink(env, link) {
-  return selectOne(env, 'signature_pending', PENDING_COLUMNS, `${linkQuery(link)}&order=created_at.desc`);
+  if (link.recordId == null || link.recordId === '') throw new Error('pending lookup without a record id');
+  return selectOne(env, 'signature_pending', PENDING_COLUMNS, linkQuery(link));
+}
+
+// A job row by id, soft-deleted ones included (service role), read only to
+// learn which pending row its landed decision names (service.js).
+async function fetchJobAnyState(env, jobId) {
+  const res = await fetch(rest(env, `jobs?${eq('id', jobId)}&select=user_id,data`), { headers: headers(env) });
+  if (!res.ok) throw await failure('fetch', res);
+  const rows = await res.json();
+  return Array.isArray(rows) && rows.length ? rows[0] : null;
 }
 
 function fetchRecordById(env, recordId) {
   return selectOne(env, 'signature_records', RECORD_COLUMNS, eq('id', recordId));
 }
 
-// Owner-scoped: always filtered by user_id. `recordId` pins one record;
-// otherwise the newest for that job / change order.
-function fetchOwnerRecord(env, userId, { jobId, changeOrderId = null, recordId = null }) {
+// Owner-scoped: always filtered by user_id and pinned to one record id.
+function fetchOwnerRecord(env, userId, { jobId, changeOrderId = null, recordId }) {
   if (!userId) throw new Error('owner record lookup without a user id');
+  if (!recordId) throw new Error('owner record lookup without a record id');
   return fetchRecordForLink(env, { userId, jobId, changeOrderId, recordId });
 }
 
@@ -152,6 +169,7 @@ async function listEvents(env, { userId, jobId, changeOrderId = null, tokenHash 
 module.exports = {
   MAX_LIVE_EVENTS,
   LINK_CONFLICT,
+  PENDING_CONFLICT,
   linkQuery,
   insertRecord,
   insertPending,
@@ -159,6 +177,7 @@ module.exports = {
   fetchPendingForLink,
   fetchRecordById,
   fetchOwnerRecord,
+  fetchJobAnyState,
   logEvent,
   listEvents,
 };

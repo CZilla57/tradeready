@@ -4,7 +4,7 @@
 // all-"A" base64 string; real seals are only ever made with key pairs the
 // tests generate at runtime — no private key is stored anywhere.
 
-const { buildEvidence } = require('../lib/esign/record.js');
+const { buildEvidence, buildRecord } = require('../lib/esign/record.js');
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 
@@ -154,6 +154,33 @@ const CASES = {
   }),
 };
 
+// The explicit, Worker-validated inputs respond / change-respond pass to
+// buildRecord for a case (the record is never built from a stored approval).
+function recordInputs({ approval, jobId, changeOrderId = null, documentType }) {
+  const ev = approval.signatureEvidence;
+  return {
+    recordId: approval.signatureRecordId,
+    documentType,
+    jobId,
+    changeOrderId,
+    token: approval.token,
+    snapshot: approval.snapshot,
+    selection: approval.selection || null,
+    consentVersion: ev.consentVersion,
+    signedAt: approval.consentAt,
+    typedName: approval.signerName,
+    drawn: ev.drawn,
+    email: ev.email,
+    ip: approval.ip,
+    userAgent: approval.userAgent,
+    events: ev.events,
+  };
+}
+
+function recordOf(c) {
+  return buildRecord(recordInputs(c));
+}
+
 module.exports = {
   clone,
   FAKE_SEAL,
@@ -166,4 +193,6 @@ module.exports = {
   changeOrderSnapshot,
   signedApproval,
   CASES,
+  recordInputs,
+  recordOf,
 };

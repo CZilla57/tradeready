@@ -6,7 +6,7 @@
 
 const assert = require('node:assert/strict');
 const { before, afterEach, describe, test } = require('node:test');
-const { fakeStripe, fakeC, invalidRequest, stripeError } = require('./helpers/fakes.cjs');
+const { fakeStripe, fakeCheckoutSessions, fakeC, invalidRequest, stripeError } = require('./helpers/fakes.cjs');
 const W = require('./helpers/autopayWorld.cjs');
 const { checkout } = require('../lib/pay/payService.js');
 const { mintInvoicePayToken, mintSetupToken, verifyPayToken } = require('../lib/pay/payToken.js');
@@ -26,6 +26,7 @@ function stripeWith(over = {}) {
   return fakeStripe({
     'checkout.sessions.list': async () => ({ data: [], has_more: false }),
     'checkout.sessions.expire': async (id) => ({ id, status: 'expired' }),
+    'checkout.sessions.retrieve': async (id) => ({ id, status: 'open' }),
     'checkout.sessions.create': async () => {
       n += 1;
       return { id: `cs_test_${n}`, status: 'open', url: `https://checkout.stripe.com/c/pay/cs_test_${n}#fidabc` };
@@ -177,8 +178,8 @@ describe('pay checkout — one open session per invoice', () => {
     const res = await call({ t: pTok() }, { stripe });
     assert.equal(res.body.url, 'https://checkout.stripe.com/c/pay/cs_new');
     const [, second] = stripe.callsTo('checkout.sessions.create');
-    assert.equal(second.args[1].idempotencyKey, `tr-co:inv1:12000:n:${BUCKET}:r`);
-    assert.equal(second.args[0].metadata.tr_idem, `tr-co:inv1:12000:n:${BUCKET}:r`);
+    assert.equal(second.args[1].idempotencyKey, `tr-co:inv1:12000:n:${BUCKET}:rcs_old`);
+    assert.equal(second.args[0].metadata.tr_idem, `tr-co:inv1:12000:n:${BUCKET}:rcs_old`);
   });
 
   test('a replayed session that already completed → 409 maybe_paid', async () => {
@@ -524,7 +525,7 @@ describe('pay checkout — tips (Phase 28)', () => {
     const res = await call({ t: pTok(), tipCents: 1800 }, { stripe });
     assert.equal(res.body.url, 'https://checkout.stripe.com/c/pay/cs_new');
     const [, second] = stripe.callsTo('checkout.sessions.create');
-    assert.equal(second.args[1].idempotencyKey, `tr-co:inv1:12000:t1800:n:${BUCKET}:r`);
+    assert.equal(second.args[1].idempotencyKey, `tr-co:inv1:12000:t1800:n:${BUCKET}:rcs_old`);
     assert.equal(second.args[0].line_items[1].price_data.unit_amount, 1800);
     assert.equal(second.args[0].metadata.tr_tip_cents, '1800');
   });
@@ -548,5 +549,160 @@ describe('pay checkout — tips (Phase 28)', () => {
     const [e] = w.db.rows('autopay_enrollments');
     assert.equal(e.max_amount_cents, 12000);
     assert.equal(e.consent_text.includes('18.00'), false);
+  });
+});
+
+// Phase 28 review fixes (tips spec §13): Stripe replays the CACHED create
+// response for a repeated key, so a replayed session may be dead; and a
+// payment that completed but isn't booked yet must block a second checkout.
+// `fakeCheckoutSessions` models both (replayed `open` response, live status).
+describe('pay checkout — replayed sessions and unbooked payments (Phase 28 review)', () => {
+  const TIPS_ON = () => ({ settings: [W.settingsRow({ tipsEnabled: true })] });
+  const stripeFor = (cs) => fakeStripe({ ...cs.handlers, 'customers.create': async () => ({ id: 'cus_new' }) });
+  const urlOf = (res) => res.body.url;
+  const liveByUrl = (cs, res) => [...cs.sessions.values()].find((x) => x.url === urlOf(res));
+
+  test('tip A -> B -> A inside one bucket lands on a LIVE session, and only one stays open', async () => {
+    w = W.world(TIPS_ON());
+    const cs = fakeCheckoutSessions();
+    const stripe = stripeFor(cs);
+    const a1 = await call({ t: pTok(), tipCents: 1800 }, { stripe });
+    const b = await call({ t: pTok(), tipCents: 2400 }, { stripe });
+    const a2 = await call({ t: pTok(), tipCents: 1800 }, { stripe });
+    for (const r of [a1, b, a2]) assert.equal(r.status, 200);
+    // The cached replay of A's key says "open"; the live A was expired by B.
+    assert.equal(liveByUrl(cs, a1).status, 'expired');
+    assert.equal(liveByUrl(cs, b).status, 'expired');
+    const live = liveByUrl(cs, a2);
+    assert.equal(live.status, 'open');
+    assert.notEqual(urlOf(a2), urlOf(a1));
+    assert.equal(live.metadata.tr_tip_cents, '1800');
+    assert.deepEqual(cs.open().map((x) => x.id), [live.id]);
+  });
+
+  test('A -> B -> A -> B -> A keeps landing on a live session (a re-minted key is not reused blindly)', async () => {
+    w = W.world(TIPS_ON());
+    const cs = fakeCheckoutSessions();
+    const stripe = stripeFor(cs);
+    let last;
+    for (const tipCents of [1800, 2400, 1800, 2400, 1800, 2400, 1800]) {
+      last = await call({ t: pTok(), tipCents }, { stripe });
+      assert.equal(last.status, 200);
+      assert.equal(liveByUrl(cs, last).status, 'open', `tip ${tipCents}`);
+      assert.equal(cs.open().length, 1);
+    }
+    assert.equal(liveByUrl(cs, last).metadata.tr_tip_cents, '1800');
+  });
+
+  test('an identical double-submit still yields exactly one session', async () => {
+    w = W.world(TIPS_ON());
+    const cs = fakeCheckoutSessions();
+    const stripe = stripeFor(cs);
+    const [x, y] = await Promise.all([call({ t: pTok(), tipCents: 1800 }, { stripe }), call({ t: pTok(), tipCents: 1800 }, { stripe })]);
+    const z = await call({ t: pTok(), tipCents: 1800 }, { stripe, nowMs: NOW_MS + 60_000 });
+    assert.equal(urlOf(x), urlOf(y));
+    assert.equal(urlOf(x), urlOf(z));
+    assert.equal(cs.sessions.size, 1);
+    assert.equal(cs.open().length, 1);
+  });
+
+  test('a double-submit of the re-minted tip (after A -> B) also yields one session', async () => {
+    w = W.world(TIPS_ON());
+    const cs = fakeCheckoutSessions();
+    const stripe = stripeFor(cs);
+    await call({ t: pTok(), tipCents: 1800 }, { stripe });
+    await call({ t: pTok(), tipCents: 2400 }, { stripe });
+    const x = await call({ t: pTok(), tipCents: 1800 }, { stripe });
+    const y = await call({ t: pTok(), tipCents: 1800 }, { stripe });
+    assert.equal(urlOf(x), urlOf(y));
+    assert.equal(liveByUrl(cs, y).status, 'open');
+    assert.equal(cs.open().length, 1);
+    assert.equal(cs.sessions.size, 3);
+  });
+
+  test('a replayed session that completed meanwhile is never handed out → 409 maybe_paid', async () => {
+    w = W.world();
+    const stripe = stripeWith({
+      'checkout.sessions.create': async () => ({ id: 'cs_cached', status: 'open', url: 'x' }),
+      'checkout.sessions.retrieve': async () => ({ id: 'cs_cached', status: 'complete' }),
+    });
+    assert.equal((await call({ t: pTok() }, { stripe })).body.code, 'maybe_paid');
+  });
+
+  test('a failed live-status read falls back to the create response', async () => {
+    w = W.world();
+    const stripe = stripeWith({ 'checkout.sessions.retrieve': async () => { throw stripeError('boom'); } });
+    const res = await call({ t: pTok() }, { stripe });
+    assert.equal(res.status, 200);
+  });
+
+  test('a session that stays expired after the re-mints is an error, never an expired URL', async () => {
+    w = W.world();
+    let n = 0;
+    const stripe = stripeWith({ 'checkout.sessions.create': async () => ({ id: `cs_dead_${(n += 1)}`, status: 'expired', url: 'x' }) });
+    await assert.rejects(() => call({ t: pTok() }, { stripe }), /still expired/);
+  });
+
+  const unbooked = (over = {}) => ({ id: 'cs_paid', status: 'complete', metadata: { invoiceId: 'inv1' }, ...over });
+  const completeList = (data) => async (params) => ({ data: params.status === 'complete' ? data : [], has_more: false });
+
+  test('a completed session not yet in the ledger refuses a new checkout: 409 in_flight, no session created', async () => {
+    w = W.world(TIPS_ON());
+    const stripe = stripeWith({ 'checkout.sessions.list': completeList([unbooked()]) });
+    const res = await call({ t: pTok(), tipCents: 2400 }, { stripe });
+    assert.deepEqual([res.status, res.body.code], [409, 'in_flight']);
+    assert.match(res.body.error, /being processed/);
+    assert.equal(stripe.callsTo('checkout.sessions.create').length, 0);
+    assert.equal(w.db.rows('autopay_enrollments').length, 0);
+    // Scoped like the sweep: the complete list, on the owner's account, last 8 days, after the open pass.
+    const lists = stripe.callsTo('checkout.sessions.list');
+    assert.deepEqual(lists.map((c) => c.args[0].status), ['open', 'complete']);
+    assert.deepEqual(lists[1].args[0], { status: 'complete', created: { gte: Math.floor(NOW_MS / 1000) - 8 * 86400 }, limit: 100 });
+    assert.deepEqual(lists[1].args[1], { stripeAccount: ACCOUNT });
+  });
+
+  test('a paid-with-tip session not yet booked blocks a second checkout with any tip (or none)', async () => {
+    w = W.world(TIPS_ON());
+    const cs = fakeCheckoutSessions();
+    const stripe = stripeFor(cs);
+    const first = await call({ t: pTok(), tipCents: 1800 }, { stripe });
+    cs.complete(liveByUrl(cs, first).id); // paid; the webhook hasn't booked it
+    for (const tipCents of [undefined, 0, 1800, 2400]) {
+      const res = await call({ t: pTok(), ...(tipCents === undefined ? {} : { tipCents }) }, { stripe });
+      assert.deepEqual([res.status, res.body.code], [409, 'in_flight'], String(tipCents));
+    }
+    assert.equal(cs.sessions.size, 1);
+  });
+
+  test("another invoice's completed session does not block this one", async () => {
+    w = W.world();
+    const stripe = stripeWith({ 'checkout.sessions.list': completeList([unbooked({ metadata: { invoiceId: 'inv2' } })]) });
+    assert.equal((await call({ t: pTok() }, { stripe })).status, 200);
+  });
+
+  test('a completed session that IS booked (stripe_<id> in the ledger) does not block a payment of the remaining balance', async () => {
+    w = W.world({ invoices: [W.invoiceRow({ payments: [{ id: 'stripe_cs_paid', amount: 50, date: '2026-10-03', method: 'stripe', stripeSessionId: 'cs_paid', tipAmount: 9 }] })] });
+    const stripe = stripeWith({ 'checkout.sessions.list': completeList([unbooked()]) });
+    const res = await call({ t: pTok() }, { stripe });
+    assert.equal(res.status, 200);
+    assert.equal(stripe.callsTo('checkout.sessions.create')[0].args[0].line_items[0].price_data.unit_amount, 7000);
+  });
+
+  test('a booked session does not hide an unbooked one on the same invoice', async () => {
+    w = W.world({ invoices: [W.invoiceRow({ payments: [{ id: 'stripe_cs_paid', amount: 50, date: '2026-10-03', method: 'stripe' }] })] });
+    const stripe = stripeWith({ 'checkout.sessions.list': completeList([unbooked(), unbooked({ id: 'cs_second' })]) });
+    assert.equal((await call({ t: pTok() }, { stripe })).body.code, 'in_flight');
+  });
+
+  test('a Stripe error listing completed sessions is not treated as clear', async () => {
+    w = W.world();
+    const stripe = stripeWith({
+      'checkout.sessions.list': async (params) => {
+        if (params.status === 'complete') throw stripeError('boom');
+        return { data: [], has_more: false };
+      },
+    });
+    await assert.rejects(() => call({ t: pTok() }, { stripe }), /boom/);
+    assert.equal(stripe.callsTo('checkout.sessions.create').length, 0);
   });
 });

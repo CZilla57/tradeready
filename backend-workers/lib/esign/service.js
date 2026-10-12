@@ -2,26 +2,42 @@
 // copyEmail) and the stores. Used by the estimate / change-order routes and
 // the /api/esign/* routes.
 //
-// Write order (D13): the customer's decision is written to the job first and
-// is authoritative. The record is built in that same request from the
-// Worker-validated inputs, then sealed and inserted. When sealing or the
-// insert fails, the built record is stored in the service-role-only
-// `signature_pending` table and the response still succeeds with
-// `recordPending`; the next view / copy / owner fetch seals THAT row lazily
-// (ensureRecord). The job blob is never an input to a seal: the owner's JWT
-// can write it, so a self-consistent forged approval there must never be
-// sealed as a customer signature (spec §11.10). The insert is idempotent per
-// link and Ed25519 is deterministic, so a re-seal yields the same row.
+// Write order (D13 as amended by spec §11.11): evidence first. respond /
+// change-respond build the record from Worker-validated inputs and store it
+// in the service-role-only `signature_pending` table BEFORE the conditional
+// decision write; if that store fails the decision is not accepted (503
+// `signature_not_recorded`, retryable). The decision then lands naming the
+// pending row (`signatureRecordId`), and the record is sealed and inserted.
+// A seal that fails is retried lazily (ensureRecord) from the pending row
+// BOUND to the landed decision: a pending row is sealed only when the link's
+// approved decision names its record id. A pending row whose decision never
+// landed (a lost race, a refused retry, a Worker that died before the write)
+// is never named — its id is a fresh random UUID never disclosed to anyone —
+// so it is never sealed.
+//
+// The job blob is never an input to a seal: the owner's JWT can write it, so
+// a self-consistent forged approval there must never be sealed as a customer
+// signature (spec §11.10). It is read only to pick WHICH Worker-held pending
+// row a landed decision names; the sealed bytes come from that row alone.
+// The record insert is idempotent per link and Ed25519 is deterministic, so a
+// re-seal yields the same row.
 
 const { Buffer } = require('node:buffer');
 const store = require('./store.js');
 const { constantTimeEqual } = require('../constantTime.js');
-const { recordDigest, isRecordId, eventsForRecord } = require('./record.js');
+const { recordDigest, isRecordId, eventsForRecord, tokenSha256 } = require('./record.js');
 const { sealDigest } = require('./seal.js');
 const { renderSignedPdf, signedPdfFilename } = require('./pdf.js');
 const { buildCopyEmail } = require('./copyEmail.js');
 
 const VIEW_EVENT_CAP = 20;
+
+// respond / change-respond when the evidence could not be stored: the
+// decision was NOT written, nothing was signed, and the customer may retry.
+const EVIDENCE_NOT_STORED = Object.freeze({
+  error: "We couldn't record your signature, so nothing was signed. Please try again in a moment.",
+  code: 'signature_not_recorded',
+});
 
 function isPlainObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -64,30 +80,46 @@ function rowFor({ userId, record, digest, seal }) {
   };
 }
 
-// Never throws. { seal, row, stored }: `seal` is null when the key is not
-// usable; `stored` is false when the insert failed (the seal may still be
-// good — the emailed copy then carries it).
+// Never throws. { seal, row, stored, conflict }: `seal` is null when the key
+// is not usable; `stored` is true only when the link's record IS this record
+// (this call inserted it, or an identical earlier seal did). A DIFFERENT
+// record already holding the link's slot is `conflict: true`, not stored:
+// this signature stays pending and the conflict is logged.
 async function sealAndStore(env, { userId, record, digest }) {
   let seal;
   try {
     seal = await sealDigest(env, digest);
   } catch (err) {
     console.error('[esign] seal unavailable:', err.message);
-    return { seal: null, row: null, stored: false };
+    return { seal: null, row: null, stored: false, conflict: false };
   }
   const row = rowFor({ userId, record, digest, seal });
   try {
-    if (await store.insertRecord(env, row)) return { seal, row, stored: true };
+    if (await store.insertRecord(env, row)) return { seal, row, stored: true, conflict: false };
     // A record for this link already exists (a concurrent or earlier seal).
     const existing = await store.fetchRecordForLink(env, linkOfRecord(userId, record));
     if (!existing) throw new Error('insert ignored but no record found for this link');
     if (existing.id !== record.recordId || existing.record_digest !== digest) {
-      console.error('[esign] a different record already exists for this link; keeping the first');
+      console.error('[esign] a different record already holds this link; this signature stays pending (record conflict)');
+      return { seal, row: null, stored: false, conflict: true };
     }
-    return { seal: sealOf(existing), row: existing, stored: true };
+    return { seal: sealOf(existing), row: existing, stored: true, conflict: false };
   } catch (err) {
     console.error('[esign] record insert failed:', err.message);
-    return { seal, row: null, stored: false };
+    return { seal, row: null, stored: false, conflict: false };
+  }
+}
+
+// Stores the Worker-built record in signature_pending BEFORE the decision is
+// written. Never throws; false means "not stored: do not accept the decision".
+async function storeEvidence(env, { userId, record, digest }) {
+  try {
+    if (await store.insertPending(env, pendingRowFor({ userId, record, digest }))) return true;
+    console.error('[esign] pending signature insert was ignored (duplicate id)');
+    return false;
+  } catch (err) {
+    console.error('[esign] pending signature could not be stored; the decision is refused:', err.message);
+    return false;
   }
 }
 
@@ -109,24 +141,63 @@ function pendingMatchesLink(p, link) {
     && recordDigest(r) === p.record_digest;
 }
 
-// The sealed record of a link, sealing its Worker-held pending signature if
-// that is all there is. `link` is { userId?, jobId, changeOrderId, tokenHash?,
-// recordId? } (see store.linkQuery). NEVER reads the job. Returns:
+// The record id a LANDED e-signed decision names, or null. Only a selector
+// among Worker-held pending rows (see the header); never evidence itself.
+function landedRecordId(approval) {
+  return isPlainObject(approval) && approval.decision === 'approved' && isRecordId(approval.signatureRecordId)
+    ? approval.signatureRecordId
+    : null;
+}
+
+// The sealed record of a link, sealing the Worker-held pending signature its
+// landed decision names if that is all there is. `link` is { userId?, jobId,
+// changeOrderId, tokenHash?, recordId? } (see store.linkQuery);
+// `landedRecordId` is the record id the link's approved decision names
+// (landedRecordId(approval)), and without it no pending row is ever read.
+// Returns:
 //   null                    the Worker holds no signature for this link
 //   { row }                 the sealed record (found, or sealed now)
 //   { pending }             the Worker-held pending row; it can't be sealed yet
 // Throws when the lookups fail (callers answer with a database error).
-async function ensureRecord(env, link) {
+async function ensureRecord(env, link, { landedRecordId: named = null } = {}) {
   const existing = await store.fetchRecordForLink(env, link);
   if (existing) return { row: existing };
-  const pending = await store.fetchPendingForLink(env, link);
+  if (!isRecordId(named) || (link.recordId != null && link.recordId !== named)) return null;
+  const pending = await store.fetchPendingForLink(env, { ...link, recordId: named });
   if (!pending) return null;
-  if (!pendingMatchesLink(pending, link)) {
+  if (pending.id !== named || !pendingMatchesLink(pending, link)) {
     console.error('[esign] pending signature does not match its link; not sealing');
     return null;
   }
   const out = await sealAndStore(env, { userId: pending.user_id, record: pending.record, digest: pending.record_digest });
   return out.stored ? { row: out.row } : { pending };
+}
+
+// The signer copy (token only, no owner): the link's sealed record, else the
+// pending row its landed decision names. The job is read (soft-deleted rows
+// included) only to learn that id, so the copy outlives a job deletion.
+async function ensureRecordForToken(env, { jobId, changeOrderId = null, token }) {
+  const link = { jobId: String(jobId), changeOrderId: changeOrderId == null ? null : String(changeOrderId), tokenHash: tokenSha256(String(token)) };
+  const sealed = await ensureRecord(env, link);
+  if (sealed) return sealed;
+  const row = await store.fetchJobAnyState(env, link.jobId);
+  const found = approvalForLink(row, { changeOrderId: link.changeOrderId, token: String(token) });
+  const named = found && landedRecordId(found.approval);
+  if (!named) return null;
+  return ensureRecord(env, { ...link, userId: row.user_id, recordId: named }, { landedRecordId: named });
+}
+
+// The owner route: one record of the caller's job, pinned by `recordId`; a
+// pending row only when the job's landed decision names that same id.
+async function ensureOwnerRecord(env, { userId, jobId, changeOrderId = null, recordId }) {
+  const link = { userId, jobId: String(jobId), changeOrderId: changeOrderId == null ? null : String(changeOrderId), recordId };
+  const sealed = await ensureRecord(env, link);
+  if (sealed) return sealed;
+  const row = await store.fetchJobAnyState(env, link.jobId);
+  if (!row || row.user_id !== userId) return null;
+  const approval = currentApproval(row, link.changeOrderId);
+  if (landedRecordId(approval) !== recordId) return null;
+  return ensureRecord(env, { ...link, tokenHash: tokenSha256(String(approval.token)) }, { landedRecordId: recordId });
 }
 
 // Runs work after the response when the runtime offers waitUntil (Workers);
@@ -207,26 +278,15 @@ async function sendCopyEmail(env, { userId, record, digest, seal }) {
   }
 }
 
-// After the decision write of an e-signed approval: seal + insert; when that
-// fails, keep the Worker-built record in `signature_pending` (the only thing
-// a later lazy seal may use); log `signed`; queue the emailed copy. Returns
-// { recordPending }.
+// After the decision write of an e-signed approval (its evidence is already
+// in signature_pending): seal + insert; log `signed`; queue the emailed
+// copy. Returns { recordPending, conflict }.
 async function finishSigning(c, { userId, record, digest, email, ip, userAgent }) {
   const env = c.env;
   const out = await sealAndStore(env, { userId, record, digest });
-  if (!out.stored) {
-    try {
-      await store.insertPending(env, pendingRowFor({ userId, record, digest }));
-    } catch (err) {
-      // The decision stands, but with no Worker-held evidence nothing will
-      // ever be sealed for it: the signed view, copy and owner route say
-      // "not signed" (spec §11.10 residual).
-      console.error('[esign] pending signature could not be stored; this approval will not be sealed:', err.message);
-    }
-  }
   await store.logEvent(env, { ...linkOfRecord(userId, record), event: 'signed', ip, userAgent });
   if (email) afterResponse(c, sendCopyEmail(env, { userId, record, digest, seal: out.seal }));
-  return { recordPending: !out.stored };
+  return { recordPending: !out.stored, conflict: out.conflict };
 }
 
 // Finds the approval a public link points at: the estimate approval, or one
@@ -247,11 +307,22 @@ function approvalForLink(row, { changeOrderId = null, token }) {
   return { approval: a, documentType: 'change_order', changeOrderId: String(changeOrderId) };
 }
 
+// The approval of a job row for the estimate (changeOrderId null) or one
+// change order, without a token (owner-scoped callers only).
+function currentApproval(row, changeOrderId = null) {
+  const data = row && isPlainObject(row.data) ? row.data : null;
+  if (!data) return null;
+  if (changeOrderId == null) return isPlainObject(data.approval) ? data.approval : null;
+  const cos = Array.isArray(data.changeOrders) ? data.changeOrders : [];
+  const co = cos.find((x) => isPlainObject(x) && x.id === String(changeOrderId));
+  return co && isPlainObject(co.approval) ? co.approval : null;
+}
+
 // Whether a stored approval says it was e-signed. Only a reason to LOOK for
 // Worker-held evidence (a legacy typed-name approval causes no lookup); never
 // evidence itself.
 function claimsSignature(approval) {
-  return isPlainObject(approval) && approval.decision === 'approved' && isRecordId(approval.signatureRecordId);
+  return landedRecordId(approval) !== null;
 }
 
 // The signed-view block for view / change-view, from the sealed record or
@@ -274,24 +345,52 @@ function signedViewOf(ensured) {
   };
 }
 
-// view / change-view: the signed block for a link whose stored approval
-// claims a signature, lazily sealing its pending row. Never throws; a failed
-// lookup shows no signed block rather than the blob's claims.
-async function signedViewForLink(env, approval, link) {
-  if (!claimsSignature(approval)) return null;
+// The record a landed approval names, for this link (pinned to that id),
+// lazily sealing its pending row. Never throws: a failed lookup is "none".
+async function ensureForApproval(env, approval, link, where) {
+  const named = landedRecordId(approval);
+  if (!named) return null;
   try {
-    return signedViewOf(await ensureRecord(env, link));
+    return await ensureRecord(env, { ...link, recordId: named }, { landedRecordId: named });
   } catch (err) {
-    console.error('[esign] signed view lookup failed:', err.message);
+    console.error(`[esign] ${where} lookup failed:`, err.message);
     return null;
   }
 }
 
+// view / change-view: the signed block for a link whose stored approval
+// claims a signature. A failed lookup shows no signed block rather than the
+// blob's claims.
+async function signedViewForLink(env, approval, link) {
+  return signedViewOf(await ensureForApproval(env, approval, link, 'signed view'));
+}
+
+// respond / change-respond under the approved lock: the response's
+// signature fields from the Worker-held record (never the blob's keys), or
+// null for a legacy approval or one the Worker holds no evidence for.
+async function lockedSignature(env, approval, link) {
+  const ensured = await ensureForApproval(env, approval, link, 'locked respond');
+  const src = ensured && (ensured.row || ensured.pending);
+  if (!src || !isPlainObject(src.record)) return null;
+  return {
+    recordId: src.id,
+    recordDigest: src.record_digest,
+    signatureMethod: src.record.signatureMethod,
+    selection: src.record.selection || null,
+    recordPending: !ensured.row,
+  };
+}
+
 module.exports = {
   VIEW_EVENT_CAP,
+  EVIDENCE_NOT_STORED,
   sealOf,
   sealAndStore,
+  storeEvidence,
+  landedRecordId,
   ensureRecord,
+  ensureRecordForToken,
+  ensureOwnerRecord,
   afterResponse,
   eventsAtSigning,
   logViewCapped,
@@ -300,7 +399,9 @@ module.exports = {
   sendCopyEmail,
   finishSigning,
   approvalForLink,
+  currentApproval,
   claimsSignature,
   signedViewOf,
   signedViewForLink,
+  lockedSignature,
 };

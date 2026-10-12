@@ -218,23 +218,26 @@ public enum NativeCalendarMirror {
     // MARK: - Reconcile plan
 
     /// Ops that make the calendar match `desired`. Unmarked events and events
-    /// marked for another owner are never touched; only events starting
-    /// inside [today − 30, today + 180] are considered. Marked events are
-    /// grouped by job; the survivor is the earliest `creationDate`, then the
-    /// smallest `externalID`, then the smallest `eventID` (every device picks
-    /// the same one), the rest are deleted. A survivor whose fields differ is
-    /// updated (Calendar-app edits are restored: the mirror is one-way); one
-    /// whose job is no longer desired is deleted; a desired job with no
-    /// survivor is created. Deletes come first, then updates, then creates,
-    /// each by start; at most 200 per pass.
+    /// marked for another owner are never touched. Existing events are matched
+    /// to jobs by the job id in their marker, never by where they fall in the
+    /// fetch window (the adapter's window is in the device zone, a job's
+    /// instant in the schedule zone, so an edge job can start outside it).
+    /// Marked events are grouped by job; the survivor is the earliest
+    /// `creationDate`, then the smallest `externalID`, then the smallest
+    /// `eventID` (every device picks the same one), the rest are deleted. A
+    /// survivor whose fields differ is updated (Calendar-app edits are
+    /// restored: the mirror is one-way). An event whose job is no longer
+    /// desired is deleted only when it starts inside [today − 30, today + 180];
+    /// older history is left alone. A desired job with no survivor is created.
+    /// Deletes come first, then updates, then creates, each by start; at most
+    /// 200 per pass.
     public static func plan(desired: [DesiredEvent], existing: [Existing], ownerTag: String, today: String) -> [Operation] {
         guard let lo = NativeSchedule.shiftNaiveDate(today, days: -windowPastDays),
               let hi = NativeSchedule.shiftNaiveDate(today, days: windowFutureDays) else { return [] }
         let desiredByJob = Dictionary(desired.map { ($0.jobID, $0) }, uniquingKeysWith: { first, _ in first })
         var groups: [String: [Existing]] = [:]
         for event in existing {
-            guard let marker = parseMarker(event.notes), marker.ownerTag == ownerTag,
-                  event.fields.start.date >= lo, event.fields.start.date <= hi else { continue }
+            guard let marker = parseMarker(event.notes), marker.ownerTag == ownerTag else { continue }
             groups[marker.jobID, default: []].append(event)
         }
 
@@ -242,17 +245,19 @@ public enum NativeCalendarMirror {
         var updates: [(NaiveDateTime, String, Operation)] = []
         var creates: [(NaiveDateTime, String, Operation)] = []
         for (jobID, events) in groups {
-            let ordered = events.sorted(by: survivorFirst)
-            let survivor = ordered[0]
-            for duplicate in ordered.dropFirst() {
-                deletes.append((duplicate.fields.start, jobID, .delete(eventID: duplicate.eventID)))
-            }
             if let wanted = desiredByJob[jobID] {
+                let ordered = events.sorted(by: survivorFirst)
+                let survivor = ordered[0]
+                for duplicate in ordered.dropFirst() {
+                    deletes.append((duplicate.fields.start, jobID, .delete(eventID: duplicate.eventID)))
+                }
                 if survivor.fields != wanted.fields {
                     updates.append((wanted.fields.start, jobID, .update(eventID: survivor.eventID, wanted)))
                 }
             } else {
-                deletes.append((survivor.fields.start, jobID, .delete(eventID: survivor.eventID)))
+                for orphan in events where orphan.fields.start.date >= lo && orphan.fields.start.date <= hi {
+                    deletes.append((orphan.fields.start, jobID, .delete(eventID: orphan.eventID)))
+                }
             }
         }
         for wanted in desired where groups[wanted.jobID] == nil {
@@ -274,6 +279,95 @@ public enum NativeCalendarMirror {
         case (nil, _?): return false
         default: return a.eventID < b.eventID
         }
+    }
+
+    // MARK: - Calendar ownership (adopt / remove decisions)
+
+    /// A calendar is the account's mirror only when the account's own tag
+    /// proves it. The EventKit adapter reads and executes; these rules decide.
+    ///
+    /// - A calendar is never adopted by its title alone.
+    /// - A whole calendar is never deleted unless every event in it carries
+    ///   this account's tag.
+    /// - An event without this account's tag is never edited or deleted.
+
+    /// How far each side of today the adapter scans a calendar before one of
+    /// the decisions below is taken. The adapter slices it into windows
+    /// EventKit accepts (at most 4 years each).
+    public static let ownershipScanYears = 5
+
+    /// The alternative title used when "TradeReady" is already taken.
+    public static let alternateCalendarTitle = "TradeReady Jobs"
+
+    /// Titles the mirror itself creates: "TradeReady", "TradeReady Jobs",
+    /// "TradeReady Jobs 2" and so on. Only these are even considered for
+    /// adoption, and only the ownership proof below can accept one.
+    public static func isMirrorCalendarTitle(_ title: String) -> Bool {
+        if title == calendarTitle || title == alternateCalendarTitle { return true }
+        guard title.hasPrefix(alternateCalendarTitle + " ") else { return false }
+        return Int(title.dropFirst(alternateCalendarTitle.count + 1)).map { $0 >= 2 } ?? false
+    }
+
+    /// The title for a new mirror calendar: "TradeReady" unless a calendar
+    /// already has it, then "TradeReady Jobs", then "TradeReady Jobs 2", ...
+    public static func newCalendarTitle(existingTitles: [String]) -> String {
+        let taken = Set(existingTitles)
+        if !taken.contains(calendarTitle) { return calendarTitle }
+        if !taken.contains(alternateCalendarTitle) { return alternateCalendarTitle }
+        var n = 2
+        while taken.contains("\(alternateCalendarTitle) \(n)") { n += 1 }
+        return "\(alternateCalendarTitle) \(n)"
+    }
+
+    /// Whether the event's notes carry this account's mirror tag.
+    public static func isOwnEvent(notes: String?, ownerTag: String) -> Bool {
+        parseMarker(notes)?.ownerTag == ownerTag
+    }
+
+    /// A calendar the adapter found, with everything in it.
+    public struct CalendarCandidate: Equatable, Sendable {
+        public var id: String
+        public var title: String
+        public var allowsModifications: Bool
+        public var events: [Existing]
+
+        public init(id: String, title: String, allowsModifications: Bool, events: [Existing]) {
+            self.id = id
+            self.title = title
+            self.allowsModifications = allowsModifications
+            self.events = events
+        }
+    }
+
+    /// The calendar this account may adopt as its mirror (the smallest id when
+    /// several qualify), or nil. A candidate qualifies only when it is
+    /// writable, carries a mirror title, holds at least one event and every
+    /// event in it carries this account's tag. An empty calendar proves
+    /// nothing (it may be the owner's own), and a mixed one holds events the
+    /// mirror does not own.
+    public static func adoptableCalendarID(candidates: [CalendarCandidate], ownerTag: String) -> String? {
+        candidates
+            .filter { candidate in
+                candidate.allowsModifications && isMirrorCalendarTitle(candidate.title)
+                    && !candidate.events.isEmpty
+                    && candidate.events.allSatisfy { isOwnEvent(notes: $0.notes, ownerTag: ownerTag) }
+            }
+            .map(\.id)
+            .min()
+    }
+
+    public enum RemovalDecision: Equatable, Sendable {
+        /// Every event in it is this account's (or it is empty): delete the calendar.
+        case removeCalendar
+        /// The calendar holds events this account did not create: delete only
+        /// these events and leave the calendar.
+        case deleteEvents(eventIDs: [String])
+    }
+
+    public static func removalDecision(events: [Existing], ownerTag: String) -> RemovalDecision {
+        let own = events.filter { isOwnEvent(notes: $0.notes, ownerTag: ownerTag) }
+        if own.count == events.count { return .removeCalendar }
+        return .deleteEvents(eventIDs: own.map(\.eventID).sorted())
     }
 }
 

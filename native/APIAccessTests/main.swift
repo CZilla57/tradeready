@@ -908,6 +908,12 @@ struct APIAccessTests {
             expect(view.contains("Text(NativeAPIAccessText.showOnceWarning)") || view.contains("Label(NativeAPIAccessText.showOnceWarning"),
                    "view: the show-once warning is shown")
             expect(view.contains("if scenePhase == .active"), "view: the key is hidden from the app-switcher snapshot")
+            // System text selection would offer Copy, which writes the key to the general pasteboard with
+            // no local-only flag and no expiry. The Copy button is the only path (spec §9).
+            let viewCode = SourceFile(relativePath: "NativeAPIAccessView.swift", text: view).codeText
+            expect(!viewCode.contains("textSelection"), "view: no .textSelection anywhere (the secret cannot be copied around the clipboard policy)")
+            expect(!viewCode.contains("UIPasteboard.general.string") && !viewCode.contains("UIPasteboard.general.strings"),
+                   "view: nothing writes the key to the pasteboard without the policy options")
         } else { expect(false, "NativeAPIAccessView.swift readable") }
     }
 }

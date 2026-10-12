@@ -234,7 +234,7 @@ describe('validate (§3.3)', () => {
 describe('record (§3.5): canonical bytes and digests', () => {
   const built = Object.fromEntries(Object.entries(F.CASES).map(([name, make]) => {
     const c = make();
-    const rec = record.recordFromApproval(c);
+    const rec = F.recordOf(c);
     return [name, { c, rec, canonical: canonicalJson(rec), digest: record.recordDigest(rec) }];
   }));
   if (UPDATE) {
@@ -299,28 +299,60 @@ describe('record (§3.5): canonical bytes and digests', () => {
     assert.equal(record.recordDigest(F.clone(rec)), digest, 'a JSON round trip (jsonb) keeps the digest');
   });
 
-  test('legacy approvals have no record', () => {
-    const { c } = built.estimate;
-    const legacy = { ...c.approval };
-    delete legacy.signatureEvidence;
-    assert.equal(record.recordFromApproval({ ...c, approval: legacy }), null);
-    assert.equal(record.recordFromApproval({ ...c, approval: { ...c.approval, decision: 'declined' } }), null);
+  test('buildRecord takes explicit inputs only and refuses malformed ones', () => {
+    const inputs = F.recordInputs(F.CASES.estimate());
+    assert.equal(record.recordDigest(record.buildRecord(inputs)), built.estimate.digest);
+    for (const [k, v] of [['recordId', 'x'], ['documentType', 'invoice'], ['token', ''], ['typedName', ''],
+      ['signedAt', '2026-10-03'], ['snapshot', null], ['changeOrderId', 'co-1']]) {
+      assert.throws(() => record.buildRecord({ ...inputs, [k]: v }), Error, `refuses ${k}=${v}`);
+    }
   });
 
-  test('signApproval adds the four keys and commits to the record digest', () => {
+  // Security review 2026-10-04 (P1): a `selection` the owner planted in the
+  // stored approval must never be sealed as the customer's choice.
+  const PLANTED = { tierId: 'x', tierName: 'Premium', addOnIds: [], addOns: [], lineItems: [{ label: 'Everything', amount: 50000 }], total: 50000 };
+
+  test('a selection on an estimate without options, or on a change order, is never sealed', () => {
+    const est = F.recordInputs(F.CASES.estimate());
+    assert.equal(record.buildRecord({ ...est, selection: PLANTED }).selection, null);
+    assert.equal(record.recordDigest(record.buildRecord({ ...est, selection: PLANTED })), built.estimate.digest,
+      'the record is byte-identical to one built without it');
+    const co = F.recordInputs(F.CASES.changeOrder());
+    assert.equal(record.buildRecord({ ...co, selection: PLANTED }).selection, null);
+    assert.equal(record.recordDigest(record.buildRecord({ ...co, selection: PLANTED })), built.changeOrder.digest);
+  });
+
+  test('an options estimate seals only a choice that resolves against its snapshot', () => {
+    const opt = F.recordInputs(F.CASES.options());
+    assert.deepEqual(record.buildRecord(opt).selection, F.OPTIONS_SELECTION);
+    assert.throws(() => record.buildRecord({ ...opt, selection: PLANTED }), /does not resolve/);
+    assert.throws(() => record.buildRecord({ ...opt, selection: { ...F.OPTIONS_SELECTION, total: 50000 } }), /does not resolve/);
+    assert.throws(() => record.buildRecord({ ...opt, selection: null }), /resolved choice/);
+  });
+
+  test('signApproval: the four keys, every signature field from the record, planted keys dropped', () => {
     const c = F.CASES.estimate();
-    const merged = { ...c.approval };
-    for (const k of ['signatureRecordId', 'signatureMethod', 'signatureEvidence']) delete merged[k];
-    merged.recordDigest = 'stale';
-    const out = record.signApproval(merged, {
-      recordId: c.approval.signatureRecordId, consent: { version: 1 }, drawn: F.DRAWN, email: 'zoe@example.test',
-      events: F.EVENTS, jobId: c.jobId, documentType: 'estimate',
-    });
+    // A merged approval still carrying what an owner planted before signing.
+    const merged = {
+      token: c.approval.token, sentAt: c.approval.sentAt, snapshot: c.approval.snapshot, decision: 'approved',
+      consentAt: 'planted', signerName: 'Planted', ip: '6.6.6.6', userAgent: 'planted',
+      selection: PLANTED, recordDigest: 'stale', signatureEvidence: { v: 1, email: 'owner@example.test' },
+    };
+    const out = record.signApproval(merged, F.recordInputs(c));
     assert.equal(out.digest, built.estimate.digest, 'same inputs → the golden record');
     assert.equal(out.approval.recordDigest, out.digest);
+    assert.equal(out.approval.signatureRecordId, c.approval.signatureRecordId);
     assert.equal(out.approval.signatureMethod, 'typed_drawn');
     assert.deepEqual(out.approval.signatureEvidence, c.approval.signatureEvidence);
-    assert.equal(record.recordDigest(record.recordFromApproval({ ...c, approval: out.approval })), out.digest, 'a lazy re-seal reproduces it');
+    assert.equal('selection' in out.approval, false, 'no selection on an estimate without options');
+    assert.deepEqual(
+      [out.approval.consentAt, out.approval.signerName, out.approval.ip, out.approval.userAgent],
+      [out.record.signedAt, out.record.signer.typedName, out.record.ip, out.record.userAgent],
+      'the stored approval agrees with the sealed record'
+    );
+    const opt = F.CASES.options();
+    const withChoice = record.signApproval({ ...merged, snapshot: opt.approval.snapshot }, F.recordInputs(opt));
+    assert.deepEqual(withChoice.approval.selection, F.OPTIONS_SELECTION);
   });
 
   test('eventsForRecord: link/view/decline only, oldest first, ISO times, owner has no IP', () => {
@@ -342,7 +374,7 @@ describe('record (§3.5): canonical bytes and digests', () => {
 describe('seal (§3.5, D6): Ed25519 with a runtime test key', () => {
   let env;
   let otherRaw;
-  const digest = record.recordDigest(record.recordFromApproval(F.CASES.estimate()));
+  const digest = record.recordDigest(F.recordOf(F.CASES.estimate()));
 
   async function testEnv(keyId = 'k-test') {
     const pair = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
@@ -372,7 +404,7 @@ describe('seal (§3.5, D6): Ed25519 with a runtime test key', () => {
     const s = await seal.sealDigest(env, digest);
     const tampered = F.CASES.estimate();
     tampered.approval.signerName = 'Someone Else';
-    const otherDigest = record.recordDigest(record.recordFromApproval(tampered));
+    const otherDigest = record.recordDigest(F.recordOf(tampered));
     assert.equal(await seal.verifySeal(env, otherDigest, 'k-test', s.signature), false);
     assert.equal(await seal.verifySeal(env, `${digest.slice(0, 63)}0`, 'k-test', s.signature), false);
     const sig = Buffer.from(s.signature, 'base64');
@@ -413,18 +445,18 @@ describe('seal (§3.5, D6): Ed25519 with a runtime test key', () => {
 describe('pdf (§3.6): deterministic pdf-v1 golden bytes', () => {
   const renders = {
     'estimate-signed.pdf': () => {
-      const rec = record.recordFromApproval(F.CASES.estimate());
+      const rec = F.recordOf(F.CASES.estimate());
       return pdf.renderSignedPdf({ record: rec, recordDigest: record.recordDigest(rec), seal: F.FAKE_SEAL });
     },
     'options-signed.pdf': () => {
-      const rec = record.recordFromApproval(F.CASES.options());
+      const rec = F.recordOf(F.CASES.options());
       return pdf.renderSignedPdf({ record: rec, recordDigest: record.recordDigest(rec), seal: F.FAKE_SEAL });
     },
     'options-preview.pdf': () => pdf.renderPreviewPdf({
       snapshot: F.optionsSnapshot(), documentType: 'estimate', snapshotDigest: snapshotDigest(F.optionsSnapshot()),
     }),
     'change-order-signed.pdf': () => {
-      const rec = record.recordFromApproval(F.CASES.changeOrder());
+      const rec = F.recordOf(F.CASES.changeOrder());
       return pdf.renderSignedPdf({ record: rec, recordDigest: record.recordDigest(rec), seal: null });
     },
   };
@@ -460,7 +492,7 @@ describe('pdf (§3.6): deterministic pdf-v1 golden bytes', () => {
   });
 
   test('signed copy: the certificate shows signer, times, IP, consent, trail, ids, seal', () => {
-    const rec = record.recordFromApproval(F.CASES.estimate());
+    const rec = F.recordOf(F.CASES.estimate());
     const d = record.recordDigest(rec);
     const text = pdfStrings(pdf.renderSignedPdf({ record: rec, recordDigest: d, seal: F.FAKE_SEAL }));
     for (const want of [
@@ -479,7 +511,7 @@ describe('pdf (§3.6): deterministic pdf-v1 golden bytes', () => {
   });
 
   test('options: the chosen option and its total; preview lists every tier and is unsigned', () => {
-    const rec = record.recordFromApproval(F.CASES.options());
+    const rec = F.recordOf(F.CASES.options());
     const signed = pdfStrings(pdf.renderSignedPdf({ record: rec, recordDigest: record.recordDigest(rec), seal: F.FAKE_SEAL }));
     assert.ok(signed.includes('Chosen option: Better'));
     assert.ok(signed.includes('$1,585'));
@@ -492,8 +524,23 @@ describe('pdf (§3.6): deterministic pdf-v1 golden bytes', () => {
     assert.ok(!Buffer.from(renders['options-preview.pdf']()).toString('latin1').includes('/CreationDate'), 'no clock in the preview');
   });
 
+  test('a selection on a document without options is never printed (P1)', () => {
+    const planted = { tierId: 'x', tierName: 'Premium', lineItems: [{ label: 'Everything', amount: 50000 }], total: 50000 };
+    for (const make of [F.CASES.estimate, F.CASES.changeOrder]) {
+      const rec = { ...F.recordOf(make()), selection: planted };
+      const text = pdfStrings(pdf.renderSignedPdf({ record: rec, recordDigest: record.recordDigest(rec), seal: F.FAKE_SEAL }));
+      assert.ok(!text.includes('Chosen option'), 'no chosen option');
+      assert.ok(!text.includes('$50,000'), 'no planted total');
+      assert.ok(!text.includes('Everything'), 'no planted line');
+    }
+    // A change-order document never prints one even if it carries options.
+    const co = F.recordOf(F.CASES.changeOrder());
+    const rec = { ...co, document: { ...co.document, options: F.optionsSnapshot().options }, selection: F.OPTIONS_SELECTION };
+    assert.ok(!pdfStrings(pdf.renderSignedPdf({ record: rec, recordDigest: 'a'.repeat(64), seal: null })).includes('Chosen option'));
+  });
+
   test('non-WinAnsi characters print as "?" and negative amounts keep their sign', () => {
-    const rec = record.recordFromApproval(F.CASES.changeOrder());
+    const rec = F.recordOf(F.CASES.changeOrder());
     const text = pdfStrings(pdf.renderSignedPdf({ record: rec, recordDigest: record.recordDigest(rec), seal: null }));
     assert.ok(text.includes('Nguy?n Th? Minh Khai ?'), 'Vietnamese letters and the emoji degrade to ?');
     assert.ok(text.includes('Kowalczyk & Søn Électrique'), 'Latin-1 survives');
@@ -522,7 +569,7 @@ describe('pdf (§3.6): deterministic pdf-v1 golden bytes', () => {
 });
 
 describe('copy email (§3.5 step 5, Q7)', () => {
-  const rec = record.recordFromApproval(F.CASES.estimate());
+  const rec = F.recordOf(F.CASES.estimate());
   const d = record.recordDigest(rec);
 
   test('from "{business} via TradeReady", to the signer, PDF attached, reply-to the business', () => {
@@ -572,10 +619,12 @@ describe('store wire format', () => {
 
   test('owner lookups are always scoped by user_id', async () => {
     global.fetch = async (url) => { calls.push(String(url)); return respond([]); };
-    await store.fetchOwnerRecord(ENV, 'u1', { jobId: 'j 1' });
+    await store.fetchOwnerRecord(ENV, 'u1', { jobId: 'j 1', recordId: 'r0' });
     await store.fetchOwnerRecord(ENV, 'u1', { jobId: 'j1', changeOrderId: 'co1', recordId: 'r1' });
-    assert.match(calls[0], /user_id=eq\.u1&job_id=eq\.j%201&change_order_id=is\.null&order=signed_at\.desc/);
+    assert.match(calls[0], /user_id=eq\.u1&job_id=eq\.j%201&change_order_id=is\.null&id=eq\.r0&order=signed_at\.desc/);
     assert.match(calls[1], /user_id=eq\.u1&job_id=eq\.j1&change_order_id=eq\.co1&id=eq\.r1/);
+    // §11.11: the owner route always pins a record (no "newest record" fallback).
+    assert.throws(() => store.fetchOwnerRecord(ENV, 'u1', { jobId: 'j1' }), /record id/);
   });
 
   test('logEvent posts the row, naming its job and change order, and never throws', async () => {
@@ -592,20 +641,22 @@ describe('store wire format', () => {
     await assert.doesNotReject(store.logEvent(ENV, { userId: 'u1', jobId: 'j1', tokenHash: 'h', event: 'viewed' }));
   });
 
-  test('insertPending: the same per-link insert-if-absent, into signature_pending', async () => {
+  test('insertPending: insert-if-absent per record id (a link may hold rows whose decision never landed)', async () => {
     global.fetch = async (url, init) => { calls.push({ url: String(url), init }); return respond([{ id: 'r' }], 201); };
     assert.equal(await store.insertPending(ENV, { id: 'r' }), true);
-    assert.equal(calls[0].url, 'https://supa.test/rest/v1/signature_pending?on_conflict=approval_token_sha256,job_id,change_order_id');
+    assert.equal(calls[0].url, 'https://supa.test/rest/v1/signature_pending?on_conflict=id');
     assert.equal(calls[0].init.headers.Prefer, 'resolution=ignore-duplicates,return=representation');
   });
 
   test('link lookups are bound to job and change order; events also to owner and token', async () => {
     global.fetch = async (url) => { calls.push(String(url)); return respond([]); };
     await store.fetchRecordForLink(ENV, { jobId: 'j1', changeOrderId: null, tokenHash: 'h' });
-    await store.fetchPendingForLink(ENV, { userId: 'u1', jobId: 'j1', changeOrderId: 'co1', tokenHash: 'h' });
+    await store.fetchPendingForLink(ENV, { userId: 'u1', jobId: 'j1', changeOrderId: 'co1', tokenHash: 'h', recordId: 'r1' });
     await store.listEvents(ENV, { userId: 'u1', jobId: 'j1', changeOrderId: null, tokenHash: 'h' }, { event: 'viewed', limit: 20 });
     assert.match(calls[0], /signature_records\?job_id=eq\.j1&change_order_id=is\.null&approval_token_sha256=eq\.h&order=signed_at\.desc/);
-    assert.match(calls[1], /signature_pending\?user_id=eq\.u1&job_id=eq\.j1&change_order_id=eq\.co1&approval_token_sha256=eq\.h&/);
+    assert.match(calls[1], /signature_pending\?user_id=eq\.u1&job_id=eq\.j1&change_order_id=eq\.co1&approval_token_sha256=eq\.h&id=eq\.r1&/);
+    // A pending row is only ever read by the record id a landed decision names.
+    assert.throws(() => store.fetchPendingForLink(ENV, { userId: 'u1', jobId: 'j1', tokenHash: 'h' }), /record id/);
     assert.match(calls[2], /signature_events\?user_id=eq\.u1&job_id=eq\.j1&change_order_id=is\.null&approval_token_sha256=eq\.h&event=eq\.viewed&/);
     // Never a token-only (or job-less) lookup.
     assert.throws(() => store.linkQuery({ tokenHash: 'h' }), /job id/);

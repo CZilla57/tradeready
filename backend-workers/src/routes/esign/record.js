@@ -1,20 +1,23 @@
 // POST /api/esign/record — the owner app's signed copy and audit trail
 // (Phase 19 spec §3.5, §3.7). JWT-authed with appCors, like create-link.
-// Body {jobId, changeOrderId?, recordId?}; every lookup is scoped by the
-// caller's user_id. Returns the sealed record, the live event log for that
-// link and the signed PDF (base64). Contract: spec §11.1 C.
+// Body {jobId, changeOrderId?, recordId}; every lookup is scoped by the
+// caller's user_id and pinned to `recordId` (required since §11.11: the app
+// always sends approval.signatureRecordId). Returns the sealed record, the
+// live event log for that link and the signed PDF (base64). Contract: spec
+// §11.1 C.
 //
-// Reads only Worker-held evidence: the sealed record, else the
-// signature_pending row (sealed now). The owner's job blob is never read —
-// the owner can write it, so an approval there with no Worker evidence is
-// "not found", never sealed (spec §11.10).
+// Serves only Worker-held evidence: the sealed record, else the
+// signature_pending row the job's landed decision names (sealed now). The
+// owner's job blob is read only to check that the decision names that id;
+// an approval there with no Worker evidence is "not found", never sealed
+// (spec §11.10, §11.11).
 
 import { Buffer } from 'node:buffer';
 import { createRateLimiter } from '../../../lib/guards.js';
 import { appCors, jsonBody } from '../../appCors.js';
 import { isoAt, isRecordId } from '../../../lib/esign/record.js';
 import { listEvents } from '../../../lib/esign/store.js';
-import { ensureRecord, sealOf, signedPdfOf } from '../../../lib/esign/service.js';
+import { ensureOwnerRecord, sealOf, signedPdfOf } from '../../../lib/esign/service.js';
 import { signedPdfFilename } from '../../../lib/esign/pdf.js';
 
 const allow = createRateLimiter({ limit: 30 });
@@ -55,18 +58,18 @@ export async function esignRecordHandler(c) {
   const body = (await jsonBody(c)) || {};
   const { jobId } = body;
   const changeOrderId = body.changeOrderId == null ? null : body.changeOrderId;
-  const recordId = body.recordId == null ? null : body.recordId;
+  const { recordId } = body;
   if (badId(jobId)) return c.json({ error: 'jobId is required', code: 'invalid_request' }, 400);
   if (changeOrderId !== null && badId(changeOrderId)) {
     return c.json({ error: 'changeOrderId must be a string', code: 'invalid_request' }, 400);
   }
-  if (recordId !== null && !isRecordId(recordId)) {
-    return c.json({ error: 'recordId must be a record id', code: 'invalid_request' }, 400);
+  if (!isRecordId(recordId)) {
+    return c.json({ error: 'recordId is required and must be a record id', code: 'invalid_request' }, 400);
   }
 
   let ensured;
   try {
-    ensured = await ensureRecord(c.env, { userId, jobId, changeOrderId, recordId });
+    ensured = await ensureOwnerRecord(c.env, { userId, jobId, changeOrderId, recordId });
   } catch (err) {
     console.error('[esign/record] record fetch failed:', err.message);
     return c.json({ error: 'Database error', code: 'server_error' }, 500);

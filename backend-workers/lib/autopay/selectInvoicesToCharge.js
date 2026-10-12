@@ -140,10 +140,56 @@ function selectInvoicesToCharge({ enrollments, accountsByUser, plansByKey, invoi
   return { charge, skip, willCharge, windowOpen, deferred };
 }
 
+// The pre-charge gate (review fix 2026-10-04, spec §13.7), judged on a
+// FRESH read taken immediately before paymentIntents.create, on the first
+// attempt and on every replay. The selector above works on the run's
+// snapshot, which can be minutes (or, for a resumed claim, hours) old.
+//
+// claim: the autopay_charges row; snapshot: the enrollment the run charged
+// with; live: { invoiceRow (deleted included), enrollment, plan, accountId }
+// re-read now; completedSessions: `complete` Checkout Sessions on the
+// owner's account (any invoice); now: Date.
+// → { charge: true, invoice, enrollment }
+//   | { charge: false, reason, invoice|null, enrollment|null }
+// Never charge: a deleted or paid invoice; an enrollment that is no longer
+// active, changed card or customer, or lost its account / plan / toggle; a
+// balance that differs from the claimed amount (the claim's amount is what
+// the create would send); a pay-page payment that completed but isn't in the
+// ledger yet; or a time outside the charge window.
+function liveVerdict({ claim, snapshot, live, completedSessions = [], now = new Date() }) {
+  const { invoiceRow, enrollment, plan, accountId } = live || {};
+  const invoice = invoiceRow ? { ...(invoiceRow.data || {}), id: invoiceRow.id } : null;
+  const no = (reason) => ({ charge: false, reason, invoice, enrollment: enrollment || null });
+  if (!invoiceRow || invoiceRow.deleted || !invoiceRow.data) return no('invoice_gone');
+  if (!enrollment || enrollment.id !== claim.enrollment_id) return no('enrollment_inactive');
+  if (snapshot && (enrollment.payment_method_id !== snapshot.payment_method_id || enrollment.stripe_customer_id !== snapshot.stripe_customer_id)) {
+    return no('card_changed');
+  }
+  if (!enrollment.payment_method_id) return no('enrollment_inactive');
+  const why = staticIneligibility({ invoice, enrollment, plan, currentAccountId: accountId });
+  if (why) return no(why);
+  const cents = balanceCents(invoice);
+  if (cents <= 0) return no('paid');
+  const booked = new Set((invoice.payments || []).map((p) => p && p.id));
+  const unbooked = (completedSessions || []).some(
+    (s) => s && s.status === 'complete' && s.metadata && s.metadata.invoiceId === invoice.id && !booked.has(`stripe_${s.id}`)
+  );
+  if (unbooked) return no('pay_page_pending');
+  const window = chargeWindow(invoice.due);
+  const nowMs = now.getTime();
+  if (!window || nowMs < window.start || nowMs > window.end) return no('outside_window');
+  if (cents !== Number(claim.amount_cents)) return no('balance_changed');
+  if (!(Number(claim.amount_cents) <= Number(enrollment.max_amount_cents))) return no('above_authorized');
+  return { charge: true, invoice, enrollment };
+}
+
 // Silent housekeeping (spec §4.6): active enrollments whose plan is gone or
 // now belongs to another customer are revoked; pending rows older than 48 h
 // are expired. `plansByKey` must come from a fetch that includes deleted
 // rows; `planIdOk` guards against treating an unfetchable id as missing.
+// These are CANDIDATES only: the sweep confirms each revoke with a targeted
+// read of that plan and skips it when that read fails (fail closed), so a
+// truncated or failed bulk read can never revoke an enrollment.
 function selectHousekeeping({ enrollments, plansByKey, now = new Date(), planIdOk = () => true }) {
   const revokePlanGone = [];
   const expirePending = [];
@@ -155,17 +201,25 @@ function selectHousekeeping({ enrollments, plansByKey, now = new Date(), planIdO
       continue;
     }
     if (e.status !== 'active' || !planIdOk(e.recurring_invoice_id)) continue;
-    const plan = plansByKey.get(planKey(e.user_id, e.recurring_invoice_id));
-    if (!plan || plan.deleted || !plan.data || plan.data.customerId !== e.customer_id) revokePlanGone.push(e);
+    if (planGoneFor(e, plansByKey.get(planKey(e.user_id, e.recurring_invoice_id)))) revokePlanGone.push(e);
   }
   return { revokePlanGone, expirePending };
+}
+
+// The plan an enrollment authorized is gone: missing, deleted, or now
+// belonging to another customer.
+function planGoneFor(enrollment, plan) {
+  return !plan || plan.deleted || !plan.data || plan.data.customerId !== enrollment.customer_id;
 }
 
 module.exports = {
   selectInvoicesToCharge,
   selectHousekeeping,
+  planGoneFor,
   chargeWindow,
   staticIneligibility,
+  liveVerdict,
+  balanceCents,
   planKey,
   MAX_CLAIMS_PER_USER_PER_DAY,
   WINDOW_START_HOUR_UTC,
