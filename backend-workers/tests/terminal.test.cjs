@@ -247,10 +247,10 @@ describe('POST /api/terminal/payment-intent', () => {
     const s = intentStripe();
     const h = handler(s);
     assert.equal((await post(h, good({ amount: 19.99 }))).body.amountCents, 1999);
-    assert.equal((await post(h, good({ amount: 0.1 + 0.2 }))).body.amountCents, 30); // 0.30000000000000004
+    assert.equal((await post(h, good({ amount: 0.7 + 0.1 }))).body.amountCents, 80); // 0.7999999999999999
     assert.equal((await post(h, good({ amount: 10.005 }))).status, 400);
     assert.equal((await post(h, good({ amount: 412.5 }))).body.amountCents, 41250);
-    assert.deepEqual(s.callsTo('paymentIntents.create').map((c) => c.args[0].amount), [1999, 30, 41250]);
+    assert.deepEqual(s.callsTo('paymentIntents.create').map((c) => c.args[0].amount), [1999, 80, 41250]);
   });
 
   test('amount must be a positive finite number ≤ the balance; the response carries the balance', async () => {
@@ -287,7 +287,7 @@ describe('POST /api/terminal/payment-intent', () => {
     assert.equal(s.callsTo('paymentIntents.create').length, 1);
   });
 
-  test('another owner\'s invoice → 404 (nothing about it leaks); a deleted one → 404; an unsynced one → 422 not_synced', async () => {
+  test('another owner\'s invoice and a missing one are IDENTICAL (422 not_synced, same body); the lookup filters by id AND user_id', async () => {
     w = W.world({ invoices: [
       W.invoiceRow({ number: 'SECRET-1' }, { id: 'theirs', user_id: OTHER_USER }),
       W.invoiceRow({}, { id: 'gone', deleted: true }),
@@ -295,13 +295,56 @@ describe('POST /api/terminal/payment-intent', () => {
     const s = intentStripe();
     const h = handler(s);
     const theirs = await post(h, good({ invoiceId: 'theirs' }));
-    assert.deepEqual([theirs.status, theirs.body.code], [404, 'not_found']);
+    const missing = await post(h, good({ invoiceId: 'nope' }));
+    assert.deepEqual([theirs.status, theirs.body.code], [422, 'not_synced']);
+    assert.deepEqual([missing.status, missing.body], [theirs.status, theirs.body], 'not mine and not there must be indistinguishable');
+    assert.match(missing.body.error, /Open the app while online/);
     assert.equal(JSON.stringify(theirs.body).includes('SECRET'), false);
-    assert.equal((await post(h, good({ invoiceId: 'gone' }))).status, 404);
-    const unsynced = await post(h, good({ invoiceId: 'nope' }));
-    assert.deepEqual([unsynced.status, unsynced.body.code], [422, 'not_synced']);
-    assert.match(unsynced.body.error, /Open the app while online/);
+    // The caller's own deleted invoice is not a leak: a plain 404.
+    const gone = await post(h, good({ invoiceId: 'gone' }));
+    assert.deepEqual([gone.status, gone.body.code], [404, 'not_found']);
     assert.equal(s.calls.length, 0);
+  });
+
+  test('the invoice query is scoped to the verified user in the URL itself', async () => {
+    w = W.world();
+    const seen = [];
+    const inner = global.fetch;
+    global.fetch = async (url, ...rest) => { seen.push(String(url)); return inner(url, ...rest); };
+    try { await post(handler(intentStripe()), good()); } finally { global.fetch = inner; }
+    const lookup = seen.find((u) => u.includes('/rest/v1/invoices?'));
+    assert.ok(lookup && lookup.includes('id=eq.inv1') && lookup.includes(`user_id=eq.${USER}`), lookup);
+  });
+
+  test('below the $0.50 floor → 400 below_minimum (not Stripe\'s stripe_rejected); $0.50 itself passes; no Stripe call below', async () => {
+    w = W.world({ invoices: [W.invoiceRow({ amount: 0.3 }), W.invoiceRow({ amount: 0.3 }, { id: 'inv2' })] });
+    const s = intentStripe();
+    const h = handler(s);
+    const small = await post(h, good({ amount: 0.3 }));
+    assert.deepEqual([small.status, small.body.code, small.body.minimum], [400, 'below_minimum', 0.5]);
+    assert.match(small.body.error, /too small to take by card/);
+    const penny = await post(h, good({ amount: 0.49 }));
+    assert.equal(penny.body.code, 'below_minimum');
+    assert.equal(s.callsTo('paymentIntents.create').length, 0);
+    w.restore();
+    w = W.world({ invoices: [W.invoiceRow({ amount: 0.5 })] });
+    const exact = await post(handler(s), good({ amount: 0.5 }));
+    assert.deepEqual([exact.status, exact.body.amountCents], [200, 50]);
+  });
+
+  test('the description uses the invoice number the device froze with the operation, so a number edited between retries does not change it', async () => {
+    w = W.world();
+    const s = intentStripe();
+    await post(handler(s), good({ invoiceNumber: 'INV-0042' }));
+    w.restore();
+    w = W.world({ invoices: [W.invoiceRow({ number: 'INV-0042-EDITED' })] });
+    await post(handler(s), good({ invoiceNumber: 'INV-0042' }));
+    assert.deepEqual(s.callsTo('paymentIntents.create').map((c) => c.args[0].description), ['Invoice INV-0042', 'Invoice INV-0042']);
+    // Absent, blank, multi-line or oversized: the server's own number.
+    for (const bad of [undefined, '  ', 'a\nb', 'x'.repeat(65), 7]) {
+      await post(handler(s), good({ invoiceNumber: bad }));
+    }
+    assert.deepEqual(s.callsTo('paymentIntents.create').slice(2).map((c) => c.args[0].description), Array(5).fill('Invoice INV-0042-EDITED'));
   });
 
   test('idempotency: the Stripe key is ttp_<operationId>; a retry sends the same key', async () => {

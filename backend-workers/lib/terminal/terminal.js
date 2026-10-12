@@ -15,8 +15,13 @@
 
 const { balanceDue } = require('../paymentMath.js');
 
-// Stripe's USD ceiling for one charge ($999,999.99).
+// Stripe's USD ceiling for one charge ($999,999.99) and floor ($0.50). The
+// spec's currency assumption is USD only (`currency: 'usd'` below), so one
+// floor in cents applies. Checked here so the owner gets a clear
+// `below_minimum` instead of Stripe's rejection surfacing as a vague
+// `stripe_rejected`.
 const MAX_INTENT_CENTS = 99_999_999;
+const MIN_INTENT_CENTS = 50;
 const LOCATION_TAG = 'default';
 const MAX_LOCATION_PAGES = 5;
 
@@ -139,9 +144,12 @@ function localDateOk(localDate, nowMs) {
   return Math.abs(ms - todayMs) <= 86_400_000;
 }
 
-async function fetchInvoiceRow(env, invoiceId) {
+// By id AND user_id (spec §2.1 step 1): another owner's invoice and a missing
+// one are the same empty result, so the route cannot be used to probe which
+// (guessable) invoice ids exist.
+async function fetchInvoiceRow(env, invoiceId, userId) {
   const res = await fetch(
-    `${env.SUPABASE_URL}/rest/v1/invoices?id=eq.${encodeURIComponent(invoiceId)}&select=user_id,deleted,data`,
+    `${env.SUPABASE_URL}/rest/v1/invoices?id=eq.${encodeURIComponent(invoiceId)}&user_id=eq.${encodeURIComponent(userId)}&select=user_id,deleted,data`,
     { headers: { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, apikey: env.SUPABASE_SERVICE_ROLE_KEY } }
   );
   if (!res.ok) throw new Error(`Supabase invoice lookup ${res.status}`);
@@ -149,23 +157,35 @@ async function fetchInvoiceRow(env, invoiceId) {
   return rows.length ? rows[0] : null;
 }
 
+// A short single-line label only (it lands in the owner's own Stripe
+// description). Anything else is ignored rather than rejected.
+function cleanInvoiceNumber(value) {
+  if (typeof value !== 'string') return null;
+  const t = value.trim();
+  // eslint-disable-next-line no-control-regex
+  return t && t.length <= 64 && !/[\u0000-\u001f\u007f]/.test(t) ? t : null;
+}
+
 async function createTerminalPaymentIntent(env, { stripe, userId, stripeAccountId, body, nowMs = Date.now() }) {
-  const { invoiceId, amount, localDate, operationId } = body || {};
+  const { invoiceId, amount, localDate, operationId, invoiceNumber } = body || {};
   if (typeof invoiceId !== 'string' || !INVOICE_ID_RE.test(invoiceId)) return fail(400, 'invalid_request', 'Invalid invoiceId.');
   if (typeof operationId !== 'string' || !OPERATION_ID_RE.test(operationId)) return fail(400, 'invalid_request', 'Invalid operationId.');
   const cents = dollarsToCents(amount);
   if (cents === null) return fail(400, 'invalid_amount', 'Amount must be a dollar amount in whole cents.');
   if (cents <= 0) return fail(400, 'invalid_amount', 'Amount must be greater than 0.');
   if (cents > MAX_INTENT_CENTS) return fail(400, 'invalid_amount', 'Amount is too large.');
+  if (cents < MIN_INTENT_CENTS) {
+    return fail(400, 'below_minimum', 'That amount is too small to take by card.', { minimum: MIN_INTENT_CENTS / 100 });
+  }
   if (!localDateOk(localDate, nowMs)) return fail(400, 'invalid_date', 'localDate must be today\'s date (YYYY-MM-DD).');
 
-  const row = await fetchInvoiceRow(env, invoiceId);
+  const row = await fetchInvoiceRow(env, invoiceId, userId);
+  // Missing and not-yours are the same answer (the query filtered by owner).
   if (!row) {
     return fail(422, 'not_synced', 'This invoice hasn\'t synced yet. Open the app while online, wait for it to sync, and try again.');
   }
-  // Someone else's (or a deleted) invoice is indistinguishable from a missing
-  // one to this caller.
-  if (row.user_id !== userId || row.deleted) return fail(404, 'not_found', 'Invoice not found.');
+  // The caller's OWN deleted invoice: nothing to leak, so say so plainly.
+  if (row.deleted) return fail(404, 'not_found', 'Invoice not found.');
 
   const invoice = { ...row.data, id: invoiceId };
   const balanceCents = Math.round(balanceDue(invoice) * 100);
@@ -173,7 +193,12 @@ async function createTerminalPaymentIntent(env, { stripe, userId, stripeAccountI
     return fail(400, 'amount_exceeds_balance', 'Amount is more than the invoice balance.', { balance: balanceCents / 100 });
   }
 
-  const number = invoice.number;
+  // The description is part of Stripe's idempotency parameters, so it must be
+  // identical on every retry of one operation. The device freezes the invoice
+  // number it shows with the operation and sends it back each time (an edit to
+  // the number between retries would otherwise 409 every retry). Absent or
+  // unusable: fall back to the server's copy.
+  const number = cleanInvoiceNumber(invoiceNumber) || invoice.number;
   const intent = await stripe.paymentIntents.create(
     {
       amount: cents,
@@ -199,4 +224,5 @@ module.exports = {
   dollarsToCents,
   localDateOk,
   MAX_INTENT_CENTS,
+  MIN_INTENT_CENTS,
 };

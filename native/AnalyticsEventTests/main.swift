@@ -275,6 +275,10 @@ struct AnalyticsEventTests {
                     ["amount": 50, "method": "check", "balanceRemaining": 25.5], "payment_recorded: cheque → check, numbers")
         expectEqual(NativeAnalyticsEvent.paymentVoided(amount: 50, method: "Venmo").properties["method"], "other",
                     "payment_voided: an unlisted method is other")
+        for label in ["Card (online)", "Tap to Pay", "stripe"] {
+            expectEqual(NativeAnalyticsEvent.paymentVoided(amount: 50, method: label).properties["method"], "stripe",
+                        "payment_voided: the Stripe display label \(label) stays stripe, not other")
+        }
         expectEqual(NativeAnalyticsEvent.changeOrderCreated(amount: Decimal(string: "125.50")!).properties["amount"], .number(125.5),
                     "change_order_created: the Decimal amount is a number")
         expectEqual(NativeAnalyticsEvent.jobCreated(first: false, customerID: "", duplicated: false).properties, ["first": false],

@@ -20,6 +20,9 @@ enum NativeCardPresentPayment {
     /// Stripe's USD ceiling for one charge ($999,999.99); the Worker enforces
     /// the same bound.
     static let maxChargeCents = 99_999_999
+    /// Stripe's USD floor for one charge ($0.50); the Worker enforces the same
+    /// bound (`below_minimum`). USD is the spec's only currency.
+    static let minimumChargeCents = 50
 
     // MARK: - Eligibility
 
@@ -54,14 +57,18 @@ enum NativeCardPresentPayment {
         case ok
         case notPositive
         case exceedsBalance(balanceCents: Int)
+        /// Under Stripe's minimum: too small to take by card at all.
+        case belowMinimum
         case tooLarge
     }
 
-    /// `0 < amount <= balance` (and Stripe's ceiling). A partial amount is
-    /// allowed (deposits and part payments, D10).
+    /// `minimum <= amount <= balance` (and Stripe's ceiling). A partial amount
+    /// is allowed (deposits and part payments, D10). A balance under the
+    /// minimum cannot be taken by card at all.
     static func validate(amountCents: Int, balanceCents: Int) -> AmountCheck {
         if amountCents <= 0 { return .notPositive }
         if amountCents > balanceCents { return .exceedsBalance(balanceCents: max(0, balanceCents)) }
+        if amountCents < minimumChargeCents { return .belowMinimum }
         if amountCents > maxChargeCents { return .tooLarge }
         return .ok
     }
@@ -103,6 +110,18 @@ enum NativeCardPresentPayment {
             ($0.value >= 48 && $0.value <= 57) || ($0.value >= 65 && $0.value <= 90)
                 || ($0.value >= 97 && $0.value <= 122) || $0 == "_"
         }
+    }
+
+    /// The invoice number as it goes into the PaymentIntent description: one
+    /// clean line of at most 64 characters, or nil. Frozen with the operation
+    /// (the description is part of Stripe's idempotency parameters, so it must
+    /// not change between retries).
+    static func cleanInvoiceNumber(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty,
+              trimmed.count <= 64,
+              !trimmed.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 })
+        else { return nil }
+        return trimmed
     }
 
     static func ledgerID(paymentIntentID: String) -> String { idPrefix + paymentIntentID }
@@ -167,5 +186,12 @@ enum NativeCardPresentPayment {
 
     /// Extra sentence for the void confirmation of a Stripe payment (also link
     /// payments). Voiding moves no money (R9).
+    /// The sheet's copy for an amount under Stripe's minimum (the Worker's
+    /// `below_minimum`, or the same check made on the device first).
+    static var belowMinimumMessage: String {
+        let minimum = String(format: "$%.2f", dollars(fromCents: minimumChargeCents))
+        return "That amount is too small to take by card. The minimum card payment is \(minimum)."
+    }
+
     static let voidNotice = "Voiding only changes your records. It doesn't refund the card. Refund it in your Stripe dashboard."
 }

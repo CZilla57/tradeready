@@ -290,7 +290,9 @@ extension NativeAnalyticsEvent {
     /// values ("bank_transfer"); anything outside the enum is `other`.
     static func paymentMethod(_ raw: String) -> String {
         switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "stripe": "stripe"
+        // A voided Stripe payment reports its display label ("Card (online)",
+        // "Tap to Pay"), not the ledger raw value; both are Stripe money.
+        case "stripe", "card (online)", "tap to pay": "stripe"
         case "cash": "cash"
         case "check", "cheque": "check"
         case "card": "card"

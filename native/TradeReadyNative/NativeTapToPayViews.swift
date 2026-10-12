@@ -66,7 +66,8 @@ struct NativeTapToPaySheet: View {
                 guard let store else { return false }
                 if case .success = store.recordCardPresentPayment(invoiceID: invoiceID, entry: entry) { return true }
                 return false
-            }))
+            },
+            invoiceNumber: { [weak store] in store?.invoices.first { $0.id == invoiceID }?.number }))
     }
 
     private var amountCents: Int? {
@@ -79,13 +80,13 @@ struct NativeTapToPaySheet: View {
                 Section("Amount") {
                     TextField("Amount", text: $amountText)
                         .keyboardType(.decimalPad)
-                        .disabled(flow.isBusy || flow.isFinished)
+                        .disabled(flow.isAmountLocked)
                     if amountCents == nil {
                         Text("Enter an amount in dollars and cents.").font(.caption).foregroundStyle(Color.tradeWarningText)
                     }
                 }
                 Section { status }
-                if !flow.isFinished { Section { chargeButton } }
+                if !flow.isFinished && flow.phase != .paymentUnconfirmed { Section { chargeButton } }
             }
             .nativeContentColumn(.list)
             .navigationTitle("Tap to Pay on iPhone")
@@ -95,11 +96,18 @@ struct NativeTapToPaySheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(flow.isFinished ? "Done" : "Close") { dismiss() }
                         .keyboardShortcut(.cancelAction)
-                        .disabled(flow.phase == .collecting)
+                        .disabled(flow.isBusy)
                 }
             }
         }
         .interactiveDismissDisabled(flow.isBusy)
+        // A dismissed sheet must never start a collection (the start task
+        // outlives the view).
+        .onDisappear { flow.close() }
+        // While the amount is locked the field shows the amount being charged.
+        .onChange(of: flow.lockedAmountCents) { _, locked in
+            if let locked { amountText = String(format: "%.2f", NativeCardPresentPayment.dollars(fromCents: locked)) }
+        }
     }
 
     @ViewBuilder private var status: some View {
@@ -111,6 +119,13 @@ struct NativeTapToPaySheet: View {
             HStack { ProgressView(); Text("Preparing…") }
         case .collecting:
             HStack { ProgressView(); Text("Hold the card or phone near your iPhone.") }
+        case .checkingPayment:
+            HStack { ProgressView(); Text("Checking payment") }
+        case .paymentUnconfirmed:
+            Label("Checking payment", systemImage: "questionmark.circle").foregroundStyle(Color.tradeWarningText)
+            Text("We couldn't confirm whether the card was charged. Don't take the payment again yet. Check again, or look in your Stripe dashboard. If it was charged, it will appear on this invoice after the next sync.")
+                .font(.caption).foregroundStyle(.secondary)
+            Button("Check again") { Task { await flow.checkAgain() } }
         case .approved(let approval):
             Label("Approved: \(NativeCardPresentPayment.dollars(fromCents: approval.amountCents).currency)", systemImage: "checkmark.circle.fill")
                 .foregroundStyle(Color.tradeSuccessText).fontWeight(.semibold)
@@ -123,6 +138,9 @@ struct NativeTapToPaySheet: View {
                     dismiss()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { onSendReceipt() }
                 }
+            } else if approval.entryUnbuildable {
+                Text("The card was charged, but this payment couldn't be saved on this invoice from here (reference \(approval.paymentIntentID)). It will appear after the next sync. Check your Stripe dashboard if it doesn't.")
+                    .font(.caption).foregroundStyle(Color.tradeDangerText)
             } else {
                 Text("The card was charged, but this payment hasn't been saved on this invoice yet. It will appear after the next sync, or save it now.")
                     .font(.caption).foregroundStyle(Color.tradeWarningText)
@@ -161,6 +179,7 @@ struct NativeTapToPaySheet: View {
         case .invoiceMissing: "This invoice is no longer available."
         case .amountNotPositive: "Enter an amount greater than zero."
         case .amountExceedsBalance(let cents): "That's more than the balance of \(NativeCardPresentPayment.dollars(fromCents: cents).currency)."
+        case .belowMinimum: NativeCardPresentPayment.belowMinimumMessage
         case .amountTooLarge: "That amount is too large for one card payment."
         case .balanceChanged(let cents): "The balance changed to \(NativeCardPresentPayment.dollars(fromCents: cents).currency). Nothing was charged."
         case .amountMismatch: "The amount didn't match. Nothing was charged. Try again."
@@ -169,7 +188,7 @@ struct NativeTapToPaySheet: View {
         case .sessionExpired: "Your session expired. Sign in again."
         case .network: "Couldn't reach the server. Nothing was charged. Try again."
         case .server: "Something went wrong. Nothing was charged. Try again."
-        case .reader(let message): message
+        case .reader(let message): "\(message)\nThe card was not charged. You can try again."
         }
     }
 }

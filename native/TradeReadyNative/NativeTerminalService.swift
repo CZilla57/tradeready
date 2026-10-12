@@ -21,6 +21,8 @@ enum NativeTerminalError: Error, Equatable {
     /// 400 `amount_exceeds_balance`; the server's balance in cents.
     case amountExceedsBalance(balanceCents: Int?)
     case invalidRequest
+    /// 400 `below_minimum`: under Stripe's minimum charge.
+    case belowMinimum
     /// 409 `operation_conflict`: the operation id was used with other details.
     case operationConflict
     /// 422 `no_connected_account`.
@@ -55,8 +57,11 @@ protocol NativeTerminalServicing: Sendable {
     func connectionToken() async throws -> String
     func locationStatus() async throws -> NativeTerminalLocation
     func ensureLocation(displayName: String, address: NativeTerminalAddress) async throws -> NativeTerminalLocation
+    /// `invoiceNumber` is the number the device froze with the operation; the
+    /// Worker puts it in the PaymentIntent description, so it must be the same
+    /// on every retry of one operation (nil = the Worker uses its own copy).
     func createPaymentIntent(
-        invoiceID: String, amountCents: Int, localDate: String, operationID: String
+        invoiceID: String, amountCents: Int, localDate: String, operationID: String, invoiceNumber: String?
     ) async throws -> NativeTerminalPaymentIntent
 }
 
@@ -82,6 +87,7 @@ struct NativeTerminalService: NativeTerminalServicing {
         var amount: Decimal
         var localDate: String
         var operationId: String
+        var invoiceNumber: String?
     }
     private struct LocationRequest: Encodable {
         struct Address: Encodable {
@@ -142,7 +148,7 @@ struct NativeTerminalService: NativeTerminalServicing {
     }
 
     func createPaymentIntent(
-        invoiceID: String, amountCents: Int, localDate: String, operationID: String
+        invoiceID: String, amountCents: Int, localDate: String, operationID: String, invoiceNumber: String?
     ) async throws -> NativeTerminalPaymentIntent {
         guard amountCents > 0, amountCents <= NativeCardPresentPayment.maxChargeCents,
               NativeCardPresentPayment.isValidOperationID(operationID),
@@ -151,7 +157,8 @@ struct NativeTerminalService: NativeTerminalServicing {
         // The one cents-to-dollars conversion (exact: Decimal, not Double).
         let dollars = Decimal(amountCents) / 100
         let body = try JSONEncoder().encode(IntentRequest(
-            invoiceId: invoiceID, amount: dollars, localDate: localDate, operationId: operationID))
+            invoiceId: invoiceID, amount: dollars, localDate: localDate, operationId: operationID,
+            invoiceNumber: NativeCardPresentPayment.cleanInvoiceNumber(invoiceNumber)))
         let data = try await post(paymentIntentEndpoint, body: body)
         guard let parsed = try? JSONDecoder().decode(IntentBody.self, from: data),
               let id = parsed.paymentIntentId, NativeCardPresentPayment.isValidPaymentIntentID(id),
@@ -200,6 +207,7 @@ struct NativeTerminalService: NativeTerminalServicing {
             // The server's balance is dollars; whole cents only.
             let cents = body?.balance.flatMap { NativeCardPresentPayment.cents(fromDollars: NSDecimalNumber(decimal: $0).doubleValue) }
             return .amountExceedsBalance(balanceCents: cents)
+        case (400, "below_minimum"): return .belowMinimum
         case (400, _): return .invalidRequest
         case (404, _): return .notFound
         case (409, "operation_conflict"): return .operationConflict

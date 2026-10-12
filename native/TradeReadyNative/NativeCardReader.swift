@@ -3,7 +3,8 @@ import Foundation
 /// Phase 18 (Tap to Pay on iPhone, spec §4.1): the reader seam. Everything in
 /// the payment flow talks to `NativeCardReader`; only
 /// `NativeStripeTerminalCardReader` (stage B, behind
-/// `#if canImport(StripeTerminal)`, not yet written) will import the SDK.
+/// `#if canImport(StripeTerminal)`, not yet written) will import the SDK and
+/// implement `status(of:)` with `retrievePaymentIntent`.
 /// Until then Release carries only `NativeUnavailableCardReader`.
 enum NativeCardReaderState: Equatable {
     case unsupported
@@ -21,6 +22,23 @@ enum NativeCardCollectResult: Equatable {
     case timedOut
 }
 
+/// What Stripe says about a PaymentIntent whose collect attempt ended without
+/// a clear card outcome (the reader threw, or reported another intent). Asked
+/// of the reader because it is the one component that holds the SDK and the
+/// connected-account credentials; stage A has no Worker status route.
+enum NativePaymentIntentStatus: Equatable {
+    /// `succeeded`: the card WAS charged; `amountCents` is Stripe's
+    /// `amount_received`.
+    case succeeded(amountCents: Int)
+    /// `canceled`: dead. It can never be charged, so a new one may be minted.
+    case canceled
+    /// `requires_payment_method`: not charged and still open. A retry must
+    /// reuse the same intent; a late confirm could still land on it.
+    case requiresPaymentMethod
+    /// Anything else, or the lookup itself failed. Never treated as "not charged".
+    case unknown
+}
+
 /// A reader failure that is not a card outcome (SDK or hardware error).
 struct NativeCardReaderError: Error, Equatable {
     var message: String
@@ -34,6 +52,9 @@ protocol NativeCardReader: AnyObject {
     func prepare(locationId: String, merchantName: String) async throws
     /// Presents the system tap UI for the PaymentIntent behind `clientSecret`.
     func collect(clientSecret: String) async throws -> NativeCardCollectResult
+    /// The live status of `intent`, for resolving an ambiguous collect failure
+    /// (spec §4.2). Returns `.unknown` when it cannot be read; never throws.
+    func status(of intent: NativeTerminalPaymentIntent) async -> NativePaymentIntentStatus
     /// Whether this Stripe account has accepted Apple's Tap to Pay terms.
     /// `nil` = unknown. Never stored locally.
     func isAccountLinked() async -> Bool?
@@ -50,6 +71,7 @@ final class NativeUnavailableCardReader: NativeCardReader {
     func collect(clientSecret: String) async throws -> NativeCardCollectResult {
         throw NativeCardReaderError(message: "Tap to Pay on iPhone isn't available in this build.")
     }
+    func status(of intent: NativeTerminalPaymentIntent) async -> NativePaymentIntentStatus { .unknown }
     func isAccountLinked() async -> Bool? { nil }
 }
 

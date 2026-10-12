@@ -28,7 +28,7 @@ func expectEqual<T: Equatable>(_ actual: T, _ expected: T, _ label: String) {
 // MARK: - Fakes
 
 final class FakeTerminalService: NativeTerminalServicing, @unchecked Sendable {
-    struct Call: Equatable { var invoiceID: String; var amountCents: Int; var localDate: String; var operationID: String }
+    struct Call: Equatable { var invoiceID: String; var amountCents: Int; var localDate: String; var operationID: String; var invoiceNumber: String? = nil }
     private(set) var calls: [Call] = []
     /// Consumed one per call; empty = succeed with a fresh PI for the asked amount.
     var failures: [NativeTerminalError] = []
@@ -40,8 +40,30 @@ final class FakeTerminalService: NativeTerminalServicing, @unchecked Sendable {
     func ensureLocation(displayName: String, address: NativeTerminalAddress) async throws -> NativeTerminalLocation {
         NativeTerminalLocation(locationID: "tml_1")
     }
-    func createPaymentIntent(invoiceID: String, amountCents: Int, localDate: String, operationID: String) async throws -> NativeTerminalPaymentIntent {
-        calls.append(Call(invoiceID: invoiceID, amountCents: amountCents, localDate: localDate, operationID: operationID))
+    /// Set to hold the next `createPaymentIntent` open until `release()` (the
+    /// sheet is closed while "Preparing").
+    var suspendNext = false
+    // `createPaymentIntent` runs off the main actor while the test polls and
+    // releases from it, so the suspended flag and the continuation are one
+    // locked unit: `isSuspended` is true only once the continuation is stored
+    // (otherwise `release()` could find no waiter and the test hangs).
+    private let gate = NSLock()
+    private var suspended = false
+    private var waiter: CheckedContinuation<Void, Never>?
+    var isSuspended: Bool { gate.lock(); defer { gate.unlock() }; return suspended }
+    func release() {
+        gate.lock(); let w = waiter; waiter = nil; suspended = false; gate.unlock()
+        w?.resume()
+    }
+
+    func createPaymentIntent(invoiceID: String, amountCents: Int, localDate: String, operationID: String, invoiceNumber: String?) async throws -> NativeTerminalPaymentIntent {
+        calls.append(Call(invoiceID: invoiceID, amountCents: amountCents, localDate: localDate, operationID: operationID, invoiceNumber: invoiceNumber))
+        if suspendNext {
+            suspendNext = false
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                gate.lock(); waiter = c; suspended = true; gate.unlock()
+            }
+        }
         if !failures.isEmpty { throw failures.removeFirst() }
         return NativeTerminalPaymentIntent(
             paymentIntentID: intentID, clientSecret: "\(intentID)_secret_x", amountCents: amountCents + echoAmountOffset)
@@ -106,7 +128,15 @@ func pureRules() {
 
     typealias P = NativeCardPresentPayment
     expectEqual(P.validate(amountCents: 12000, balanceCents: 12000), .ok, "the full balance is allowed")
-    expectEqual(P.validate(amountCents: 1, balanceCents: 12000), .ok, "a partial amount is allowed (D10)")
+    expectEqual(P.validate(amountCents: 50, balanceCents: 12000), .ok, "a partial amount is allowed (D10), down to the 50-cent minimum")
+    expectEqual(P.validate(amountCents: 49, balanceCents: 12000), .belowMinimum, "49 cents is under Stripe's minimum")
+    expectEqual(P.validate(amountCents: 1, balanceCents: 12000), .belowMinimum, "one cent is under Stripe's minimum")
+    expectEqual(P.validate(amountCents: 30, balanceCents: 30), .belowMinimum, "a balance under 50 cents cannot be taken by card, even in full")
+    expectEqual(P.validate(amountCents: 50, balanceCents: 50), .ok, "exactly the minimum, in full")
+    expectEqual(P.minimumChargeCents, 50, "USD minimum is 50 cents")
+    expect(P.belowMinimumMessage.contains("too small to take by card") && P.belowMinimumMessage.contains("$0.50"), "below-minimum copy")
+    expectEqual(P.cleanInvoiceNumber("  INV-0042 "), "INV-0042", "invoice number is trimmed")
+    expect(P.cleanInvoiceNumber(nil) == nil && P.cleanInvoiceNumber("  ") == nil && P.cleanInvoiceNumber("a\nb") == nil && P.cleanInvoiceNumber(String(repeating: "x", count: 65)) == nil, "blank, multi-line and oversized numbers are dropped")
     expectEqual(P.validate(amountCents: 12001, balanceCents: 12000), .exceedsBalance(balanceCents: 12000), "one cent over the balance is refused")
     expectEqual(P.validate(amountCents: 0, balanceCents: 12000), .notPositive, "zero refused")
     expectEqual(P.validate(amountCents: -500, balanceCents: 12000), .notPositive, "negative refused")
@@ -171,7 +201,7 @@ func transport() async {
     let captured = Captured()
     let ok = service(body: #"{"paymentIntentId":"pi_3Q4","clientSecret":"pi_3Q4_secret_a","amount":412.5,"amountCents":41250}"#, captured: captured)
     do {
-        let intent = try await ok.createPaymentIntent(invoiceID: "inv1", amountCents: 41250, localDate: "2026-10-14", operationID: "ttp_abcdefgh12345678")
+        let intent = try await ok.createPaymentIntent(invoiceID: "inv1", amountCents: 41250, localDate: "2026-10-14", operationID: "ttp_abcdefgh12345678", invoiceNumber: " INV-0042 ")
         expectEqual(intent, NativeTerminalPaymentIntent(paymentIntentID: "pi_3Q4", clientSecret: "pi_3Q4_secret_a", amountCents: 41250), "intent decodes")
         let request = captured.requests.first
         expectEqual(request?.httpMethod, "POST", "POST")
@@ -183,16 +213,19 @@ func transport() async {
         expectEqual(body["invoiceId"] as? String, "inv1", "invoiceId")
         expectEqual(body["operationId"] as? String, "ttp_abcdefgh12345678", "operationId")
         expectEqual(body["localDate"] as? String, "2026-10-14", "localDate")
-        expectEqual(Set(body.keys), ["invoiceId", "amount", "localDate", "operationId"], "no client-authored metadata or account id")
+        expectEqual(Set(body.keys), ["invoiceId", "amount", "localDate", "operationId", "invoiceNumber"], "no client-authored metadata or account id")
+        expectEqual(body["invoiceNumber"] as? String, "INV-0042", "the frozen invoice number goes out clean")
     } catch { expect(false, "payment intent threw \(error)") }
 
     let small = Captured()
     _ = try? await service(body: #"{"paymentIntentId":"pi_1","clientSecret":"s","amountCents":5}"#, captured: small)
-        .createPaymentIntent(invoiceID: "i", amountCents: 5, localDate: "2026-10-14", operationID: "ttp_abcdefgh12345678")
-    expect(String(decoding: small.requests.first?.httpBody ?? Data(), as: UTF8.self).contains("\"amount\":0.05"), "5 cents is 0.05 dollars")
+        .createPaymentIntent(invoiceID: "i", amountCents: 5, localDate: "2026-10-14", operationID: "ttp_abcdefgh12345678", invoiceNumber: nil)
+    let smallBody = String(decoding: small.requests.first?.httpBody ?? Data(), as: UTF8.self)
+    expect(smallBody.contains("\"amount\":0.05"), "5 cents is 0.05 dollars")
+    expect(!smallBody.contains("invoiceNumber"), "no invoice number key when there is none")
 
     func failure(_ svc: NativeTerminalService, amount: Int = 100, op: String = "ttp_abcdefgh12345678", date: String = "2026-10-14") async -> NativeTerminalError? {
-        do { _ = try await svc.createPaymentIntent(invoiceID: "inv1", amountCents: amount, localDate: date, operationID: op); return nil }
+        do { _ = try await svc.createPaymentIntent(invoiceID: "inv1", amountCents: amount, localDate: date, operationID: op, invoiceNumber: nil); return nil }
         catch { return error as? NativeTerminalError }
     }
     expectEqual(await failure(service(body: #"{"paymentIntentId":"pi_1","clientSecret":"s","amountCents":101}"#)), .amountMismatch, "an echoed amount that differs is refused")
@@ -202,6 +235,7 @@ func transport() async {
     expectEqual(await failure(service(status: 422, body: #"{"code":"not_synced"}"#)), .notSynced, "422 not_synced")
     expectEqual(await failure(service(status: 422, body: #"{"code":"no_connected_account"}"#)), .noConnectedAccount, "422 no_connected_account")
     expectEqual(await failure(service(status: 404, body: #"{"code":"not_found"}"#)), .notFound, "404")
+    expectEqual(await failure(service(status: 400, body: #"{"code":"below_minimum","minimum":0.5}"#)), .belowMinimum, "400 below_minimum")
     expectEqual(await failure(service(status: 409, body: #"{"code":"operation_conflict"}"#)), .operationConflict, "409")
     expectEqual(await failure(service(status: 429, body: #"{"code":"rate_limited"}"#)), .rateLimited, "429")
     expectEqual(await failure(service(status: 400, body: #"{"code":"amount_exceeds_balance","balance":80.5}"#)), .amountExceedsBalance(balanceCents: 8050), "400 amount_exceeds_balance carries the balance in cents")
@@ -271,6 +305,7 @@ final class FlowRig {
     var saved: [Canonical.Payment] = []
     var saveSucceeds = true
     var operationCounter = 0
+    var number: String? = "INV-0042"
     lazy var flow = NativeTapToPayFlow(
         invoiceID: "inv1", service: service, reader: reader,
         balanceCents: { [unowned self] in self.balance },
@@ -278,6 +313,7 @@ final class FlowRig {
             if self.saveSucceeds { self.saved.append(entry) }
             return self.saveSucceeds
         },
+        invoiceNumber: { [unowned self] in self.number },
         today: { "2026-10-13" },
         makeOperationID: { [unowned self] in self.operationCounter += 1; return "ttp_operation_\(self.operationCounter)" })
 }
@@ -291,7 +327,7 @@ func sheetStateMachine() async {
         expectEqual(r.saved.count, 1, "one ledger entry saved")
         expectEqual(entryJSON(r.saved[0])["id"], .string("stripe_pi_3Fake000000000001"), "saved under stripe_<pi>")
         expectEqual(entryJSON(r.saved[0])["date"], .string("2026-10-13"), "saved with the operation's local day")
-        expectEqual(r.service.calls, [.init(invoiceID: "inv1", amountCents: 12000, localDate: "2026-10-13", operationID: "ttp_operation_1")], "one PaymentIntent request")
+        expectEqual(r.service.calls, [.init(invoiceID: "inv1", amountCents: 12000, localDate: "2026-10-13", operationID: "ttp_operation_1", invoiceNumber: "INV-0042")], "one PaymentIntent request")
         expectEqual(r.reader.collectedSecrets, ["pi_3Fake000000000001_secret_x"], "the reader got the client secret")
         await r.flow.start(amountCents: 12000)
         expectEqual(r.service.calls.count, 1, "an approved flow is terminal: a second tap does not charge again")
@@ -384,12 +420,15 @@ func sheetStateMachine() async {
         r.reader.state = .unsupported
         await r.flow.start(amountCents: 100); expectEqual(r.flow.phase, .failed(.readerUnavailable), "unsupported reader")
         r.reader.state = .ready; r.reader.outcomes = [.failure(NativeCardReaderError(message: "Reader busy"))]
-        await r.flow.start(amountCents: 100); expectEqual(r.flow.phase, .failed(.reader("Reader busy")), "a reader error surfaces its message")
+        r.reader.statusOutcomes = [.requiresPaymentMethod]
+        await r.flow.start(amountCents: 100); expectEqual(r.flow.phase, .failed(.reader("Reader busy")), "a reader error, once Stripe says nothing was charged, surfaces its message")
         expectEqual(r.service.calls.count, 1, "the failed collect did request one intent")
         let unavailable = NativeUnavailableCardReader()
         expectEqual(unavailable.state, .unsupported, "the unavailable reader is unsupported")
         let refused = try? await unavailable.collect(clientSecret: "x")
         expect(refused == nil, "the unavailable reader refuses to collect")
+        let probe = NativeTerminalPaymentIntent(paymentIntentID: "pi_1", clientSecret: "pi_1_secret_x", amountCents: 100)
+        expectEqual(await unavailable.status(of: probe), .unknown, "the unavailable reader can never claim an intent was not charged")
     }
     do { // Approved but the local save failed: charged, not lost
         let r = FlowRig(); r.reader.approveAmountCents = 12000; r.saveSucceeds = false
@@ -408,6 +447,180 @@ func sheetStateMachine() async {
             expect(a.amountDiffersFromRequest, "flags the difference")
         } else { expect(false, "approved") }
         expectEqual(entryJSON(r.saved[0])["amount"], .number(110), "the entry carries the collected amount")
+    }
+    await ambiguousReaderFailures()
+}
+
+/// Review findings 1-4 and 6 (Phase 18 stage A): the amount and the operation
+/// lock once a collect starts; a reader failure is resolved by asking Stripe
+/// before anything else; a gone sheet never collects; a reader that reports
+/// another intent is never booked; the description is frozen with the
+/// operation; amounts under the minimum are refused.
+@MainActor
+func ambiguousReaderFailures() async {
+    let readerStopped = NativeCardReaderError(message: "Reader busy")
+
+    do { // 1a. The first charge actually succeeded: exactly one booking, no second intent
+        let r = FlowRig(); r.reader.approveAmountCents = 4000
+        r.reader.outcomes = [.failure(readerStopped)]
+        r.reader.statusOutcomes = [.succeeded(amountCents: 12000)]
+        await r.flow.start(amountCents: 12000)
+        expectEqual(r.flow.phase, .approved(.init(paymentIntentID: "pi_3Fake000000000001", amountCents: 12000, recorded: true, amountDiffersFromRequest: false)),
+                    "a reader error whose charge succeeded is booked from the status read")
+        expectEqual(r.reader.statusChecks, ["pi_3Fake000000000001"], "the status of the intent that was collected was read")
+        await r.flow.start(amountCents: 4000)  // the owner types a different amount afterwards
+        expectEqual(r.service.calls.count, 1, "no second PaymentIntent after a charge that succeeded")
+        expectEqual(r.reader.collectedSecrets.count, 1, "the reader is not asked again")
+        expectEqual(r.saved.count, 1, "booked exactly once")
+        expect(r.flow.isAmountLocked, "an approved flow keeps the amount locked")
+    }
+    do { // 1b. Status unknown: locked, "Checking payment", never a new charge, until it resolves
+        let r = FlowRig()
+        r.reader.outcomes = [.failure(readerStopped)]
+        r.reader.statusOutcomes = [.unknown, .unknown, .succeeded(amountCents: 12000)]
+        await r.flow.start(amountCents: 12000)
+        expectEqual(r.flow.phase, .paymentUnconfirmed, "an unreadable outcome stays unconfirmed")
+        expect(r.flow.isAmountLocked && r.flow.lockedAmountCents == 12000, "the amount is locked at what was being charged")
+        expect(!r.flow.isBusy, "unconfirmed is not busy (Close and Check again stay available)")
+        await r.flow.start(amountCents: 4000)  // a different amount must not charge anything
+        expectEqual(r.flow.phase, .paymentUnconfirmed, "still unconfirmed after another start with a different amount")
+        expectEqual(r.service.calls.count, 1, "no new PaymentIntent while the outcome is unknown")
+        expectEqual(r.reader.collectedSecrets.count, 1, "no new collection while the outcome is unknown")
+        expectEqual(r.reader.statusChecks.count, 2, "start re-checks the status instead of charging")
+        expectEqual(r.saved.count, 0, "nothing booked while unknown")
+        await r.flow.checkAgain()
+        expectEqual(r.flow.phase, .approved(.init(paymentIntentID: "pi_3Fake000000000001", amountCents: 12000, recorded: true, amountDiffersFromRequest: false)), "Check again books it once the status is known")
+        expectEqual(r.saved.count, 1, "booked exactly once")
+        expectEqual(r.service.calls.count, 1, "still one intent")
+        await r.flow.checkAgain()
+        expectEqual(r.saved.count, 1, "a further check after approval books nothing")
+    }
+    do { // 1c. Definitively not charged (requires_payment_method): retry with the SAME operation; the amount stays locked
+        let r = FlowRig(); r.reader.approveAmountCents = 12000
+        r.reader.outcomes = [.failure(readerStopped)]
+        r.reader.statusOutcomes = [.requiresPaymentMethod]
+        await r.flow.start(amountCents: 12000)
+        expectEqual(r.flow.phase, .failed(.reader("Reader busy")), "not charged: the reader's message, retry allowed")
+        expect(r.flow.isAmountLocked && r.flow.lockedAmountCents == 12000, "the intent is still open, so the amount stays locked")
+        await r.flow.start(amountCents: 4000)  // a different amount is ignored: the locked one is charged
+        expectEqual(r.service.calls.map(\.amountCents), [12000, 12000], "the retry charges the locked amount, not the edited one")
+        expectEqual(r.service.calls.map(\.operationID), ["ttp_operation_1", "ttp_operation_1"], "the retry reuses the operation id")
+        expectEqual(r.operationCounter, 1, "no second operation minted while the old intent is alive")
+        if case .approved(let a) = r.flow.phase { expectEqual(a.amountCents, 12000, "retry approved at the locked amount") } else { expect(false, "retry approved") }
+        expectEqual(r.saved.count, 1, "booked once")
+    }
+    do { // 1d. Known dead (canceled): unlocked, and the next start mints a NEW operation, even for the same amount
+        let r = FlowRig(); r.reader.approveAmountCents = 4000
+        r.reader.outcomes = [.failure(readerStopped)]
+        r.reader.statusOutcomes = [.canceled]
+        await r.flow.start(amountCents: 12000)
+        expectEqual(r.flow.phase, .failed(.reader("Reader busy")), "a canceled intent: not charged")
+        expect(!r.flow.isAmountLocked && r.flow.lockedAmountCents == nil, "a dead intent unlocks the amount")
+        await r.flow.start(amountCents: 4000)
+        expectEqual(r.service.calls.map(\.operationID), ["ttp_operation_1", "ttp_operation_2"], "a new operation is minted only after the old intent is dead")
+        expectEqual(r.service.calls.map(\.amountCents), [12000, 4000], "the new operation takes the new amount")
+
+        let same = FlowRig(); same.reader.outcomes = [.failure(readerStopped)]; same.reader.statusOutcomes = [.canceled]
+        await same.flow.start(amountCents: 12000)
+        await same.flow.start(amountCents: 12000)
+        expectEqual(same.service.calls.map(\.operationID), ["ttp_operation_1", "ttp_operation_2"], "the old operation id would return the dead intent: a new one is minted")
+    }
+    do { // A clear card outcome is a known outcome: no lock
+        let r = FlowRig(); r.reader.outcomes = [.result(.declined(reason: "card_declined"))]
+        await r.flow.start(amountCents: 12000)
+        expect(!r.flow.isAmountLocked && r.flow.lockedAmountCents == nil, "a decline unlocks the amount")
+        expectEqual(r.reader.statusChecks.count, 0, "no status read for a clear card outcome")
+    }
+
+    do { // 2. Close while Preparing: the sheet is gone, so the reader is never asked
+        let r = FlowRig(); r.reader.approveAmountCents = 12000
+        r.service.suspendNext = true
+        let task = Task { await r.flow.start(amountCents: 12000) }
+        while !r.service.isSuspended { await Task.yield() }
+        expectEqual(r.flow.phase, .preparing, "preparing while the intent is created")
+        expect(r.flow.isBusy, "preparing is busy, so Close is disabled")
+        r.flow.close()
+        r.service.release()
+        await task.value
+        expectEqual(r.reader.collectedSecrets.count, 0, "a dismissed sheet never starts a collection")
+        expectEqual(r.saved.count, 0, "and books nothing")
+        await r.flow.start(amountCents: 12000)
+        expectEqual(r.service.calls.count, 1, "a closed flow cannot start again")
+        let cancelled = FlowRig(); cancelled.service.suspendNext = true
+        let task2 = Task { await cancelled.flow.start(amountCents: 12000) }
+        while !cancelled.service.isSuspended { await Task.yield() }
+        task2.cancel(); cancelled.service.release(); await task2.value
+        expectEqual(cancelled.reader.collectedSecrets.count, 0, "a cancelled start never reaches the reader either")
+    }
+
+    do { // 3a. The reader reports another PaymentIntent's id: never booked, locked
+        let r = FlowRig(); r.reader.approvePaymentIntentID = "pi_3Other000000000009"; r.reader.approveAmountCents = 12000
+        r.reader.statusOutcomes = [.requiresPaymentMethod, .succeeded(amountCents: 12000)]
+        await r.flow.start(amountCents: 12000)
+        expectEqual(r.flow.phase, .paymentUnconfirmed, "an id mismatch goes to the locked Checking payment state")
+        expectEqual(r.saved.count, 0, "the reader's id is never booked")
+        expect(r.flow.isAmountLocked, "locked")
+        await r.flow.checkAgain()
+        expectEqual(r.flow.phase, .paymentUnconfirmed, "our intent looking uncharged does not clear a mismatch: another intent may have been charged")
+        await r.flow.start(amountCents: 4000)
+        expectEqual(r.service.calls.count, 1, "no new charge after a mismatch")
+        await r.flow.checkAgain()
+        if case .approved(let a) = r.flow.phase { expectEqual(a.paymentIntentID, "pi_3Fake000000000001", "only the intent this flow created is ever booked") } else { expect(false, "approved after our intent succeeded") }
+        expectEqual(r.saved.map { entryJSON($0)["id"] }, [.string("stripe_pi_3Fake000000000001")], "booked under OUR intent id, once")
+    }
+    do { // 3b. A ledger entry that cannot be built is surfaced, not a dead Save button
+        let r = FlowRig(); r.reader.approveAmountCents = 0  // collected 0: nothing valid to book
+        await r.flow.start(amountCents: 12000)
+        guard case .approved(let a) = r.flow.phase else { expect(false, "approved"); return }
+        expect(!a.recorded && a.entryUnbuildable, "charged but unbuildable is flagged, so the sheet shows an error and no Save button")
+        r.flow.retryRecording()
+        expectEqual(r.saved.count, 0, "retry cannot invent an entry")
+        // A save that merely failed stays retryable and rebuilds the entry.
+        let t = FlowRig(); t.reader.approveAmountCents = 12000; t.saveSucceeds = false
+        await t.flow.start(amountCents: 12000)
+        if case .approved(let b) = t.flow.phase { expect(!b.recorded && !b.entryUnbuildable, "a failed save is retryable, not unbuildable") } else { expect(false, "approved") }
+        t.saveSucceeds = true; t.flow.retryRecording()
+        expectEqual(t.saved.count, 1, "the retry saves it")
+    }
+
+    do { // 4. The invoice number is frozen with the operation
+        let r = FlowRig(); r.reader.approveAmountCents = 12000
+        r.reader.outcomes = [.result(.declined(reason: "card_declined"))]
+        await r.flow.start(amountCents: 12000)
+        r.number = "INV-0042-EDITED"  // edited between retries
+        await r.flow.start(amountCents: 12000)
+        expectEqual(r.service.calls.map(\.invoiceNumber), ["INV-0042", "INV-0042"], "the retry sends the number frozen with the operation")
+        expectEqual(r.service.calls.map(\.operationID), ["ttp_operation_1", "ttp_operation_1"], "same operation")
+
+        let net = FlowRig(); net.service.failures = [.unavailable]
+        await net.flow.start(amountCents: 12000)
+        net.number = "CHANGED"
+        await net.flow.start(amountCents: 12000)
+        expectEqual(net.service.calls.map(\.invoiceNumber), ["INV-0042", "INV-0042"], "a retry after a network error is frozen too")
+
+        let fresh = FlowRig(); fresh.reader.outcomes = [.result(.canceled)]; fresh.reader.approveAmountCents = 4000
+        await fresh.flow.start(amountCents: 12000)
+        fresh.number = "INV-NEW"
+        await fresh.flow.start(amountCents: 4000)
+        expectEqual(fresh.service.calls.map(\.invoiceNumber), ["INV-0042", "INV-NEW"], "a new operation reads the number afresh")
+        let blank = FlowRig(); blank.number = "  "
+        await blank.flow.start(amountCents: 12000)
+        expectEqual(blank.service.calls.first?.invoiceNumber, nil, "a blank number is not sent")
+    }
+
+    do { // 6. Under the minimum: refused before any request, with the copy
+        let r = FlowRig()
+        await r.flow.start(amountCents: 49)
+        expectEqual(r.flow.phase, .failed(.belowMinimum), "49 cents is too small to take by card")
+        expectEqual(r.service.calls.count, 0, "no PaymentIntent requested")
+        r.balance = 30
+        await r.flow.start(amountCents: 30)
+        expectEqual(r.flow.phase, .failed(.belowMinimum), "a 30-cent balance cannot be taken by card")
+        r.balance = 12000; r.service.failures = [.belowMinimum]
+        await r.flow.start(amountCents: 100)
+        expectEqual(r.flow.phase, .failed(.belowMinimum), "the Worker's below_minimum maps to the same failure")
+        expectEqual(NativeCardPresentPayment.belowMinimumMessage, "That amount is too small to take by card. The minimum card payment is $0.50.", "below-minimum copy")
+        expect(!r.flow.isAmountLocked, "nothing locked: no collection started")
     }
 }
 

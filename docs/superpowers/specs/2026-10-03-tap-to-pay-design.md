@@ -1,7 +1,7 @@
 # In-Person Card Payment / Tap to Pay on iPhone (Roadmap Phase 18) — Design Spec
 
 **Date:** 2026-10-03
-**Status:** SCOPED. Builds on `feat/tap-to-pay`, stacked on the build-order branches before it (#1–#12, ending with `feat/esign-upgrade`). Owner go-ahead 2026-10-03: "continue working until all features on the roadmap are properly completed … implemented in the most beneficial way to the user". Code map verified 2026-10-03 against the `feat/quote-expiration` working tree, where Phase 32 is uncommitted. Nothing built. **The SDK, the entitlement, Info.plist permission strings, Stripe Dashboard changes, privacy-label changes and legal wording all wait for owner approval (§12).**
+**Status:** SCOPED. Builds on `feat/tap-to-pay`, stacked on the build-order branches before it (#1–#12, ending with `feat/esign-upgrade`). Owner go-ahead 2026-10-03: "continue working until all features on the roadmap are properly completed … implemented in the most beneficial way to the user". Code map verified 2026-10-03 against the `feat/quote-expiration` working tree, where Phase 32 is uncommitted. **Stage A is built on local `feat/tap-to-pay` (build record: §13); stages B and C are BLOCKED because the owner's Apple Developer account is an Individual account (§13).** **The SDK, the entitlement, Info.plist permission strings, Stripe Dashboard changes, privacy-label changes and legal wording all wait for owner approval (§12).**
 **Origin:** `docs/post-launch-feature-roadmap.md` Phase 18, build order #13 ("Existing Stripe, plus an Apple entitlement and the Stripe Terminal SDK")
 **Builds on:** Stripe Connect (Express accounts, direct charges), the payment ledger and union trigger (`2026-07-18-deposits-partial-payments-design.md`, `2026-07-18-server-side-ledger-merge-design.md`), the Connect webhook, the Phase 24–28 scoping notes (`2026-10-02-phase-24-28-scoping-notes.md`)
 **Build target:** the native SwiftUI app and the Worker. **No React Native changes.** No migration.
@@ -107,16 +107,16 @@ A shared helper `backend-workers/lib/stripe/connectedAccount.js` verifies the JW
 |---|---|---|
 | `POST /api/terminal/connection-token` | `stripe.terminal.connectionTokens.create({}, {stripeAccount})` and returns `{secret}`. Never cached server-side | 30/min per user |
 | `POST /api/terminal/location` | `{action: 'status' \| 'ensure', address?, displayName?}`. Lists Locations on the connected account and picks the one with `metadata.tradeready = 'default'`. `ensure` creates it from an owner-confirmed structured US address (`line1, line2?, city, state, postal_code, country:'US'`) and `display_name` = business name. Returns `{locationId, address}`. Stripe is the authority, so **no table and no migration** | 10/min per user |
-| `POST /api/terminal/payment-intent` | `{invoiceId, amount, localDate, operationId}`. See below | 10/min per user |
+| `POST /api/terminal/payment-intent` | `{invoiceId, amount, localDate, operationId, invoiceNumber?}`. `invoiceNumber` is optional: the device freezes the number with the operation so the description (a Stripe idempotency parameter) never changes between retries. See below | 10/min per user |
 
 `payment-intent` runs these steps in order:
-1. Fetch the invoice by `id` **and** `user_id` (not deleted). Return 404 if it is missing, or 422 `not_synced` with the payment-link copy ("Open the app while online…").
+1. Fetch the invoice by `id` **and** `user_id`. If there is no row, return 422 `not_synced` with the payment-link copy ("Open the app while online…"). Another owner's invoice and a missing one are the same empty result and the same answer, so the route cannot probe which ids exist. Only the caller's own deleted invoice returns 404 `not_found`.
 2. Compute `balanceDue` with `backend-workers/lib/paymentMath.js` (legacy fallback included).
-3. Require `0 < amount ≤ balanceDue + 0.005`, else 400 `amount_exceeds_balance` with the balance.
+3. Require `0.50 ≤ amount ≤ balanceDue + 0.005`. An amount under Stripe's USD minimum of 50 cents returns 400 `below_minimum` (checked first, no Stripe call); an amount over the balance returns 400 `amount_exceeds_balance` with the balance.
 4. Require `localDate` to match `YYYY-MM-DD` and fall within one day of the server's UTC date.
 5. Create the PaymentIntent with:
    - `amount` in cents, `currency: 'usd'`, `payment_method_types: ['card_present']`, `capture_method: 'automatic'`
-   - `description: 'Invoice <number>'`
+   - `description: 'Invoice <number>'`, where `<number>` is the request's `invoiceNumber` when it is a clean single line of at most 64 characters, else the server's copy
    - `metadata: { invoiceId, userId, localDate, source: 'tap_to_pay' }`
    - `{ stripeAccount, idempotencyKey: 'ttp_' + operationId }`
 6. Return `{paymentIntentId, clientSecret, amount}`.
@@ -253,7 +253,7 @@ Also return `charges_enabled` and `card_payments_capability` (`account.capabilit
 - **Worker** (`backend-workers/tests/terminal.test.cjs` with a stubbed Stripe client, plus root Jest `__tests__/stripeWebhookWorkers.test.js` under `TZ=America/Phoenix`):
   - Connection token on the right `stripeAccount`, 401 without a JWT, 422 with no connected account.
   - Location: list-pick by metadata, create-once, address validation.
-  - PaymentIntent: ownership (another owner's invoice gives 404), amount ≤ balance including the legacy fallback, a zero or negative amount, idempotency key from `operationId`, `localDate` window, exact metadata, `card_present`.
+  - PaymentIntent: ownership (another owner's invoice and a missing one are both 422 `not_synced`, identical bodies), amount ≤ balance including the legacy fallback, a zero or negative amount, `below_minimum` under 50 cents, the frozen invoice number, idempotency key from `operationId`, `localDate` window, exact metadata, `card_present`.
   - Webhook:
     - Characterization of the existing checkout path first, byte-for-byte.
     - A `tap_to_pay` PI is recorded once with the exact entry shape.
@@ -264,7 +264,7 @@ Also return `charges_enabled` and `card_payments_capability` (`account.capabilit
   - The ledger entry has exact keys, and both copies are byte-identical (shared fixture with the Worker test).
   - `recordCardPresentPayment` keeps `channel` and `stripePaymentIntentId` through an edit round-trip (adapter baseline merge).
   - Display labels ("Tap to Pay", "Card (online)", PDF "Card").
-  - Sheet state machine with `NativeFakeCardReader`: approved, declined, canceled, timed out, a retry that reuses `operationId`, a network failure before collect.
+  - Sheet state machine with `NativeFakeCardReader`: approved, declined, canceled, timed out, a retry that reuses `operationId`, a network failure before collect, an ambiguous reader failure resolved by a status read (succeeded books once, requires_payment_method retries the same operation, canceled mints a new one, unknown stays locked), close during "Preparing", a reader id that does not match the intent, a frozen invoice number, below the minimum.
   - Fees warning unchanged. Cash-basis and accountant-package totals include the entry.
 - **Stage B/C** (manual, recorded): simulated reader, then device test mode with physical test cards, then Apple's three recordings.
 - **Gates:** `sh native/run-all-domain-tests.sh`, the Release compile (with and without the flag), `cd backend-workers && npm test`, the targeted Jest under `TZ=America/Phoenix`, and `sh native/run-doc-reference-check.sh`.
@@ -325,3 +325,36 @@ Also return `charges_enabled` and `card_payments_capability` (`account.capabilit
 | Q6 | Terms and privacy wording | Approve additions to `terms.html` §4 and `privacy.html` §4 (in-person payments, Apple terms, location and device data to Stripe and Apple, refunds and disputes in Stripe)? | **Yes**, published with stage D |
 | Q7 | Apple's public-app marketing requirements | Will you send a launch email, show a launch splash and send a push announcing Tap to Pay, as Stripe's guide says Apple requires for public apps? | **Yes, minimal versions.** A What's-new splash and push already fit existing patterns. The email needs a list you have consent to email, so confirm that first |
 | Q8 | Charge model (inherited) | Accept direct charges on legacy Express for now, given Stripe's caution, and leave an Accounts v2 or destination-charge migration as a separate platform decision? | **Yes.** Don't fork Tap to Pay from links. Revisit with Phase 24, which touches the same surface |
+
+## 13. Build record (2026-10-04)
+
+### Stage A: what is built
+
+Stage A is built on local `feat/tap-to-pay` (not pushed, not deployed). The three Worker routes, the webhook branch, the `connect-status` fields, the ledger and display changes, the `NativeCardReader` protocol with the unavailable and fake readers, the capability gate, the invoice sheet and the Settings checklist exist. `NativeTapToPayEnvironment.resources` is nil in Release and the fake reader is `#if DEBUG`, so nothing is visible. There is no Stripe SDK, no entitlement and no `NativeStripeTerminalCardReader`.
+
+### Deviation: the root Jest file was not written
+
+§9 names a root Jest file, `__tests__/stripeWebhookWorkers.test.js`. It was **not written**. The Worker coverage (the three routes, the webhook `payment_intent.succeeded` branch, `connect-status`, route registration) lives in `backend-workers/tests/terminal.test.cjs`, run with `cd backend-workers && npm test`. The "characterization of the existing checkout path" line in §9 is therefore not met by a root Jest file.
+
+### Review fixes (stage A review)
+
+1. **Second charge after an ambiguous reader failure (P2).** Once a collect attempt starts, the amount and the operation are locked until that PaymentIntent's outcome is known. The lock lives in the pure state machine (`NativeTapToPayFlow`), so the host tests cover it. A clear card outcome (declined, canceled, timed out) unlocks. A reader error does not: the flow asks `NativeCardReader.status(of:)` first.
+   - **How the outcome is checked in stage A.** No Worker status route exists, so the requirement is on the reader protocol: `status(of:) async -> NativePaymentIntentStatus` (`succeeded(amountCents)`, `canceled`, `requiresPaymentMethod`, `unknown`). `NativeFakeCardReader` is scriptable for it. `NativeUnavailableCardReader` always returns `unknown`, which can never claim "not charged". The real implementation (`retrievePaymentIntent`) is stage B.
+   - `succeeded`: booked exactly once, from the intent the flow created. `canceled`: the intent is dead, so the amount unlocks and the next start mints a new operation. `requiresPaymentMethod`: not charged but still open, so a retry reuses the same operation and the amount stays locked. `unknown`: stays locked in "Checking payment" with "Check again", and never starts a charge.
+   - Closing the sheet while the outcome is unknown is allowed (a disabled Close would trap the owner offline). The sheet says the payment will appear after the next sync if it was charged. A new sheet opened afterwards starts a new operation, and the server's balance check only sees a charge once the webhook or sync has booked it. This residual is not closed in stage A.
+2. **Close while "Preparing" (P3).** Close is disabled while the flow is busy (preparing, collecting or checking). The flow has `close()`, called when the sheet disappears, and checks `closed` and task cancellation before it collects, so a dismissed sheet never starts a collection.
+3. **Reader's PaymentIntent id (P3).** A reader that reports an id other than the one the flow created is never booked: the flow locks in "Checking payment" for good. Only a `succeeded` status for the intent the flow created ends it, and then that intent's id is booked. If the ledger entry cannot be built (for example a zero collected amount) the approval is flagged `entryUnbuildable`: the sheet shows an error with the reference and no "Save to this invoice" button. A save that merely failed stays retryable (the entry is rebuilt on retry).
+4. **Invoice number edited between retries (P3).** The description is part of Stripe's idempotency parameters. The device freezes the invoice number with the operation (minted once, reused on retry) and sends it as the optional `invoiceNumber`; the Worker builds `Invoice <number>` from it and falls back to its own copy when it is absent or unusable. This adds one optional field to the §2.1 request body; the metadata is still server-authored.
+5. **Worker existence leak (P3).** The invoice is queried by `id` and `user_id`. Not mine and not there are both 422 `not_synced` with identical bodies. Only the caller's own deleted invoice returns 404.
+6. **Balance under $0.50 (P3).** The Worker returns 400 `below_minimum` (USD, 50 cents; `minimum: 0.5` in the body) before any Stripe call. The device makes the same check first (`NativeCardPresentPayment.minimumChargeCents`), and the sheet says the amount is too small to take by card.
+7. **Void analytics (P3).** `NativeAnalyticsEvent.paymentMethod` maps the labels "Card (online)" and "Tap to Pay" to the catalog's existing `stripe` value, so a voided Stripe payment keeps reporting as `stripe`. No new catalog value was added.
+
+Also added: a sync-merge test in `native/InitialSyncTests/main.swift` where the device copy and the webhook copy of the same `stripe_<pi>` entry both exist. One entry results and the invoice is credited once.
+
+### Stage C ordering (must hold)
+
+Before the flag is turned on for anyone, in this order: (1) `supabase/migrations/verify/20260718_invoice_payment_merge_verify.sql` passes, so the union trigger is applied (R8); (2) the Connect webhook endpoint is subscribed to `payment_intent.succeeded` (Q3); (3) only then is Tap to Pay enabled. A charge taken with the endpoint unsubscribed is booked only by the device copy (§5 residual), and the device-side ambiguity recovery in the review fixes above relies on the webhook copy as the backstop, so enabling first leaves a window with no second source of truth.
+
+### Stages B and C are blocked
+
+The owner stated on 2026-10-04 that the Apple Developer account is an **Individual** account. Per R1 and Q1, an Individual account is not eligible: the Tap to Pay entitlement (`com.apple.developer.proximity-reader.payment.acceptance`) needs an Organization account and a request by its Account Holder. Stage B (the SDK reader and the Info.plist strings) and stage C (the development entitlement and device testing) cannot proceed until the account is converted to an Organization, which needs a legal entity and a D-U-N-S number. Stage A stays useful on its own: the ledger display fix and the server-validated PaymentIntents.
