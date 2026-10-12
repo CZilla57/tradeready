@@ -40,6 +40,7 @@ eq()   { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got '$2', want '$3')"; 
 
 OWNER=11111111-1111-1111-1111-111111111111
 OTHER=22222222-2222-2222-2222-222222222222
+THIRD=33333333-3333-3333-3333-333333333333
 h() { echo "encode(extensions.digest('$1','sha256'),'hex')"; }
 op() { printf '00000000-0000-4000-8000-%012d' "$1"; }
 admin() { # action op_n key_id name scopes expiry_days hash_seed prefix grace [owner] [new_key_id]
@@ -73,7 +74,7 @@ pq -f "$MIG/verify/20261003_api_keys_verify.sql" >/dev/null 2>&1 && bad "verify 
 pq -q -f "$MIG/20261003_api_keys.sql" >/dev/null 2>&1 && ok "re-applying the migration drops the stale overload" || bad "re-apply after stale overload"
 pq -f "$MIG/verify/20261003_api_keys_verify.sql" >/dev/null 2>&1 && ok "verify SQL passes again" || bad "verify SQL after re-apply"
 
-pq -q -c "insert into auth.users values ('$OWNER'), ('$OTHER')" >/dev/null
+pq -q -c "insert into auth.users values ('$OWNER'), ('$OTHER'), ('$THIRD')" >/dev/null
 
 echo "== client sessions are refused"
 out=$(pq -c "set role anon; select public.api_key_authorize(repeat('a',64),'/v1/jobs',null)" 2>&1 >/dev/null)
@@ -202,6 +203,9 @@ eq "service_role inserts an ok row (identity column usable)" "$r" "ok"
 
 echo "== working-key ceiling: grace keys are bounded (5 live + 5 grace)"
 working() { pq -c "select count(*) from public.api_keys where user_id = '$OTHER' and revoked_at is null and (expires_at is null or expires_at > now())"; }
+# The ceiling checks mint more than the 20-a-day limit allows; shift this
+# owner's rows back a day between batches (order is preserved).
+age() { pq -q -c "update public.api_keys set created_at = created_at - interval '25 hours' where user_id = '$1'" >/dev/null; }
 graceing() { pq -c "select count(*) from public.api_keys where user_id = '$OTHER' and revoked_at is null and replaced_by is not null and expires_at > now()"; }
 keyid() { pq -c "select id from public.api_keys where operation_id = '$(op $1)'"; }
 pfx() { printf 'trk_%08d' "$1"; }
@@ -219,7 +223,9 @@ eq "the first key's grace was ended when its successor rotated" "$(pq -c "select
 # A revoked replacement leaves its predecessor in grace with no live successor.
 # Repeat create + rotate + revoke: the lineage rule alone would leave one
 # grace key per round; the hard bound keeps it at 5.
+age "$OTHER"
 for n in 1 2 3 4 5 6 7 8; do
+  [ "$n" = 5 ] && age "$OTHER"
   G=$((G+1)); admin create "'$(op $G)'" null "'Churn'" "array['jobs:read']" 90 "$(h g$G)" "'$(pfx $G)'" null "$OTHER" >/dev/null
   OLD=$(keyid $G); G=$((G+1))
   admin rotate "'$(op $G)'" "'$OLD'" null null null "$(h g$G)" "'$(pfx $G)'" 86400 "$OTHER" >/dev/null
@@ -228,6 +234,7 @@ done
 eq "create/rotate/revoke churn leaves at most 5 grace keys" "$(graceing)" "5"
 eq "and 6 working keys in all (1 live + 5 grace)" "$(working)" "6"
 # Fill the live cap, then rotate at the cap: rotate must not fail on it.
+age "$OTHER"
 for n in 1 2 3 4; do G=$((G+1)); admin create "'$(op $G)'" null "'Fill'" "array['jobs:read']" 90 "$(h g$G)" "'$(pfx $G)'" null "$OTHER" >/dev/null; done
 r=$(admin create "'$(op 200)'" null "'Over'" "array['jobs:read']" 90 "$(h g200)" "'$(pfx 200)'" null "$OTHER")
 eq "five live keys: a sixth create is key_limit" "$r" '{"ok": false, "error": "key_limit"}'
@@ -236,8 +243,30 @@ case "$r" in *'"decision": "committed"'*) ok "rotate at the live cap still commi
 eq "working keys never exceed 5 live + 5 grace" "$(pq -c "select (count(*) <= 10)::text from public.api_keys where user_id = '$OTHER' and revoked_at is null and (expires_at is null or expires_at > now())")" "true"
 eq "live keys stay at 5" "$(pq -c "select count(*) from public.api_keys where user_id = '$OTHER' and revoked_at is null and replaced_by is null and (expires_at is null or expires_at > now())")" "5"
 
+echo "== durable mint limit: 20 keys per owner per rolling 24 hours (create + rotate)"
+M=400
+for n in $(seq 1 19); do
+  M=$((M+1)); admin create "'$(op $M)'" null "'Mint $n'" "array['jobs:read']" 90 "$(h m$M)" "'$(pfx $M)'" null "$THIRD" >/dev/null
+  admin revoke null "'$(keyid $M)'" null null null null null null "$THIRD" >/dev/null
+done
+M=$((M+1)); r=$(admin create "'$(op $M)'" null "'Twentieth'" "array['jobs:read']" 90 "$(h m$M)" "'$(pfx $M)'" null "$THIRD")
+case "$r" in *'"decision": "committed"'*) ok "the 20th mint in 24 hours commits";; *) bad "20th mint: $r";; esac
+LAST=$M
+r=$(admin create "'$(op 499)'" null "'Too many'" "array['jobs:read']" 90 "$(h m499)" "'$(pfx 499)'" null "$THIRD")
+eq "a 21st create is mint_limit" "$r" '{"ok": false, "error": "mint_limit"}'
+r=$(admin rotate "'$(op 498)'" "'$(keyid $LAST)'" null null null "$(h m498)" "'$(pfx 498)'" 86400 "$THIRD")
+eq "a rotate over the limit is mint_limit (rotate mints too)" "$r" '{"ok": false, "error": "mint_limit"}'
+r=$(admin create "'$(op $LAST)'" null "'Twentieth'" "array['jobs:read']" 90 "$(h m$LAST)" "'$(pfx $LAST)'" null "$THIRD")
+case "$r" in *'"error": "already_completed"'*) ok "a replayed commit still answers already_completed at the limit";; *) bad "replay at limit: $r";; esac
+eq "revoked keys count toward the limit (20 rows in 24 h, 1 live)" "$(pq -c "select count(*) || '/' || count(*) filter (where revoked_at is null) from public.api_keys where user_id = '$THIRD'")" "20/1"
+r=$(admin create "'$(op 497)'" null "'Other owner'" "array['jobs:read']" 90 "$(h m497)" "'$(pfx 497)'" null "$OWNER")
+case "$r" in *mint_limit*) bad "another owner hit the mint limit: $r";; *'"ok": true'*|*key_limit*) ok "another owner is not mint-limited";; *) bad "other owner: $r";; esac
+age "$THIRD"
+r=$(admin create "'$(op 496)'" null "'Next day'" "array['jobs:read']" 90 "$(h m496)" "'$(pfx 496)'" null "$THIRD")
+case "$r" in *'"decision": "committed"'*) ok "after 24 hours the owner may mint again";; *) bad "next day: $r";; esac
+
 echo "== account deletion cascades"
-pq -q -c "delete from auth.users where id in ('$OWNER', '$OTHER')" >/dev/null
+pq -q -c "delete from auth.users where id in ('$OWNER', '$OTHER', '$THIRD')" >/dev/null
 eq "keys, log rows and counters are gone" "$(pq -c "select (select count(*) from public.api_keys) + (select count(*) from public.api_access_log) + (select count(*) from public.api_usage_counters)")" "0"
 
 echo

@@ -128,6 +128,14 @@ begin
      and p.prosrc like '%p_new_key_id is null%'
      and p.prosrc like '%(p_new_key_id, p_user_id, p_key_hash%';
   if n <> 1 then raise exception 'api_key_admin does not insert the Worker-chosen key id (p_new_key_id)'; end if;
+
+  -- 4d. Durable per-owner mint limit (20 per rolling 24 hours, create + rotate).
+  select count(*) into n from pg_proc p
+   where p.oid = to_regprocedure('public.api_key_admin(uuid,text,uuid,text,uuid,text,text[],integer,text,text,integer,uuid)')
+     and p.prosrc like '%c_max_mints_per_day constant integer := 20%'
+     and p.prosrc like '%interval ''24 hours''%'
+     and p.prosrc like '%''mint_limit''%';
+  if n <> 1 then raise exception 'api_key_admin lacks the durable mint limit (c_max_mints_per_day)'; end if;
   if to_regprocedure('public.api_key_admin(uuid,text,uuid,text,uuid,text,text[],integer,text,text,integer)') is not null then
     raise exception 'STALE api_key_admin overload without p_new_key_id still exists';
   end if;

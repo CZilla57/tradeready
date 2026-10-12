@@ -134,23 +134,33 @@ async function logApiRequest(env, { userId, keyId, route, status, ip }) {
 //   Positive cache. A sha256 hash that authorized (or was rate limited, which
 //   only a live key can be) on this isolate in the last 60 minutes. It never
 //   skips the RPC (revocation, expiry and rate limits are checked on every
-//   admitted request); it only lets the hash bypass the token buckets.
+//   admitted request); it only lets the hash bypass the token buckets. LRU
+//   (a hit moves it to the back), at most MAX_KNOWN_PER_OWNER per owner.
 //
 //   Token buckets. Any other key must take one token from its client's
-//   bucket, one from its OWNER's bucket and one from the isolate-wide bucket,
-//   synchronously before the RPC is awaited; if any is empty, 429 from memory
-//   with Retry-After to that window's end. All three are refunded only when
-//   the RPC answers `ok` or `rate_limited` (a live key), and only to the
-//   window that issued them. Denials, `unavailable` and transport failures
-//   keep them. So per isolate and window, hashes outside the positive cache
-//   cause at most CLIENT_TOKENS RPCs per client, OWNER_TOKENS per owner and
-//   GLOBAL_TOKENS in all, plus one more per refunded admission (a live key's
-//   answer gives its tokens back), whatever the RPC answers.
+//   bucket, one from its OWNER's bucket and one isolate token, synchronously
+//   before the RPC is awaited; if any is empty, 429 from memory with
+//   Retry-After to that window's end. The isolate token comes from the shared
+//   pool (GLOBAL_TOKENS) or, once that is empty, from the reserve
+//   (GLOBAL_RESERVE), but only for an owner that holds no token in the
+//   window: one cold admission per owner at a time. All tokens are refunded
+//   only when the RPC answers `ok` or `rate_limited` (a live key), and only
+//   to the window and pool that issued them. Denials, `unavailable` and
+//   transport failures keep them. So per isolate and window, hashes outside
+//   the positive cache cause at most CLIENT_TOKENS RPCs per client,
+//   OWNER_TOKENS per owner and GLOBAL_TOKENS + GLOBAL_RESERVE in all, plus
+//   one more per refunded admission, whatever the RPC answers (outages
+//   included; once an RPC fails in a window the reserve closes, so an outage
+//   sequence stays at GLOBAL_TOKENS). Owners whose dead keys empty the shared
+//   pool cannot lock out another owner until GLOBAL_RESERVE more owners have
+//   done the same.
 //
-//   Negative cache. The first revoked or expired answer for a hash is
-//   remembered for the rest of the key's life (both are one-way), and an
-//   unknown answer for DENIED_TTL_MS; either is answered from memory (no
-//   token, no RPC). The denial also removes the hash from the positive cache.
+//   Negative cache. The first unknown, revoked or expired answer for a
+//   tag-valid hash is final and remembered for the key's life, answered from
+//   memory (no token, no RPC). At most MAX_DENIED_PER_OWNER entries per owner
+//   (the owner's oldest goes first), so cycling a pool of one owner's dead
+//   keys larger than that only re-spends that owner's tokens. The denial
+//   also removes the hash from the positive cache.
 //
 //   Rate-limited shed. A `rate_limited` answer makes that hash 429 from memory
 //   (same Retry-After and X-RateLimit-*) until the reported reset.
@@ -161,8 +171,8 @@ async function logApiRequest(env, { userId, keyId, route, status, ip }) {
 //   touches a request that carries a tag-valid key.
 //
 // Every structure is its own capped Map that evicts its own oldest entries,
-// so churn in one cannot evict another. Evicting a client's or an owner's
-// bucket is harmless: the isolate-wide bucket still bounds the RPCs. The
+// so churn in one cannot evict another. Evicting a client's bucket is
+// harmless: the isolate-wide pools still bound the RPCs. The
 // in-flight map never evicts (its entries are all busy); at its cap a new
 // hash is refused. Only sha256 hex hashes enter the per-hash maps (anything
 // else is ignored), never a key.
@@ -172,27 +182,31 @@ const GUARD_LIMITS = Object.freeze({
   WINDOW_MS: 60_000, // one window for the token buckets and the junk counter
   CLIENT_TOKENS: 10, // RPCs per client per window, hashes outside the positive cache
   OWNER_TOKENS: 10, // RPCs per owner (from the key's tag) per window, hashes outside the positive cache
-  GLOBAL_TOKENS: 60, // RPCs per isolate per window, hashes outside the positive cache
+  GLOBAL_TOKENS: 60, // shared isolate pool per window, hashes outside the positive cache
+  GLOBAL_RESERVE: 240, // per window: an owner holding no token may take its first one here when the shared pool is empty
   KNOWN_IN_FLIGHT: 4, // concurrent RPCs per key hash (cached or not)
   KNOWN_TTL_MS: 3_600_000, // positive cache lifetime (refreshed by each success)
-  DENIED_TTL_MS: 60_000, // negative cache lifetime for an unknown key (revoked/expired: the key's life)
   JUNK_LIMIT: 20, // keyless/malformed/forged/query-key requests per client per window
   MAX_CLIENTS: 2000, // per-client token buckets
-  MAX_OWNERS: 2000, // per-owner token buckets
+  MAX_OWNERS: 10_000, // per-owner token buckets
   MAX_JUNK_CLIENTS: 2000, // per-client junk counters
-  MAX_KNOWN_KEYS: 1000, // positive cache
+  MAX_KNOWN_KEYS: 10_000, // positive cache
+  MAX_KNOWN_PER_OWNER: 10, // positive-cache entries per owner (an owner has at most 10 working keys)
   MAX_IN_FLIGHT_KEYS: 1000, // busy known hashes at once (an entry exists only while busy; refused past it)
-  MAX_DENIED_KEYS: 2000, // negative cache
+  MAX_DENIED_KEYS: 10_000, // negative cache (dead keys)
+  MAX_DENIED_PER_OWNER: 100, // negative-cache entries per owner; past it the owner's oldest goes
   MAX_LIMITED_KEYS: 2000, // rate-limited shed
 });
 
 const HASH_RE = /^[0-9a-f]{64}$/;
 const NO_IP_CLIENT = 'no-ip';
 const NEGATIVE_ERRORS = DENIED_ERRORS;
-// One-way denials: a revoked key is never un-revoked and an expired key never
-// un-expires, so these are remembered for the rest of the key's life (until
-// evicted at the map cap). An unknown hash is remembered for DENIED_TTL_MS.
-const DEAD_ERRORS = new Set(['key_revoked', 'key_expired']);
+// Every denial of a TAG-VALID key is one-way: a revoked key is never
+// un-revoked, an expired key never un-expires, and an unknown hash never
+// appears later (its id came from the Worker CSPRNG at mint, so an absent row
+// was deleted with its account or never committed, and its secret was never
+// handed out). All three are remembered for the key's life, until evicted.
+const DEAD_ERRORS = new Set(['key_revoked', 'key_expired', 'invalid_key']);
 
 // Expands an IPv6 address to its /64 prefix ("2001:db8:1:2::/64"); an
 // IPv4-mapped address is its IPv4 client. Null when it does not parse.
@@ -235,18 +249,59 @@ function setBounded(map, key, value, max, isExpired) {
   while (map.size > max) map.delete(map.keys().next().value);
 }
 
+// A capped map whose entries belong to owners: at most maxPerOwner entries per
+// owner (the owner's oldest goes first), then at most maxTotal in all
+// (expired first, then oldest). Iteration order is write order, so a re-set
+// moves an entry to the back (LRU). An entry without an owner is only under
+// the total cap.
+function ownedMap(maxTotal, maxPerOwner) {
+  const entries = new Map(); // key -> { value, owner }
+  const byOwner = new Map(); // owner -> Set(key), oldest first
+  function remove(key) {
+    const e = entries.get(key);
+    if (!e) return;
+    entries.delete(key);
+    const set = e.owner ? byOwner.get(e.owner) : null;
+    if (set) {
+      set.delete(key);
+      if (set.size === 0) byOwner.delete(e.owner);
+    }
+  }
+  return {
+    get: (key) => entries.get(key),
+    remove,
+    size: () => entries.size,
+    set(key, value, owner, isExpired) {
+      remove(key);
+      const o = typeof owner === 'string' && owner !== '' ? owner : null;
+      entries.set(key, { value, owner: o });
+      if (o) {
+        let set = byOwner.get(o);
+        if (!set) byOwner.set(o, (set = new Set()));
+        set.add(key);
+        while (set.size > maxPerOwner) remove(set.values().next().value);
+      }
+      if (entries.size <= maxTotal) return;
+      for (const [k, e] of entries) if (k !== key && isExpired(e.value)) remove(k);
+      while (entries.size > maxTotal) remove(entries.keys().next().value);
+    },
+  };
+}
+
 function createApiGuard(overrides = {}) {
   const L = { ...GUARD_LIMITS, ...overrides };
   const clients = new Map(); // client -> { start, used } token bucket
   const owners = new Map(); // owner id -> { start, used } token bucket
   const junk = new Map(); // client -> { start, count }
-  const knownKeys = new Map(); // key hash -> expiry ms (positive cache)
+  const knownKeys = ownedMap(L.MAX_KNOWN_KEYS, L.MAX_KNOWN_PER_OWNER); // key hash -> expiry ms (positive cache, LRU)
   const inFlight = new Map(); // key hash -> { count } while its RPCs run
-  const deniedKeys = new Map(); // key hash -> { until, error } (negative cache)
+  const deniedKeys = ownedMap(L.MAX_DENIED_KEYS, L.MAX_DENIED_PER_OWNER); // key hash -> error (negative cache, for life)
   const limitedKeys = new Map(); // key hash -> { until, rate }
   // A window is an object; when it ends it is REPLACED, never reset, so a
   // late refund can tell whether the window that issued its token is current.
-  let globalWindow = { start: -Infinity, used: 0 };
+  // `used` counts the shared pool, `reserved` the reserve (see takeTokens);
+  // `failed` closes the reserve once an RPC in the window failed.
+  let globalWindow = { start: -Infinity, used: 0, reserved: 0, failed: false };
 
   const current = (w, now) => Boolean(w) && now - w.start < L.WINDOW_MS;
   const secondsLeft = (w, now) => Math.max(1, Math.ceil((w.start + L.WINDOW_MS - now) / 1000));
@@ -265,9 +320,22 @@ function createApiGuard(overrides = {}) {
       return 0;
     },
 
+    // Read-only: the seconds this client's junk counter would answer 429 for
+    // right now, or 0. Counts nothing.
+    junkBlocked(client, now = Date.now()) {
+      const w = junk.get(client);
+      if (!current(w, now) || w.count < L.JUNK_LIMIT) return 0;
+      return secondsLeft(w, now);
+    },
+
     // For a hash outside the positive cache, before the RPC: one token from
     // the client's bucket, one from the owner's (when an owner is given) and
-    // one from the isolate's, or none.
+    // one isolate token, or none. The isolate token comes from the shared
+    // pool (GLOBAL_TOKENS); when that is empty, an owner that holds no token
+    // in this window may take its first one from the reserve
+    // (GLOBAL_RESERVE). So owners that spend the shared pool on denied keys
+    // cannot lock another owner out, and the isolate still admits at most
+    // GLOBAL_TOKENS + GLOBAL_RESERVE per window (plus refunded admissions).
     //   { ticket }       admitted; pass the ticket to refundTokens
     //   { retryAfter }   a bucket is empty; answer 429
     takeTokens(client, now = Date.now(), owner = null) {
@@ -278,28 +346,31 @@ function createApiGuard(overrides = {}) {
         o = owners.get(owner);
         if (!current(o, now)) o = { start: now, used: 0 };
       }
-      if (!current(globalWindow, now)) globalWindow = { start: now, used: 0 };
+      if (!current(globalWindow, now)) globalWindow = { start: now, used: 0, reserved: 0, failed: false };
       const g = globalWindow;
       const clientEmpty = c.used >= L.CLIENT_TOKENS;
       const ownerEmpty = Boolean(o) && o.used >= L.OWNER_TOKENS;
-      const globalEmpty = g.used >= L.GLOBAL_TOKENS;
-      if (clientEmpty || ownerEmpty || globalEmpty) {
+      let pool = null;
+      if (g.used < L.GLOBAL_TOKENS) pool = 'shared';
+      else if (o && o.used === 0 && !g.failed && g.reserved < L.GLOBAL_RESERVE) pool = 'reserve';
+      if (clientEmpty || ownerEmpty || !pool) {
         return {
           retryAfter: Math.max(
             clientEmpty ? secondsLeft(c, now) : 0,
             ownerEmpty ? secondsLeft(o, now) : 0,
-            globalEmpty ? secondsLeft(g, now) : 0
+            pool ? 0 : secondsLeft(g, now)
           ),
         };
       }
       c.used += 1;
-      g.used += 1;
+      if (pool === 'shared') g.used += 1;
+      else g.reserved += 1;
       setBounded(clients, client, c, L.MAX_CLIENTS, (v) => !current(v, now));
       if (o) {
         o.used += 1;
         setBounded(owners, owner, o, L.MAX_OWNERS, (v) => !current(v, now));
       }
-      return { ticket: { client, clientWindow: c, owner: o ? owner : null, ownerWindow: o, globalWindow: g, refunded: false } };
+      return { ticket: { client, clientWindow: c, owner: o ? owner : null, ownerWindow: o, globalWindow: g, pool, refunded: false } };
     },
 
     // The RPC called the key live (`ok` or `rate_limited`): give every token
@@ -313,12 +384,25 @@ function createApiGuard(overrides = {}) {
       const o = ticket.ownerWindow;
       if (o && owners.get(ticket.owner) === o && o.used > 0) o.used -= 1;
       const g = ticket.globalWindow;
-      if (globalWindow === g && g.used > 0) g.used -= 1;
+      if (globalWindow === g) {
+        if (ticket.pool === 'reserve') {
+          if (g.reserved > 0) g.reserved -= 1;
+        } else if (g.used > 0) g.used -= 1;
+      }
     },
 
-    // Test hook: isolate tokens spent in the current window.
+    // An RPC failed (`unavailable`, transport error): close the reserve for
+    // the rest of this window. The reserve exists so denied keys cannot lock
+    // other owners out; it is not a way to send more traffic into an outage,
+    // so an outage stays at GLOBAL_TOKENS per window (plus reserve tokens
+    // already taken before the first failure came back).
+    rpcFailed(now = Date.now()) {
+      if (current(globalWindow, now)) globalWindow.failed = true;
+    },
+
+    // Test hook: isolate tokens (shared + reserve) spent in the current window.
     globalTokensUsed(now = Date.now()) {
-      return current(globalWindow, now) ? globalWindow.used : 0;
+      return current(globalWindow, now) ? globalWindow.used + globalWindow.reserved : 0;
     },
 
     // For any tag-valid hash: a slot, or null when KNOWN_IN_FLIGHT of its RPCs
@@ -349,31 +433,36 @@ function createApiGuard(overrides = {}) {
     },
 
     // Positive cache (never skips the RPC; it only bypasses the buckets).
+    // LRU: a hit moves the entry to the back without extending its TTL, so a
+    // key in active use is the last to be evicted; and one owner holds at
+    // most MAX_KNOWN_PER_OWNER entries.
     isKnownKey(keyHash, now = Date.now()) {
       if (!HASH_RE.test(keyHash)) return false;
-      const until = knownKeys.get(keyHash);
-      if (!until) return false;
-      if (until <= now) {
-        knownKeys.delete(keyHash);
+      const e = knownKeys.get(keyHash);
+      if (!e) return false;
+      if (e.value <= now) {
+        knownKeys.remove(keyHash);
         return false;
       }
+      knownKeys.set(keyHash, e.value, e.owner, (until) => until <= now);
       return true;
     },
-    knownKey(keyHash, now = Date.now()) {
+    knownKey(keyHash, now = Date.now(), owner = null) {
       if (!HASH_RE.test(keyHash)) return;
-      deniedKeys.delete(keyHash);
-      setBounded(knownKeys, keyHash, now + L.KNOWN_TTL_MS, L.MAX_KNOWN_KEYS, (until) => until <= now);
+      deniedKeys.remove(keyHash);
+      knownKeys.set(keyHash, now + L.KNOWN_TTL_MS, owner, (until) => until <= now);
     },
 
-    // The RPC said unknown, revoked or expired: answer it from memory (an
-    // unknown hash for DENIED_TTL_MS, a revoked or expired one for the rest
-    // of its life), and drop it from the positive cache.
-    deniedKey(keyHash, error, now = Date.now()) {
+    // The RPC said unknown, revoked or expired. For a tag-valid key every one
+    // of these is final, so it is answered from memory for the key's life
+    // (until evicted: per owner past MAX_DENIED_PER_OWNER, then oldest past
+    // MAX_DENIED_KEYS), and dropped from the positive cache. An evicted key
+    // that comes back is an unseen key again and spends its owner's tokens.
+    deniedKey(keyHash, error, now = Date.now(), owner = null) {
       if (!HASH_RE.test(keyHash)) return;
-      knownKeys.delete(keyHash);
-      if (!NEGATIVE_ERRORS.has(error)) return;
-      const until = DEAD_ERRORS.has(error) ? Infinity : now + L.DENIED_TTL_MS;
-      setBounded(deniedKeys, keyHash, { until, error }, L.MAX_DENIED_KEYS, (v) => v.until <= now);
+      knownKeys.remove(keyHash);
+      if (!NEGATIVE_ERRORS.has(error) || !DEAD_ERRORS.has(error)) return;
+      deniedKeys.set(keyHash, error, owner, () => false);
     },
 
     // The RPC said this key is over its limit; `retryAfter` is whole seconds
@@ -397,10 +486,7 @@ function createApiGuard(overrides = {}) {
         limitedKeys.delete(keyHash);
       }
       const denied = deniedKeys.get(keyHash);
-      if (denied) {
-        if (denied.until > now) return { error: denied.error };
-        deniedKeys.delete(keyHash);
-      }
+      if (denied) return { error: denied.value };
       return null;
     },
 
@@ -410,9 +496,9 @@ function createApiGuard(overrides = {}) {
         clients: clients.size,
         owners: owners.size,
         junk: junk.size,
-        knownKeys: knownKeys.size,
+        knownKeys: knownKeys.size(),
         inFlight: inFlight.size,
-        deniedKeys: deniedKeys.size,
+        deniedKeys: deniedKeys.size(),
         limitedKeys: limitedKeys.size,
       };
     },

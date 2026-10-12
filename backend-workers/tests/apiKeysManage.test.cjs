@@ -15,7 +15,7 @@ const assert = require('node:assert/strict');
 const { apiKeysManageCore, toKeySummary, requestHash } = require('../lib/api/keyAdmin.js');
 const keys = require('../lib/api/keys.js');
 
-const TAG_SECRET = 'tag-secret-for-manage-tests-0123456789';
+const TAG_SECRET = 'tag-secret-for-manage-tests-0123456789-abcdefgh';
 const ENV = { SUPABASE_URL: 'https://supa.test', SUPABASE_SERVICE_ROLE_KEY: 'srk', SUPABASE_ANON_KEY: 'anon', API_KEY_TAG_SECRET: TAG_SECRET };
 const OWNER = '11111111-1111-4111-8111-111111111111';
 const KEY_ID = '22222222-2222-4222-8222-222222222222';
@@ -106,7 +106,7 @@ describe('create', () => {
     const orig = console.error;
     console.error = (...a) => errs.push(a.join(' '));
     try {
-      for (const env of [{ ...ENV, API_KEY_TAG_SECRET: undefined }, { ...ENV, API_KEY_TAG_SECRET: 'x'.repeat(31) }]) {
+      for (const env of [{ ...ENV, API_KEY_TAG_SECRET: undefined }, { ...ENV, API_KEY_TAG_SECRET: 'x'.repeat(43) }]) {
         for (const body of [createBody(), { action: 'rotate', operationId: OP, keyId: KEY_ID }]) {
           const calls = backend({ rpc: [{ ok: true, key: keyRow({ id: MINTED_ID }) }] });
           const out = await apiKeysManageCore(env, { userId: OWNER, body, nowMs: NOW, randomBytes });
@@ -171,6 +171,12 @@ describe('create', () => {
     assert.deepEqual(await run(createBody()), { status: 409, json: { error: 'key_limit', maxLiveKeys: 5 } });
     backend({ rpc: [{ ok: false, error: 'operation_conflict' }] });
     assert.deepEqual(await run(createBody()), { status: 409, json: { error: 'operation_conflict' } });
+    // The durable mint limit (20 per owner per rolling 24 h) keeps the app's
+    // existing 429 contract; no secret is returned.
+    backend({ rpc: [{ ok: false, error: 'mint_limit' }] });
+    assert.deepEqual(await run(createBody()), { status: 429, json: { error: 'rate_limited' } });
+    backend({ rpc: [{ ok: false, error: 'mint_limit' }] });
+    assert.deepEqual(await run({ action: 'rotate', operationId: OP, keyId: KEY_ID }), { status: 429, json: { error: 'rate_limited' } });
     backend({ rpc: [{ ok: false, error: 'invalid_args' }] });
     assert.deepEqual(await run(createBody()), { status: 400, json: { error: 'invalid_request' } });
     backend({ rpc: [{ message: 'function not found' }], rpcStatus: 404 });

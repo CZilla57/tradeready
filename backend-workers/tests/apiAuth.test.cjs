@@ -14,6 +14,7 @@ const { OPENAPI_DOCUMENT, API_BASE_URL, COMPONENT, toOpenApiPath } = require('..
 const { FIELDS, RESOURCE_NAMES } = require('../lib/api/resources.js');
 
 const SECRET = 'cursor-secret-for-tests';
+const sha = (v) => createHash('sha256').update(v).digest('hex');
 const realFetch = global.fetch;
 afterEach(() => { global.fetch = realFetch; });
 
@@ -22,7 +23,7 @@ function jsonRes(body, status = 200) {
 }
 
 describe('key format (§2): self-verifying tagged keys', () => {
-  const TAG_SECRET = 'tag-secret-for-tests-0123456789abcdef';
+  const TAG_SECRET = 'tag-secret-for-tests-0123456789abcdef-0123456789';
   const KEY_ID = '22222222-2222-4222-8222-222222222222';
   const OWNER = '11111111-1111-4111-8111-111111111111';
   const BODY = Buffer.alloc(32, 0xab);
@@ -51,7 +52,7 @@ describe('key format (§2): self-verifying tagged keys', () => {
 
   test('minting refuses a missing or short secret, bad ids and wrong-size bytes', async () => {
     await assert.rejects(keys.mintApiKey(undefined, { keyId: KEY_ID, ownerId: OWNER, randomBytes: BODY }), /API_KEY_TAG_SECRET/);
-    await assert.rejects(keys.mintApiKey('x'.repeat(31), { keyId: KEY_ID, ownerId: OWNER, randomBytes: BODY }), /API_KEY_TAG_SECRET/);
+    await assert.rejects(keys.mintApiKey('x'.repeat(43), { keyId: KEY_ID, ownerId: OWNER, randomBytes: BODY }), /API_KEY_TAG_SECRET/);
     await assert.rejects(mint({ keyId: 'nope' }), /UUID/);
     await assert.rejects(mint({ ownerId: undefined }), /UUID/);
     await assert.rejects(mint({ randomBytes: Buffer.alloc(16) }), /32 random bytes/);
@@ -76,8 +77,8 @@ describe('key format (§2): self-verifying tagged keys', () => {
     // Another owner's id or key id under the same body and tag.
     assert.equal(await keys.verifyApiKey(TAG_SECRET, spell(Buffer.concat([bytes.subarray(0, 16), Buffer.alloc(16, 9), bytes.subarray(32)]))), null);
     // Right shape, wrong secret.
-    assert.equal(await keys.verifyApiKey(TAG_SECRET, oracle('another-secret-0123456789abcdef!!', KEY_ID, OWNER, BODY)), null);
-    assert.equal(await keys.verifyApiKey('another-secret-0123456789abcdef!!', key), null);
+    assert.equal(await keys.verifyApiKey(TAG_SECRET, oracle('another-secret-0123456789abcdef-0123456789abcdef', KEY_ID, OWNER, BODY)), null);
+    assert.equal(await keys.verifyApiKey('another-secret-0123456789abcdef-0123456789abcdef', key), null);
     // The last character carries 2 spare bits: a second spelling of the same bytes is refused.
     const last = key[key.length - 1];
     const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
@@ -94,11 +95,14 @@ describe('key format (§2): self-verifying tagged keys', () => {
     assert.equal(await keys.verifyApiKey('short', key), null);
   });
 
-  test('the tag secret is read from env and must be at least 32 characters', () => {
+  test('the tag secret is read from env and must be at least 44 characters (32 bytes in base64)', () => {
+    assert.equal(keys.MIN_TAG_SECRET_CHARS, 44);
+    assert.equal(Buffer.alloc(32).toString('base64').length, 44);
     assert.equal(keys.tagSecretFrom({}), null);
     assert.equal(keys.tagSecretFrom(undefined), null);
-    assert.equal(keys.tagSecretFrom({ API_KEY_TAG_SECRET: 'x'.repeat(31) }), null);
-    assert.equal(keys.tagSecretFrom({ API_KEY_TAG_SECRET: 'x'.repeat(32) }), 'x'.repeat(32));
+    assert.equal(keys.tagSecretFrom({ API_KEY_TAG_SECRET: 'x'.repeat(32) }), null);
+    assert.equal(keys.tagSecretFrom({ API_KEY_TAG_SECRET: 'x'.repeat(43) }), null);
+    assert.equal(keys.tagSecretFrom({ API_KEY_TAG_SECRET: 'x'.repeat(44) }), 'x'.repeat(44));
     assert.equal(keys.tagSecretFrom({ API_KEY_TAG_SECRET: 42 }), null);
   });
 
@@ -348,9 +352,10 @@ describe('request guard: windows and limits (§14.4a)', () => {
 
   test('the numbers live in one place', () => {
     assert.deepEqual({ ...GUARD_LIMITS }, {
-      WINDOW_MS: 60_000, CLIENT_TOKENS: 10, OWNER_TOKENS: 10, GLOBAL_TOKENS: 60, KNOWN_IN_FLIGHT: 4, KNOWN_TTL_MS: 3_600_000,
-      DENIED_TTL_MS: 60_000, JUNK_LIMIT: 20, MAX_CLIENTS: 2000, MAX_OWNERS: 2000, MAX_JUNK_CLIENTS: 2000, MAX_KNOWN_KEYS: 1000,
-      MAX_IN_FLIGHT_KEYS: 1000, MAX_DENIED_KEYS: 2000, MAX_LIMITED_KEYS: 2000,
+      WINDOW_MS: 60_000, CLIENT_TOKENS: 10, OWNER_TOKENS: 10, GLOBAL_TOKENS: 60, GLOBAL_RESERVE: 240, KNOWN_IN_FLIGHT: 4,
+      KNOWN_TTL_MS: 3_600_000, JUNK_LIMIT: 20, MAX_CLIENTS: 2000, MAX_OWNERS: 10_000, MAX_JUNK_CLIENTS: 2000,
+      MAX_KNOWN_KEYS: 10_000, MAX_KNOWN_PER_OWNER: 10, MAX_IN_FLIGHT_KEYS: 1000, MAX_DENIED_KEYS: 10_000,
+      MAX_DENIED_PER_OWNER: 100, MAX_LIMITED_KEYS: 2000,
     });
     assert.ok(Object.isFrozen(GUARD_LIMITS));
     assert.equal(createApiGuard().limits.CLIENT_TOKENS, 10);
@@ -449,9 +454,9 @@ describe('request guard: windows and limits (§14.4a)', () => {
     assert.ok(g.takeInFlight(H2), 'room again once H1 is idle');
   });
 
-  test('negative cache: revoked/expired for the key\'s life, unknown for 60 s, each with its own code; leaves the positive cache', () => {
-    // Changed 2026-10-12 (§14.4a #5): revoked and expired are one-way, so they
-    // no longer lapse after 60 s.
+  test('negative cache: unknown, revoked and expired for the key\'s life, each with its own code; leaves the positive cache', () => {
+    // Changed 2026-10-12 (§14.4a #5, #6): every denial of a tag-valid key is
+    // final, so none lapses after 60 s (unknown did until round 6).
     const g = createApiGuard();
     const t0 = 5_000_000;
     const YEAR = 365 * 86_400_000;
@@ -465,12 +470,64 @@ describe('request guard: windows and limits (§14.4a)', () => {
     assert.deepEqual(g.keyShed(H2, t0 + 10 * YEAR), { error: 'key_expired' });
     g.deniedKey('c'.repeat(64), 'invalid_key', t0);
     assert.deepEqual(g.keyShed('c'.repeat(64), t0), { error: 'invalid_key' });
-    assert.deepEqual(g.keyShed('c'.repeat(64), t0 + 59_999), { error: 'invalid_key' });
-    assert.equal(g.keyShed('c'.repeat(64), t0 + 60_000), null, 'unknown: 60 s only');
+    assert.deepEqual(g.keyShed('c'.repeat(64), t0 + 10 * YEAR), { error: 'invalid_key' }, 'unknown: for life too');
     g.deniedKey('d'.repeat(64), 'something_else', t0);
     assert.equal(g.keyShed('d'.repeat(64), t0), null);
     g.knownKey(H2, t0 + 5);
     assert.equal(g.keyShed(H2, t0 + 6), null, 'a success clears the negative entry');
+  });
+
+  test('reserve: once the shared pool is empty, an owner holding no token still gets one; 300 per window in all', () => {
+    const g = createApiGuard();
+    const t0 = 6_000_000;
+    const owner = (i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
+    // 6 owners spend the shared pool (60) on keys the RPC denies (no refund).
+    for (let o = 0; o < 6; o++) for (let i = 0; i < 10; i++) assert.ok(g.takeTokens(`ip-${o}-${i}`, t0, owner(o)).ticket);
+    assert.equal(g.globalTokensUsed(t0), 60);
+    assert.ok(g.takeTokens('ip-x', t0, owner(0)).retryAfter, 'a spent owner gets nothing more');
+    assert.ok(g.takeTokens('ip-x', t0).retryAfter, 'no owner, no reserve');
+    // A fresh owner: its first token comes from the reserve; its second waits.
+    const first = g.takeTokens('ip-v', t0, owner(100));
+    assert.equal(first.ticket.pool, 'reserve');
+    assert.deepEqual(g.takeTokens('ip-v2', t0 + 30_000, owner(100)), { retryAfter: 30 });
+    // A live answer returns it to the reserve, so the owner may go again.
+    g.refundTokens(first.ticket);
+    assert.equal(g.takeTokens('ip-v3', t0, owner(100)).ticket.pool, 'reserve');
+    // The reserve itself is finite: 239 more owners, then nobody new.
+    for (let i = 0; i < 239; i++) assert.ok(g.takeTokens(`ip-r${i}`, t0, owner(1000 + i)).ticket);
+    assert.equal(g.globalTokensUsed(t0), 300);
+    assert.ok(g.takeTokens('ip-late', t0, owner(5000)).retryAfter, 'hard isolate bound: 60 + 240 per window');
+    assert.ok(g.takeTokens('ip-late', t0 + 60_000, owner(5000)).ticket, 'a new window');
+  });
+
+  test('negative cache per owner: one owner\'s churn evicts only its own oldest entries', () => {
+    const g = createApiGuard({ MAX_DENIED_PER_OWNER: 3, MAX_DENIED_KEYS: 100 });
+    const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    g.deniedKey(sha('b0'), 'key_revoked', 1, B);
+    for (let i = 0; i < 50; i++) g.deniedKey(sha(`a${i}`), 'key_revoked', 1, A);
+    assert.equal(g.sizes().deniedKeys, 4, '3 of A + 1 of B');
+    assert.deepEqual(g.keyShed(sha('b0'), 2), { error: 'key_revoked' }, "B's entry survives A's churn");
+    assert.deepEqual(g.keyShed(sha('a49'), 2), { error: 'key_revoked' });
+    assert.equal(g.keyShed(sha('a0'), 2), null, "A's oldest went");
+  });
+
+  test('positive cache: LRU on hit, and at most 10 entries per owner', () => {
+    const g = createApiGuard({ MAX_KNOWN_KEYS: 3 });
+    const owner = (i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
+    g.knownKey(sha('victim'), 0, owner(0));
+    g.knownKey(sha('k1'), 1, owner(1));
+    g.knownKey(sha('k2'), 2, owner(2));
+    assert.equal(g.isKnownKey(sha('victim'), 3), true); // a hit moves it to the back
+    g.knownKey(sha('k3'), 4, owner(3));
+    assert.equal(g.isKnownKey(sha('k1'), 5), false, 'the least recently used went');
+    assert.equal(g.isKnownKey(sha('victim'), 5), true);
+    const h = createApiGuard();
+    for (let i = 0; i < 25; i++) h.knownKey(sha(`same-owner-${i}`), i, owner(9));
+    h.knownKey(sha('other'), 30, owner(8));
+    assert.equal(h.sizes().knownKeys, 11, '10 of one owner + 1');
+    assert.equal(h.isKnownKey(sha('same-owner-14'), 31), false);
+    assert.equal(h.isKnownKey(sha('same-owner-15'), 31), true);
   });
 
   test('rate-limited hash: shed until the reported reset, with the stored rate headers', () => {

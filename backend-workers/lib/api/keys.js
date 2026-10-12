@@ -36,9 +36,11 @@ const DISPLAY_PREFIX_CHARS = 12; // "trk_" + 8
 const KEY_RE = /^trk_[A-Za-z0-9_-]{107}$/;
 // Domain separation: this secret signs API keys and nothing else.
 const TAG_DOMAIN = Buffer.from('tradeready-api-key-v1\0', 'utf8');
-// API_KEY_TAG_SECRET shorter than this counts as unset (fail closed). The
-// owner generates it from at least 32 random bytes (base64: 44+ characters).
-const MIN_TAG_SECRET_CHARS = 32;
+// API_KEY_TAG_SECRET shorter than this counts as unset (fail closed): 44
+// characters is 32 random bytes in base64, the minimum the owner generates
+// (`openssl rand -base64 48` gives 64). Length is all the Worker can check;
+// the entropy is the owner's to supply.
+const MIN_TAG_SECRET_CHARS = 44;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Canonical order: every response and every stored array uses it.

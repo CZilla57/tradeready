@@ -33,7 +33,7 @@ const INTRUDER = '99999999-9999-4999-8999-999999999999';
 const KEY_ID = '22222222-2222-4222-8222-222222222222';
 const KEY_ID_JOBS = '33333333-3333-4333-8333-333333333333';
 const BASE = 'https://tradeready-backend.tradeready.workers.dev';
-const TAG_SECRET = 'tag-secret-for-route-tests-0123456789';
+const TAG_SECRET = 'tag-secret-for-route-tests-0123456789-abcdefgh';
 const ENV = {
   SUPABASE_URL: 'https://supa.test',
   SUPABASE_SERVICE_ROLE_KEY: 'srk',
@@ -426,7 +426,7 @@ describe('keys and scopes', () => {
     expect((await api('/v1/customers', { key: KEY, ip: '198.51.100.5', nowMs: NOW + 30_000 })).status).toBe(200);
   });
 
-  test('a well-formed unknown key is answered 401 from memory after its first RPC, for 60 s', async () => {
+  test('a tag-valid unknown key is answered 401 from memory after its first RPC, for its life', async () => {
     const rpcCount = () => calls.filter((c) => c.url.endsWith('/rpc/api_key_authorize')).length;
     for (let i = 0; i < 12; i++) {
       const res = await api('/v1/customers', { key: KEY_UNKNOWN, ip: '198.51.100.7' });
@@ -440,11 +440,13 @@ describe('keys and scopes', () => {
     expect(rpcCount()).toBe(2);
     expect((await api('/v1/customers', { key: KEY, ip: '198.51.100.7' })).status).toBe(200);
     expect(rpcCount()).toBe(3);
-    // The negative entry ends after 60 s: the hash is looked up again.
+    // Round 6: an unknown tag-valid key is final (its row was deleted with
+    // its account, or never committed), so it is never looked up again (it
+    // was after 60 s before).
     await api('/v1/customers', { key: KEY_UNKNOWN, ip: '198.51.100.7', nowMs: NOW + 59_999 });
     expect(rpcCount()).toBe(3);
-    await api('/v1/customers', { key: KEY_UNKNOWN, ip: '198.51.100.7', nowMs: NOW + 60_000 });
-    expect(rpcCount()).toBe(4);
+    await api('/v1/customers', { key: KEY_UNKNOWN, ip: '198.51.100.7', nowMs: NOW + 400 * 86_400_000 });
+    expect(rpcCount()).toBe(3);
   });
 
   describe('distinct tag-valid unknown keys from one address (resource-cap defeat)', () => {
@@ -494,8 +496,10 @@ describe('keys and scopes', () => {
       const late = freshValid('late', 0);
       addValid(late);
       expect((await api('/v1/customers', { key: late, ip: IP })).status).toBe(429);
-      // ... while keys the isolate already knows are unaffected.
-      expect((await api('/v1/customers', { key: keys[0], ip: IP })).status).toBe(200);
+      // ... while keys the isolate already knows are unaffected. (keys[11]: since
+      // round 6 an owner keeps at most 10 positive-cache entries, its 10
+      // working keys, so these 12 same-owner keys leave keys[0..1] cold.)
+      expect((await api('/v1/customers', { key: keys[11], ip: IP })).status).toBe(200);
       expect((await api('/v1/customers', { key: late, ip: IP, nowMs: NOW + 60_000 })).status).toBe(200);
     });
 
@@ -818,7 +822,7 @@ describe('in-memory guards stay bounded and hold hashes only', () => {
       await api('/v1/customers', { key: null, ip });
       await api('/v1/customers', { key: mint({ keyId: uuidOf(`flood${i}`), ownerId: uuidOf(`flood-owner${i}`), seed: `flood${i}` }), ip, nowMs: NOW + i * 15 });
     }
-    for (let i = 0; i < 5000; i++) {
+    for (let i = 0; i < 12_000; i++) {
       guard.deniedKey(sha(`d${i}`), 'invalid_key', NOW);
       guard.rateLimitedKey(sha(`l${i}`), { retryAfter: 60 }, NOW);
       guard.knownKey(sha(`g${i}`), NOW);
@@ -918,7 +922,7 @@ describe('request guard bounds, measured with a fake RPC and a fake clock (§14.
     expect(rpc.calls).toBe(60);
   });
 
-  test('three concurrent bursts of 1,000 distinct keys, 61 s apart: 60 RPCs per window, at most 10 per client', async () => {
+  test('three concurrent bursts of 1,000 distinct keys, 61 s apart: 300 RPCs per window, at most 10 per client', async () => {
     const perWindow = [];
     for (let b = 0; b < 3; b++) {
       rpc.calls = 0;
@@ -932,7 +936,9 @@ describe('request guard bounds, measured with a fake RPC and a fake clock (§14.
       perWindow.push(rpc.calls);
       expect(Math.max(...rpcByIp.values())).toBe(10);
     }
-    expect(perWindow).toEqual([60, 60, 60]);
+    // Round 6: every key here has its own owner, so the reserve admits one
+    // per owner after the shared pool: 60 + 240 per window (60 before).
+    expect(perWindow).toEqual([300, 300, 300]);
     // One client alone, three concurrent bursts of 1,000 61 s apart: 10 per burst, 30 in all.
     rpc.calls = 0;
     const perBurst = [];
@@ -954,11 +960,14 @@ describe('request guard bounds, measured with a fake RPC and a fake clock (§14.
     expect(rpc.calls).toBe(11);
   });
 
-  test('distinct IPv4 addresses are bounded by the isolate bucket', async () => {
+  test('distinct IPv4 addresses are bounded by the isolate pools (shared 60 + reserve 240)', async () => {
+    // Round 6: each unseen key here has its own owner, so after the shared
+    // pool (60) each owner's first token comes from the reserve (240): 300 a
+    // window (60 before round 6). It takes 300 owners with dead keys.
     for (let i = 0; i < 5000; i++) await hit(ipv4(i), unseenKey(), NOW + i);
-    expect(rpc.calls).toBe(60);
+    expect(rpc.calls).toBe(300);
     for (let i = 0; i < 5000; i++) await hit(ipv4(10_000 + i), unseenKey(), NOW + 60_000 + i);
-    expect(rpc.calls).toBe(120);
+    expect(rpc.calls).toBe(600);
   });
 
   test('junk-IP churn between rounds raises no bound', async () => {
@@ -972,7 +981,7 @@ describe('request guard bounds, measured with a fake RPC and a fake clock (§14.
     // Keyed requests from 2,500 more addresses meet the isolate bucket; A stays capped.
     for (let i = 0; i < 2500; i++) await hit(ipv4(i), unseenKey(), NOW + 600);
     for (let i = 0; i < 100; i++) await hit(A, unseenKey(), NOW + 700);
-    expect(rpc.calls).toBe(60);
+    expect(rpc.calls).toBe(300); // shared 60 + reserve 240 (one owner per key here); 60 before round 6
   });
 
   test('2,000 concurrent requests with one known-good key: 4 RPCs at most in flight', async () => {
@@ -1065,7 +1074,7 @@ describe('request guard bounds, measured with a fake RPC and a fake clock (§14.
     const C = '203.0.113.91';
     expect((await hit(C, KEY)).status).toBe(200);
     for (let i = 0; i < 10; i++) await hit(C, unseenKey());
-    for (let i = 0; i < 100; i++) await hit(ipv4(i), unseenKey());
+    for (let i = 0; i < 400; i++) await hit(ipv4(i), unseenKey()); // shared 60 + reserve 240 since round 6
     expect((await hit(C, unseenKey())).status).toBe(429);
     expect((await hit('203.0.113.92', unseenKey())).status).toBe(429);
     rpc.calls = 0;
@@ -1080,10 +1089,11 @@ describe('request guard bounds, measured with a fake RPC and a fake clock (§14.
     expect((await hit(C, key)).status).toBe(200); // the 10th token, refunded
     expect((await hit(C, unseenKey())).status).toBe(401); // so a 10th unknown key still gets the RPC
     expect((await hit(C, unseenKey())).status).toBe(429);
-    // The isolate token came back too: 50 more clients use exactly the remaining 50.
+    // The isolate token came back too: more clients use exactly the remaining
+    // 50 shared tokens plus the 240-token reserve (round 6; 50 before).
     rpc.calls = 0;
-    for (let i = 0; i < 60; i++) await hit(ipv4(i), unseenKey());
-    expect(rpc.calls).toBe(50);
+    for (let i = 0; i < 400; i++) await hit(ipv4(i), unseenKey());
+    expect(rpc.calls).toBe(290);
   });
 
   test('junk requests (keyless, malformed, forged) never cause a 429 for a tag-valid key', async () => {
@@ -1100,7 +1110,7 @@ describe('request guard bounds, measured with a fake RPC and a fake clock (§14.
   describe('self-verifying keys (§14.4a #5): forged keys cost nothing, owners are bounded', () => {
     const keyBytes = (k) => Buffer.from(k.slice(4), 'base64url');
     const spell = (b) => `trk_${b.toString('base64url')}`;
-    const OTHER_SECRET = 'not-the-worker-secret-0123456789abcdef';
+    const OTHER_SECRET = 'not-the-worker-secret-0123456789abcdef-0123456';
 
     test('10,000 random and forged keys from 5,000 clients: 0 RPCs, 0 tokens, 0 cache entries; a fresh valid key from a new client still authorizes', async () => {
       const real = keyBytes(KEY);
@@ -1129,10 +1139,11 @@ describe('request guard bounds, measured with a fake RPC and a fake clock (§14.
       const fresh = validKey();
       expect((await hit('198.51.100.250', fresh, NOW + 10_001)).status).toBe(200);
       expect(rpc.calls).toBe(2);
-      // And the isolate bucket is still whole: 60 unseen keys from 60 new clients all reach the RPC.
+      // And the isolate pools are still whole: 300 unseen keys of 300 owners
+      // from new clients all reach the RPC (60 shared + 240 reserve), the 301st does not.
       rpc.calls = 0;
-      for (let i = 0; i < 61; i++) await hit(`192.0.2.${i}`, unseenKey(), NOW + 10_002);
-      expect(rpc.calls).toBe(60);
+      for (let i = 0; i < 301; i++) await hit(ipv4(60_000 + i), unseenKey(), NOW + 10_002);
+      expect(rpc.calls).toBe(300);
     });
 
     test('the reviewer\'s drain (60 random keys a minute from 6 addresses) no longer locks out unseen valid keys', async () => {
@@ -1246,7 +1257,7 @@ describe('request guard bounds, measured with a fake RPC and a fake clock (§14.
     });
 
     test('API_KEY_TAG_SECRET unset or short: every authenticated route is 503 not_configured, before any key is read', async () => {
-      for (const secret of [undefined, '', 'x'.repeat(31)]) {
+      for (const secret of [undefined, '', 'x'.repeat(43)]) {
         for (const key of [KEY, null, forgedFrom('nc')]) {
           const res = await handleV1({ method: 'GET', url: `${BASE}/v1/customers`, authorization: key ? `Bearer ${key}` : undefined, ip: '203.0.113.204' },
             { ...ENV, API_KEY_TAG_SECRET: secret }, { nowMs: NOW, guard });
@@ -1265,5 +1276,111 @@ describe('request guard bounds, measured with a fake RPC and a fake clock (§14.
       expect(other.status).toBe(401);
       expect(rpc.calls).toBe(0);
     });
+  });
+  describe('round 6: dead tag-valid keys cannot lock other owners out (reviewer scenarios a, b, c)', () => {
+    const WINDOW = 60_000;
+    const ownerOf = (a) => uuidOf(`r6-account-${a}`);
+    const deadKey = (a, i, error) => {
+      const k = mint({ keyId: uuidOf(`r6-${a}-${i}`), ownerId: ownerOf(a), seed: `r6-${a}-${i}` });
+      KEYS_BY_HASH[sha(k)] = { ok: false, error };
+      return k;
+    };
+
+    test('(a) 6 accounts cycle 2,004 revoked keys (334 each) at 60/min from 6 IPs: a never-seen valid key of another owner authorizes in 120/120 windows', async () => {
+      const pools = Array.from({ length: 6 }, (_, a) => Array.from({ length: 334 }, (_, i) => deadKey(a, i, 'key_revoked')));
+      const cursor = [0, 0, 0, 0, 0, 0];
+      let authorized = 0;
+      const attackRpcs = [];
+      for (let w = 0; w < 120; w++) {
+        const t = NOW + w * WINDOW;
+        const before = rpc.calls;
+        for (let r = 0; r < 60; r++) {
+          const a = r % 6;
+          const key = pools[a][cursor[a]++ % 334];
+          const res = await hit(`203.0.113.${110 + a}`, key, t + r);
+          expect([401, 429]).toContain(res.status);
+        }
+        attackRpcs.push(rpc.calls - before);
+        if ((await hit('198.51.100.240', validKey(), t + 100)).status === 200) authorized += 1;
+      }
+      expect(authorized).toBe(120);
+      // The attack still costs the database 10 RPCs per account per window:
+      // each pool (334) is larger than the per-owner negative cache (100).
+      expect(new Set(attackRpcs)).toEqual(new Set([60]));
+      // With a pool no larger than the per-owner cap, each dead key costs one RPC, ever.
+      rpc.calls = 0;
+      const small = Array.from({ length: 6 }, (_, a) => Array.from({ length: 100 }, (_, i) => deadKey(10 + a, i, 'key_revoked')));
+      const perWindow = [];
+      for (let w = 0; w < 15; w++) {
+        const before = rpc.calls;
+        for (let r = 0; r < 60; r++) await hit(`203.0.113.${120 + (r % 6)}`, small[r % 6][(w * 10 + Math.floor(r / 6)) % 100], NOW + (200 + w) * WINDOW + r);
+        perWindow.push(rpc.calls - before);
+      }
+      expect(perWindow).toEqual([60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 0, 0, 0, 0, 0]);
+    }, 120_000);
+
+    test('(b) 6 deleted accounts (60 keys now invalid_key): 60 RPCs once, then 0; a never-seen valid key authorizes in 120/120 windows', async () => {
+      const keys = Array.from({ length: 60 }, (_, i) => deadKey(100 + (i % 6), i, 'invalid_key'));
+      let authorized = 0;
+      const perWindow = [];
+      for (let w = 0; w < 120; w++) {
+        const t = NOW + w * WINDOW;
+        const before = rpc.calls;
+        for (let r = 0; r < 60; r++) {
+          const res = await hit(`203.0.113.${130 + (r % 6)}`, keys[r], t + r);
+          expect(res.status).toBe(401);
+          expect(res.body.error.code).toBe('invalid_key');
+        }
+        perWindow.push(rpc.calls - before);
+        if ((await hit('198.51.100.241', validKey(), t + 100)).status === 200) authorized += 1;
+      }
+      expect(authorized).toBe(120);
+      expect(perWindow[0]).toBe(60);
+      expect(perWindow.slice(1).every((n) => n === 0)).toBe(true);
+    }, 120_000);
+
+    test('(c) 200 accounts x 5 live keys churn the positive cache for an hour: the warm victim key stays cached and authorized every window', async () => {
+      // Live attacker keys answer rate_limited (a live key, refunded, no data read).
+      const attackers = [];
+      for (let a = 0; a < 200; a++) {
+        for (let i = 0; i < 5; i++) {
+          const k = mint({ keyId: uuidOf(`r6c-${a}-${i}`), ownerId: uuidOf(`r6c-owner-${a}`), seed: `r6c-${a}-${i}` });
+          KEYS_BY_HASH[sha(k)] = { ok: false, error: 'rate_limited', retryAfter: 1, limit: 60, remaining: 0, reset: 1 };
+          attackers.push(k);
+        }
+      }
+      const victim = validKey();
+      expect((await hit('198.51.100.242', victim, NOW)).status).toBe(200);
+      let ok = 0;
+      let warm = 0;
+      for (let w = 0; w < 60; w++) {
+        const t = NOW + w * WINDOW + 1;
+        for (let i = 0; i < attackers.length; i++) await hit(ipv4(70_000 + (i % 200)), attackers[i], t + 2);
+        if (guard.isKnownKey(sha(victim), t + 3)) warm += 1;
+        if ((await hit('198.51.100.242', victim, t + 4)).status === 200) ok += 1;
+      }
+      expect(warm).toBe(60);
+      expect(ok).toBe(60);
+      expect(guard.sizes().knownKeys).toBe(1001);
+      // Even a burst larger than the whole cache (1,100 accounts x 10 keys)
+      // between two uses only makes the victim cold, and a cold live key is
+      // admitted (refunds keep the pools full).
+      const big = createApiGuard();
+      guard = big;
+      expect((await hit('198.51.100.242', victim, NOW)).status).toBe(200);
+      for (let n = 0; n < 11_000; n++) big.knownKey(sha(`burst-${n}`), NOW + 1, uuidOf(`burst-owner-${Math.floor(n / 10)}`));
+      expect(big.isKnownKey(sha(victim), NOW + 2)).toBe(false);
+      expect((await hit('198.51.100.242', victim, NOW + 3)).status).toBe(200);
+    }, 120_000);
+
+    test('an outage closes the reserve: one RPC failure in a window holds the rest of it to the shared pool', async () => {
+      mode = 'throw';
+      for (let i = 0; i < 5000; i++) await hit(ipv4(80_000 + i), unseenKey(), NOW + i);
+      expect(rpc.calls).toBe(60);
+      mode = 'normal';
+      rpc.calls = 0;
+      for (let i = 0; i < 400; i++) await hit(ipv4(90_000 + i), unseenKey(), NOW + WINDOW + i);
+      expect(rpc.calls).toBe(300); // next window, no failure: shared + reserve
+    }, 60_000);
   });
 });

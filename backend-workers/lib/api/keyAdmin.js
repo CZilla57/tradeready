@@ -114,6 +114,10 @@ function mapRpcError(out) {
     case 'key_limit': return ERR(409, 'key_limit', { maxLiveKeys: keys.MAX_LIVE_KEYS });
     case 'not_found': return ERR(404, 'not_found');
     case 'operation_conflict': return ERR(409, 'operation_conflict');
+    // The durable per-owner mint limit (api_key_admin: 20 keys per rolling
+    // 24 hours, create + rotate). Same code as the per-minute limit, so the
+    // app contract is unchanged.
+    case 'mint_limit': return ERR(429, 'rate_limited');
     case 'already_completed': {
       const k = out.key && typeof out.key === 'object' ? out.key : {};
       return ERR(409, 'already_completed', {
