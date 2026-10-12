@@ -1,7 +1,7 @@
 # Read-Only Open API (Roadmap Phase 23) — Design Spec
 
 **Date:** 2026-10-03
-**Status:** SCOPED. Builds on `feat/open-api`, stacked on the build-order branches before it (#1–#10, ending with `feat/calendar-sync`). Owner go-ahead 2026-10-03: "continue working until all features on the roadmap are properly completed … implemented in the most beneficial way to the user". Code map verified 2026-10-03 against the `feat/quote-expiration` working tree, where Phase 32 is uncommitted. Nothing built.
+**Status:** BUILT 2026-10-03; verified, reviewed and committed 2026-10-12 on local `feat/open-api`, stacked on `feat/calendar-sync`. Gate green on its own branch tip against the master baseline (accessibility-audit and layout-metrics fail on master too); Worker `npm test`, doc reference check and the Release compile pass. Fable reviews over seven rounds; the auth guard and HMAC self-verifying keys (`fix/open-api-guard`, final `0d173a8`) re-checked SOUND, residuals in §14.4a and §14.9. Owner must `wrangler secret put API_KEY_TAG_SECRET` before deploy. Nothing pushed, deployed or applied. Build record: §14.
 **Origin:** `docs/post-launch-feature-roadmap.md` Phase 23, build order #11
 **Builds on:** portal completion (`2026-08-07-portal-completion-design.md`: server-owned token table, allowlist assembly, access log), accountant package (`2026-08-07-accountant-package-design.md`: field mappings and the "no secrets, no paths" rule), the `updated_at` server-clock migration, the portal-admin RPC pattern
 **Build target:** the Worker, the native SwiftUI app, and one docs page in `CZilla57/tradeready-legal`. **No React Native changes. One migration file, which the owner applies. No deploys.**
