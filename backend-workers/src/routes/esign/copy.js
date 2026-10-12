@@ -1,10 +1,12 @@
 // GET /api/esign/copy?j=<jobId>&t=<token>[&c=<changeOrderId>]&format=pdf|json
 // The signer's copy (Phase 19 spec §3.5, D7). Token-gated like the estimate
-// routes, same CORS. Resolves through signature_records (then the
-// Worker-held signature_pending row, sealed lazily) by the token's SHA-256,
-// the job id and the change-order id — never through the job, which the owner
-// can write (spec §11.10) — so it keeps working after the job is edited or
-// deleted. Serves the deterministic PDF (default) or the sealed record
+// routes, same CORS. Resolves through signature_records by the token's
+// SHA-256, the job id and the change-order id, so a sealed copy keeps working
+// after the job is edited or deleted. Only when nothing is sealed yet does it
+// read the job (soft-deleted rows too) to learn which Worker-held
+// signature_pending row the landed decision names, and seals that row; the
+// bytes never come from the job, which the owner can write (spec §11.10,
+// §11.11). Serves the deterministic PDF (default) or the sealed record
 // envelope as JSON for independent verification, and logs `copy_downloaded`.
 
 import { createRateLimiter } from '../../../lib/guards.js';
@@ -13,7 +15,7 @@ import { clientIp } from '../../appCors.js';
 import { tokenSha256 } from '../../../lib/esign/record.js';
 import { edgeClientIp } from '../../../lib/esign/ip.js';
 import { logEvent } from '../../../lib/esign/store.js';
-import { ensureRecord, envelopeOf, signedPdfOf } from '../../../lib/esign/service.js';
+import { ensureRecordForToken, envelopeOf, signedPdfOf } from '../../../lib/esign/service.js';
 import { signedPdfFilename } from '../../../lib/esign/pdf.js';
 
 const allow = createRateLimiter({ limit: 20 });
@@ -40,7 +42,7 @@ export async function esignCopyHandler(c) {
   // owner's link even without the job row.
   let ensured;
   try {
-    ensured = await ensureRecord(c.env, { jobId: String(jobId), changeOrderId: coId ? String(coId) : null, tokenHash });
+    ensured = await ensureRecordForToken(c.env, { jobId: String(jobId), changeOrderId: coId ? String(coId) : null, token: String(token) });
   } catch (err) {
     console.error('[esign/copy] record fetch failed:', err.message);
     return c.json({ error: 'Database error', code: 'server_error' }, 500);

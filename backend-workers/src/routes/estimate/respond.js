@@ -17,14 +17,18 @@
 // Phase 19 (e-signatures, spec 2026-10-03-esignature-upgrade-design.md §3.5):
 // with ESIGN_V2 on and a snapshot that carries `esign` (or
 // ESIGN_REQUIRE_CONSENT on), an approval is a signature: the consent, typed
-// name, optional drawing and optional copy email are validated, the edge IP
-// is recorded, and the decision is written FIRST together with the
-// server-owned keys signatureRecordId / recordDigest / signatureMethod /
-// signatureEvidence. The sealed record is inserted after; a failure there
-// keeps the Worker-built record in signature_pending and still answers 200
-// with `recordPending: true` (lazy seal of that row on view/copy; never from
-// the job blob, spec §11.10).
-// Flags off → byte-for-byte the previous behavior.
+// name, optional drawing and optional copy email are validated and the edge
+// IP is recorded. The record is built from those Worker-validated inputs only
+// (never from the stored approval, which the owner can write) and stored in
+// signature_pending BEFORE the decision is written, so a signature can never
+// exist without Worker-held evidence; if that store fails the decision is not
+// accepted and the customer gets a retryable 503 (spec §11.11). The decision
+// then lands with the server-owned keys signatureRecordId / recordDigest /
+// signatureMethod / signatureEvidence naming that row, and the record is
+// sealed; a seal that fails is retried lazily from the pending row bound to
+// the landed decision (service.js ensureRecord).
+// Flags off → the previous behavior (the decision merge drops planted
+// selection / signature keys on every new decision, §11.11).
 
 import { fetchJob, updateJobIfUnchanged, constantTimeEqual } from '../../../lib/estimateStore.js';
 import { createRateLimiter } from '../../../lib/guards.js';
@@ -41,7 +45,9 @@ import { esignV2, esignActive, esignRequireConsent } from '../../../lib/esign/fl
 import { edgeClientIp } from '../../../lib/esign/ip.js';
 import { fail, parseSignatureFields, validateTypedName } from '../../../lib/esign/validate.js';
 import { signApproval, tokenSha256 } from '../../../lib/esign/record.js';
-import { eventsAtSigning, finishSigning } from '../../../lib/esign/service.js';
+import {
+  eventsAtSigning, finishSigning, lockedSignature, storeEvidence, EVIDENCE_NOT_STORED,
+} from '../../../lib/esign/service.js';
 import { logEvent } from '../../../lib/esign/store.js';
 
 const allow = createRateLimiter({ limit: 10 });
@@ -55,10 +61,18 @@ const SELECTION_ERRORS = {
   invalid_addons: 'Invalid add-on selection.',
 };
 
+// The keys only the Worker may author on an approval. A new decision drops
+// whatever the stored approval held under them before the customer acted:
+// before a decision lands the blob is the owner's to write, so a `selection`
+// or signature key found there is the owner's, never the customer's.
+export const SERVER_SIGNATURE_KEYS = ['selection', 'signatureRecordId', 'recordDigest', 'signatureMethod', 'signatureEvidence'];
+
 // Pure decision merge — exported for reuse (change-respond). Returns the SAME
 // reference when locked (already approved) so callers can skip a needless DB
 // write. `body.selection` is persisted only on approve and only when it is a
-// selection resolveSelection produced; change-respond never passes one.
+// selection resolveSelection produced; change-respond never passes one. The
+// customer's genuine choice survives post-send edits through the approved
+// lock (and the preserve trigger's frozen keys), never through this merge.
 export function nextApproval(existing, body, meta) {
   if (existing && existing.decision === 'approved') return existing; // terminal lock
   const decision = body.decision === 'approved' ? 'approved' : 'declined';
@@ -71,6 +85,7 @@ export function nextApproval(existing, body, meta) {
     ip: meta.ip,
     userAgent: meta.userAgent,
   };
+  for (const k of SERVER_SIGNATURE_KEYS) delete next[k];
   if (decision === 'approved' && isResolvedSelection(body.selection)) next.selection = body.selection;
   return next;
 }
@@ -103,8 +118,10 @@ export async function estimateRespondHandler(c) {
     sig = parsed.value;
   }
   const edgeIp = edgeClientIp(c);
-  // Pre-minted once per request so a retried conditional write keeps it.
-  const recordId = crypto.randomUUID();
+  // Minted once per request and kept across retried conditional writes while
+  // the record it names is unchanged (its pending row is then reused).
+  let recordId = crypto.randomUUID();
+  let evidence = null; // { recordId, digest } stored in signature_pending
   let trail = null;
 
   const meta = {
@@ -174,7 +191,13 @@ export async function estimateRespondHandler(c) {
       { decision, signerName: typedName, declineReason, selection: resolved },
       signing ? { ...meta, ip: edgeIp } : meta
     );
-    if (merged === existing) return ok(c, merged); // approved lock — nothing to write
+    if (merged === existing) {
+      // Approved lock: echo the Worker-held record, never the blob's claims.
+      const locked = await lockedSignature(c.env, existing, {
+        userId: row.user_id, jobId: String(jobId), changeOrderId: null, tokenHash: tokenSha256(existing.token),
+      });
+      return ok(c, existing, locked);
+    }
 
     let signed = null;
     if (signing) {
@@ -185,15 +208,37 @@ export async function estimateRespondHandler(c) {
           userId: row.user_id, jobId: String(jobId), changeOrderId: null, tokenHash: tokenSha256(existing.token),
         });
       }
-      signed = signApproval(merged, {
-        recordId,
-        consent: sig.consent,
+      const inputs = {
+        documentType: 'estimate',
+        jobId: String(jobId),
+        token: existing.token,
+        snapshot: existing.snapshot,
+        selection: resolved || null,
+        consentVersion: sig.consent ? sig.consent.version : null,
+        signedAt: meta.consentAt,
+        typedName,
         drawn: sig.drawn,
         email: sig.email,
+        ip: edgeIp,
+        userAgent: meta.userAgent,
         events: trail,
-        jobId: String(jobId),
-        documentType: 'estimate',
-      });
+      };
+      signed = signApproval(merged, { ...inputs, recordId });
+      // A retry whose record changed (the snapshot moved under the same
+      // token) gets a new record id; its earlier pending row is never named
+      // by a landed decision, so it is never sealed.
+      if (evidence && evidence.digest !== signed.digest) {
+        recordId = crypto.randomUUID();
+        signed = signApproval(merged, { ...inputs, recordId });
+        evidence = null;
+      }
+      // Evidence BEFORE the decision (§11.11): no store, no signature.
+      if (!evidence) {
+        if (!(await storeEvidence(c.env, { userId: row.user_id, record: signed.record, digest: signed.digest }))) {
+          return c.json(EVIDENCE_NOT_STORED, 503);
+        }
+        evidence = { recordId, digest: signed.digest };
+      }
       merged = signed.approval;
     }
 
@@ -205,13 +250,14 @@ export async function estimateRespondHandler(c) {
       return c.json({ error: 'Database error' }, 500);
     }
     if (updated) {
-      // The decision is recorded; evidence follows (never fails the response).
+      // The decision is recorded and its evidence is already held; sealing
+      // follows (never fails the response).
       if (signed) {
         const { recordPending } = await finishSigning(c, {
           userId: row.user_id, record: signed.record, digest: signed.digest,
           email: sig.email, ip: edgeIp, userAgent: meta.userAgent,
         });
-        return ok(c, merged, { recordPending });
+        return ok(c, merged, signatureOf(signed, recordPending));
       }
       if (decision === 'declined' && esignActive(c.env, existing.snapshot)) {
         await logEvent(c.env, {
@@ -227,15 +273,34 @@ export async function estimateRespondHandler(c) {
   return c.json({ error: 'Please try again in a moment.' }, 409);
 }
 
-function ok(c, approval, { recordPending = false } = {}) {
+// The signature fields of a response, from the record this request built.
+export function signatureOf(signed, recordPending) {
+  return {
+    recordId: signed.record.recordId,
+    recordDigest: signed.digest,
+    signatureMethod: signed.record.signatureMethod,
+    selection: signed.record.selection,
+    recordPending,
+  };
+}
+
+// `signature` is the Worker-held record's view ({recordId, recordDigest,
+// signatureMethod, selection, recordPending}) or null: the recordId /
+// recordDigest echoed to the page never come from the job blob (§11.11).
+function ok(c, approval, signature = null) {
   const out = { ok: true, decision: approval.decision, consentAt: approval.consentAt };
-  if (approval.decision === 'approved' && approval.selection) out.selection = approval.selection;
-  // Phase 19: an e-signed approval (now, or already under the lock).
-  if (approval.decision === 'approved' && approval.signatureRecordId) {
-    out.recordId = approval.signatureRecordId;
-    out.recordDigest = approval.recordDigest;
-    out.signatureMethod = approval.signatureMethod;
-    if (recordPending) out.recordPending = true;
+  if (approval.decision === 'approved') {
+    if (signature) {
+      if (signature.selection) out.selection = signature.selection;
+    } else if (approval.selection) {
+      out.selection = approval.selection;
+    }
+  }
+  if (approval.decision === 'approved' && signature) {
+    out.recordId = signature.recordId;
+    out.recordDigest = signature.recordDigest;
+    out.signatureMethod = signature.signatureMethod;
+    if (signature.recordPending) out.recordPending = true;
   }
   return c.json(out, 200);
 }
