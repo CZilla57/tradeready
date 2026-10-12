@@ -66,6 +66,7 @@ struct CoachView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { store.isCoachPresented = false }
+                        .keyboardShortcut(.cancelAction)
                 }
                 ToolbarItem(placement: .primaryAction) {
                     if NativeCoachTranscriptDisplay.shouldShowNewChat(messageCount: messages.count) {
