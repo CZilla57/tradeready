@@ -1,7 +1,7 @@
 # Multi-Property & Equipment History (Roadmap Phase 21) — Design Spec
 
 **Date:** 2026-10-02
-**Status:** BUILT 2026-10-03 on local `feat/properties-equipment` (stacked on Phase 20 data layer, Phase 27, Phase 25; native only; not committed). Build record: §8.
+**Status:** BUILT 2026-10-03; verified and committed 2026-10-12 on local `feat/properties-equipment`, stacked on `feat/job-forms` (native only). Gate green on its own branch tip against the master baseline (accessibility-audit and layout-metrics fail on master too); Worker `npm test`, doc reference check and the Release compile pass. Reviewed in its build record. Nothing pushed, deployed or applied. Build record: §8.
 **Origin:** `docs/post-launch-feature-roadmap.md` Phase 21, build order #5
 **Build target (owner, 2026-10-02):** native SwiftUI app only. **No React Native, Worker or migration changes.**
 
