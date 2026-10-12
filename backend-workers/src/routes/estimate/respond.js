@@ -34,6 +34,7 @@ import { fetchJob, updateJobIfUnchanged, constantTimeEqual } from '../../../lib/
 import { createRateLimiter } from '../../../lib/guards.js';
 import { applyCors } from '../../../lib/estimate/cors.js';
 import {
+  canonicalJson,
   hasSnapshotOptions,
   isResolvedSelection,
   resolveSelection,
@@ -148,6 +149,11 @@ export async function estimateRespondHandler(c) {
       && esignActive(c.env, existing.snapshot);
     let typedName = signerName;
     if (signing) {
+      // No document to seal: a clean 409 before any name check or store.
+      if (existing.snapshot === null || typeof existing.snapshot !== 'object' || Array.isArray(existing.snapshot)) {
+        const e = fail('snapshot_missing');
+        return c.json({ error: e.error, code: e.code }, 409);
+      }
       const name = validateTypedName(signerName);
       if (name.error) return c.json({ error: name.error, code: name.code }, 400);
       typedName = name.value;
@@ -196,7 +202,7 @@ export async function estimateRespondHandler(c) {
       const locked = await lockedSignature(c.env, existing, {
         userId: row.user_id, jobId: String(jobId), changeOrderId: null, tokenHash: tokenSha256(existing.token),
       });
-      return ok(c, existing, locked);
+      return ok(c, existing, locked, locked ? null : lockedSelection(existing));
     }
 
     let signed = null;
@@ -265,12 +271,23 @@ export async function estimateRespondHandler(c) {
           event: 'declined', ip: edgeIp, userAgent: meta.userAgent,
         });
       }
-      return ok(c, merged);
+      return ok(c, merged, null, resolved);
     }
     // Version moved between read and write: re-read and re-validate.
   }
 
   return c.json({ error: 'Please try again in a moment.' }, 409);
+}
+
+// A legacy approved blob's selection, echoed only if it re-resolves against
+// the frozen snapshot to exactly the stored value: what is sent is the
+// Worker's own resolution, never a planted or malformed blob value.
+function lockedSelection(approval) {
+  const stored = approval.selection;
+  if (!hasSnapshotOptions(approval.snapshot) || stored === null || typeof stored !== 'object') return null;
+  const again = resolveSelection(approval.snapshot, { tierId: stored.tierId, addOnIds: stored.addOnIds });
+  if (again.error || canonicalJson(again.selection) !== canonicalJson(stored)) return null;
+  return again.selection;
 }
 
 // The signature fields of a response, from the record this request built.
@@ -287,14 +304,14 @@ export function signatureOf(signed, recordPending) {
 // `signature` is the Worker-held record's view ({recordId, recordDigest,
 // signatureMethod, selection, recordPending}) or null: the recordId /
 // recordDigest echoed to the page never come from the job blob (§11.11).
-function ok(c, approval, signature = null) {
+// `selection` is the choice THIS request resolved against the snapshot (a
+// fresh decision without a signature), or under the approved lock the legacy
+// blob's choice only as re-resolved by `lockedSelection`.
+function ok(c, approval, signature = null, selection = null) {
   const out = { ok: true, decision: approval.decision, consentAt: approval.consentAt };
   if (approval.decision === 'approved') {
-    if (signature) {
-      if (signature.selection) out.selection = signature.selection;
-    } else if (approval.selection) {
-      out.selection = approval.selection;
-    }
+    const echoed = signature ? signature.selection : selection;
+    if (echoed) out.selection = echoed;
   }
   if (approval.decision === 'approved' && signature) {
     out.recordId = signature.recordId;

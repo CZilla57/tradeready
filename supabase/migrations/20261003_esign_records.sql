@@ -94,6 +94,14 @@ create table if not exists public.signature_pending (
   -- and reads a row only by the id its landed decision names.
 );
 
+-- An earlier draft of this migration made pending rows unique per link
+-- (constraint signature_pending_one_per_link). That was removed (§11.11), so
+-- a re-run on a database that applied the draft must converge: drop the
+-- constraint (which drops its backing index) and any stray index of that name.
+alter table public.signature_pending
+  drop constraint if exists signature_pending_one_per_link;
+drop index if exists public.signature_pending_one_per_link;
+
 create index if not exists signature_pending_owner_job
   on public.signature_pending (user_id, job_id);
 create index if not exists signature_pending_link

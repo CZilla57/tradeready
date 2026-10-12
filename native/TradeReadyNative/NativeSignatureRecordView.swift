@@ -90,9 +90,16 @@ struct NativeClaimedSignatureRows: View {
     @State private var confirmation: NativeESignature.SignatureConfirmation = .unconfirmed
     @State private var isChecking = false
 
+    /// `confirmation` outlives a `claim.recordID` change on a reused view until
+    /// `.task(id:)` re-checks, so a state for another record is never shown.
+    private var shown: NativeESignature.SignatureConfirmation {
+        if case let .confirmed(signed) = confirmation, signed.recordID != claim.recordID { return .unconfirmed }
+        return confirmation
+    }
+
     var body: some View {
         Group {
-            if case let .confirmed(signed) = confirmation {
+            if case let .confirmed(signed) = shown {
                 if collapsesDetails {
                     DisclosureGroup {
                         NativeSignedRecordRows(signed: signed, jobID: jobID, changeOrderID: changeOrderID)
@@ -107,15 +114,16 @@ struct NativeClaimedSignatureRows: View {
                 unconfirmedRows
             }
         }
-        .task(id: claim.recordID) { await check() }
+        .task(id: claim.recordID) { await check(replacingInFlight: true) }
+        .onChange(of: claim.recordID) { _, _ in confirmation = .unconfirmed }
     }
 
     @ViewBuilder
     private var unconfirmedRows: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Label(NativeESignature.statusLabel(confirmation) ?? NativeESignature.unconfirmedLabel,
-                  systemImage: confirmation == .noRecord ? "exclamationmark.triangle" : "clock")
-            if let detail = NativeESignature.statusDetail(confirmation) {
+            Label(NativeESignature.statusLabel(shown) ?? NativeESignature.unconfirmedLabel,
+                  systemImage: shown == .noRecord ? "exclamationmark.triangle" : "clock")
+            if let detail = NativeESignature.statusDetail(shown) {
                 Text(detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -128,7 +136,7 @@ struct NativeClaimedSignatureRows: View {
         if let approvedAt = claim.approvedAt {
             LabeledContent("Approved", value: NativeESignature.displayTimestamp(approvedAt))
         }
-        switch confirmation {
+        switch shown {
         case .sealing, .unverifiable:
             Button {
                 Task { await check() }
@@ -141,14 +149,19 @@ struct NativeClaimedSignatureRows: View {
         }
     }
 
-    private func check() async {
-        guard !isChecking else { return }
+    /// `replacingInFlight`: a new record id supersedes a check still running
+    /// for the previous one, whose answer is then dropped.
+    private func check(replacingInFlight: Bool = false) async {
+        guard replacingInFlight || !isChecking else { return }
         isChecking = true
+        let asked = claim
         let result = await store.checkSignatureRecord(
-            jobID: jobID, changeOrderID: changeOrderID, recordID: claim.recordID
+            jobID: jobID, changeOrderID: changeOrderID, recordID: asked.recordID
         )
+        // `.task(id:)` cancels the superseded check; its answer is dropped.
+        guard !Task.isCancelled else { return }
         isChecking = false
-        confirmation = NativeESignature.confirmation(for: claim, check: result)
+        confirmation = NativeESignature.confirmation(for: asked, check: result)
     }
 }
 
