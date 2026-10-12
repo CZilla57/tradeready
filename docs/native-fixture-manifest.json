@@ -98,7 +98,7 @@
    "testSources": [
     {
      "path": "native/AnalyticsEventTests",
-     "sha256": "9d774fa5ac39df20597f2ba7b7d61d1816adf5e2d9ff85796b4b956a3119d360"
+     "sha256": "4d5bc4cdba860be854bed532bdddced46a8bca59b5e3921cd5dce87b6379e082"
     }
    ],
    "fixtures": []
@@ -808,7 +808,7 @@
    "testSources": [
     {
      "path": "native/InitialSyncTests",
-     "sha256": "854fd0e2e17ffccae68c0e0b863210693e25a21eda6dec1d8c46bf5c3190a55b"
+     "sha256": "5bb83857ee32d6d4a426a0b47184065ebc011acea4665f3a5ab04248836a635a"
     },
     {
      "path": "native/CanonicalTests",
@@ -1864,7 +1864,7 @@
    "testSources": [
     {
      "path": "native/TapToPayTests",
-     "sha256": "062c613d5eaf63203a109e7b21ec21e1d00389456884239e3781f3f7e1b29ea6"
+     "sha256": "38a249cc5e16171892efec1657f53a0e247651a6b29fc3779af64db6a93392db"
     }
    ],
    "fixtures": []
