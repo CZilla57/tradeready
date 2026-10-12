@@ -36,6 +36,9 @@ const ERRORS = {
   consent_required: 'Please agree to use electronic records and signatures to sign.',
   consent_version_unknown: 'This page is out of date. Please reload the page and try again.',
   reload_required: 'This page is out of date. Please reload the page and try again.',
+  // The stored approval has no document to sign (the owner's blob lost or
+  // never had its snapshot). Refused before anything is stored.
+  snapshot_missing: "This document can't be signed right now. Please contact the business that sent it.",
 };
 
 function fail(code) {

@@ -21,7 +21,7 @@ const { esignPreviewHandler } = require('../backend-workers/src/routes/esign/pre
 const { esignVerifyHandler } = require('../backend-workers/src/routes/esign/verify.js');
 const { esignPublicKeysHandler } = require('../backend-workers/src/routes/esign/publicKeys.js');
 const { esignRecordHandler } = require('../backend-workers/src/routes/esign/record.js');
-const { snapshotDigest, canonicalJson } = require('../backend-workers/lib/estimate/quoteOptions.js');
+const { snapshotDigest, canonicalJson, resolveSelection } = require('../backend-workers/lib/estimate/quoteOptions.js');
 const { verifySeal } = require('../backend-workers/lib/esign/seal.js');
 const { signingTexts } = require('../backend-workers/lib/esign/texts.js');
 
@@ -1126,6 +1126,69 @@ describe('review P1: an owner-planted selection is never sealed or printed as th
     expect(res.body).toEqual({ ok: true, decision: 'approved', consentAt: new Date(NOW).toISOString() });
     const a = db.job.data.approval;
     for (const k of Object.keys(planted)) expect(a).not.toHaveProperty(k);
+  });
+
+  test('a legacy approved blob under the lock echoes no selection (only Worker-validated data)', async () => {
+    const db = installBackend(jobRow({
+      snapshot: legacySnapshot(),
+      approval: { decision: 'approved', signerName: 'Pat', consentAt: '2026-10-02T09:00:00.000Z', selection: clone(PLANTED_SELECTION) },
+    }));
+    const body = { jobId: 'job-1', token: TOKEN, decision: 'approved', signerName: 'Pat Lee' };
+    for (const env of [V2, {}]) {
+      const res = await respond(db, body, env);
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ok: true, decision: 'approved', consentAt: '2026-10-02T09:00:00.000Z' });
+    }
+  });
+
+  test('an options estimate approved without a record: only a selection that re-resolves is echoed', async () => {
+    const options = {
+      tiers: [
+        { id: 'good', name: 'Good', lineItems: [{ label: 'Labor', amount: 300 }], total: 300 },
+        { id: 'premium', name: 'Premium', lineItems: [{ label: 'Labor', amount: 500 }], total: 500 },
+      ],
+      addOns: [],
+      recommendedTierId: 'good',
+    };
+    const lockedBody = (db) => ({ jobId: 'job-1', token: TOKEN, decision: 'declined', snapshotDigest: snapshotDigest(db.job.data.approval.snapshot) });
+    const approved = { decision: 'approved', signerName: 'Pat', consentAt: '2026-10-02T09:00:00.000Z' };
+    const planted = installBackend(jobRow({ snapshot: esignSnapshot({ options }), approval: { ...approved, selection: clone(PLANTED_SELECTION) } }));
+    const a = await respond(planted, lockedBody(planted), {});
+    expect(a.status).toBe(200);
+    expect(a.body).toEqual({ ok: true, decision: 'approved', consentAt: '2026-10-02T09:00:00.000Z' });
+    const genuine = resolveSelection(esignSnapshot({ options }), { tierId: 'good', addOnIds: [] }).selection;
+    const real = installBackend(jobRow({ snapshot: esignSnapshot({ options }), approval: { ...approved, selection: clone(genuine) } }));
+    const b = await respond(real, lockedBody(real), {});
+    expect(b.body.selection).toEqual(genuine);
+  });
+});
+
+describe('review P3: an approval with no snapshot is a clean 409 before anything is stored', () => {
+  test('estimate: snapshot_missing, no pending row, no job write', async () => {
+    const db = installBackend(jobRow());
+    delete db.job.data.approval.snapshot;
+    const res = await respond(db, { jobId: 'job-1', token: TOKEN, decision: 'approved', signerName: 'Pat Lee', consent: { accepted: true, version: 1 } }, STRICT);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('snapshot_missing');
+    expect(db.pendingInserts).toBe(0);
+    expect(db.recordInserts).toBe(0);
+    expect(db.jobWrites).toHaveLength(0);
+  });
+
+  test('change order: the same', async () => {
+    const co = changeOrder();
+    co.approval.snapshot = 'not an object';
+    const db = installBackend(jobRow({ changeOrders: [co] }));
+    const c = fakeC({
+      method: 'POST', env: STRICT,
+      body: { jobId: 'job-1', changeOrderId: 'co-1', token: CO_TOKEN, decision: 'approved', signerName: 'Pat Lee', consent: { accepted: true, version: 1 } },
+    });
+    const res = await changeRespondHandler(c);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('snapshot_missing');
+    expect(db.pendingInserts).toBe(0);
+    expect(db.recordInserts).toBe(0);
+    expect(db.jobWrites).toHaveLength(0);
   });
 });
 

@@ -176,6 +176,15 @@ begin
   exception when not_null_violation then raised := true;
   end;
   if not raised then raise exception '5. an event without job_id was accepted'; end if;
+  -- The removed per-link unique constraint on signature_pending (and its
+  -- index) must be gone, including on a database that applied the old draft.
+  select count(*) into n from pg_constraint
+   where conrelid = 'public.signature_pending'::regclass and contype = 'u';
+  if n <> 0 then raise exception '5. signature_pending still has % unique constraint(s)', n; end if;
+  if exists (select 1 from pg_constraint where conname = 'signature_pending_one_per_link')
+     or to_regclass('public.signature_pending_one_per_link') is not null then
+    raise exception '5. signature_pending_one_per_link still exists';
+  end if;
   raise notice 'ok 5. UPDATE raises on all three tables; one record per link (token hash + job + change order); pending rows unique per record id; events name their job';
 
   -- 6. RLS scopes reads to the owner, and the owner cannot insert.
