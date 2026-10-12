@@ -207,8 +207,9 @@ create table public.api_usage_counters (   -- durable per-key windows
 | Per key, burst | 60 requests per minute | `api_key_authorize` minute counter (durable). A Cloudflare `[[ratelimits]]` binding (`period = 60`) can be added in front as a cheap first layer. It is per-location and eventually consistent by design ([Workers rate limiting](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/)), so it is never the only layer |
 | Per key, daily | 5,000 requests per day (UTC) | Day counter in the same RPC |
 | Per owner, daily | 10,000 across all keys | The RPC sums the owner's day counters |
-| Failed auth per IP | 20 per minute per isolate | In-memory counter keyed on `cf-connecting-ip`. Blocks only requests without a well-formed key; valid keys are never rejected by it (§14.4 #10) |
-| Unknown / over-limit key hash, and unknown hashes from a blocked IP | 5 unknown answers per minute per hash; over-limit until reset; 5 RPCs per minute per blocked IP for hashes outside the positive cache | In-memory, keyed on sha256 of the presented key, so a well-formed key cannot hammer the database (§14.4 #10) |
+| Junk requests per client | 20 per minute per isolate | In-memory counter per client (IPv4 address or IPv6 /64 from `cf-connecting-ip`). 429s only requests without a well-formed key (§14.4a #1) |
+| Authorize RPCs for keys not seen recently | 10 per minute per client and 60 per minute per isolate, taken before the RPC; refunded only for live keys | In-memory token buckets; a key that authorized on the isolate in the last hour bypasses them with at most 4 RPCs in flight (§14.4a #1) |
+| Denied / over-limit key hash | Denied hashes answered from memory for 60 s; over-limit until reset | In-memory, keyed on sha256 of the presented key (§14.4a #1, #2) |
 
 Each request costs one RPC plus one or two PostgREST GETs. A key polling every 15 minutes across seven resources is under 700 requests a day. List responses select only `id,updated_at,deleted,data` and are capped at 100 rows.
 
@@ -385,7 +386,7 @@ Worker (`backend-workers/`):
 - `lib/api/resources.js`: `SCHEMA` (OpenAPI 3.1 JSON Schema per resource), `FIELDS` (derived from `SCHEMA`), and one allowlist mapper per resource built key by key (`toPublic.*`), the estimate status table, ledger math via `lib/paymentMath.js`, the portal's payment-link gate and estimate total (both parity-tested against `lib/estimate/portalAssemble.js`), method/source normalization, the accountant issue-date rule, expense category labels, tombstones and the resource registry.
 - `lib/api/cursor.js`: HMAC-SHA256-tagged keyset cursor `{u, i, r}` with tamper and cross-resource rejection.
 - `lib/api/store.js`: the GET-only data module. One builder (`ownerQuery`) always adds `user_id=eq.<owner>` and refuses a non-UUID owner; one `fetch` call hard-wired to `GET`.
-- `lib/api/auth.js`: `authorizeKey` (the `api_key_authorize` RPC; 404 → unavailable), `logApiRequest` (best-effort `api_access_log` insert), the failed-auth load guard on `createRateLimiter`.
+- `lib/api/auth.js`: `authorizeKey` (the `api_key_authorize` RPC; 404 → unavailable), `logApiRequest` (best-effort `api_access_log` insert), the in-memory request guard `createApiGuard` and its `GUARD_LIMITS` (§14.4a).
 - `lib/api/v1.js`: `handleV1`, the whole request contract (routing, GET-only, key-in-query, auth, scopes, parameters, keyset pages, tombstones, `dataAsOf`, `nextUpdatedSince`, headers, error vocabulary) and the route table.
 - `lib/api/openapi.js`: the OpenAPI 3.1 document, built once from `SCHEMA`/`FIELDS`/`ROUTES`; `API_BASE_URL` is the single base-URL constant.
 - `lib/api/keyAdmin.js`: `apiKeysManageCore` for list/create/rotate/revoke/activity against the `api_key_admin` RPC and owner-scoped REST reads.
@@ -423,9 +424,9 @@ Storage and RPCs:
 7. Both RPCs refuse a client JWT that reaches them anyway (the `booking_is_client_caller` logic, inlined to avoid a dependency on the booking migrations).
 
 Request contract:
-8. Check order: GET-only → key in query → route → Bearer parse (a missing or malformed key meets the failed-auth block; a well-formed key skips it, §14.4 #10) → per-hash memory guards → RPC → scope → parameters → reads. `HEAD` and `OPTIONS` are 405 like every non-GET.
-9. Key-in-query means a credential-like parameter name (`api_key`, `apikey`, `key`, `access_token`, `token`, `authorization`, `bearer`) or any value starting with `trk_`. It is refused before routing and counts as an auth failure for the IP guard.
-10. Failed-auth guard: the 20th failure per minute from one `cf-connecting-ip` blocks that address for a minute, answered `429 rate_limited` before any RPC call. It applies only to requests with no well-formed key (missing or malformed `Authorization`); a request carrying a well-formed `trk_` key is never rejected by it and goes to the authorize RPC (corrected 2026-10-04: it originally rejected every request from the address, valid keys included). Well-formed keys are shed per key hash instead: 5 "unknown key" answers for the same hash in a minute make that hash a `401 invalid_key` from memory until the minute ends, and a `rate_limited` answer makes that hash a `429` from memory (same `Retry-After` and `X-RateLimit-*`) until the reset. Per isolate, capped at 2,000 entries per map (expired swept, then oldest evicted), keyed by sha256 only.
+8. Check order: GET-only → key in query → route → Bearer parse (a missing or malformed key meets the junk counter; a well-formed key skips it) → per-hash memory guards → admission (in-flight slot or tokens, §14.4a #1) → RPC → scope → parameters → reads. `HEAD` and `OPTIONS` are 405 like every non-GET.
+9. Key-in-query means a credential-like parameter name (`api_key`, `apikey`, `key`, `access_token`, `token`, `authorization`, `bearer`) or any value starting with `trk_`. It is refused before routing and counts toward the junk counter.
+10. *(Superseded by §14.4a #1; kept for the record.)* Failed-auth guard: the 20th failure per minute from one `cf-connecting-ip` blocks that address for a minute, answered `429 rate_limited` before any RPC call. It applies only to requests with no well-formed key (missing or malformed `Authorization`); a request carrying a well-formed `trk_` key is never rejected by it and goes to the authorize RPC (corrected 2026-10-04: it originally rejected every request from the address, valid keys included). Well-formed keys are shed per key hash instead: 5 "unknown key" answers for the same hash in a minute make that hash a `401 invalid_key` from memory until the minute ends, and a `rate_limited` answer makes that hash a `429` from memory (same `Retry-After` and `X-RateLimit-*`) until the reset. Per isolate, capped at 2,000 entries per map (expired swept, then oldest evicted), keyed by sha256 only.
 11. Worker-written log rows (requests that resolved a key): 2xx → `ok`, 403 → `denied`, 429 → `rate_limited`, anything else (400, 404, 500, 503) → `error`. Requests that never resolved an owner (405, malformed bearer, key in query, unknown path) are not logged.
 12. Headers: `TradeReady-Api-Version` and `Cache-Control: no-store` on every `/v1` response; `X-RateLimit-Limit/Remaining/Reset` (Reset in Unix seconds) on every response that resolved a key, including 429. Pre-auth responses have no key to describe, so they omit the rate headers. `/v1/openapi.json` is `Cache-Control: public, max-age=3600`. 401s carry `WWW-Authenticate: Bearer realm="TradeReady API"`.
 13. Failure mapping: authorize RPC not deployed, undecodable or erroring → `503 unavailable` (fail closed); a data read failing after auth → `500 server_error`; `API_CURSOR_SECRET` unset → list endpoints `503 unavailable` (single records and `/v1/account` still work; cursors are never minted unsigned).
@@ -442,10 +443,54 @@ Resources:
 
 #### 14.4a Security-review fixes (2026-10-04, branch `fix/open-api-guard`)
 
-Four review findings, fixed and tested:
+Four review findings, fixed and tested. Items 1 and 2 were reworked three times; the guard below (second review, same branch) replaces the earlier failed-auth threshold and blocked-IP budget, and corrects §14.4 #10.
 
-1. **Failed-auth IP guard no longer blocks valid keys, and distinct random keys stay bounded** (`lib/api/v1.js`, `lib/api/auth.js`). The Bearer is parsed first; a request with no well-formed key meets the IP block (429 while blocked). A well-formed key is never flatly rejected by it, so a shared egress address cannot lock out valid keys and `?token=x` junk cannot hold a block against other owners. Every unknown, revoked or expired key counts as a failure against the caller's IP (the 20th per minute blocks the address for a minute; a failure inside a block does not extend it). While an address is blocked, a key hash outside the **positive cache** may reach the authorize RPC only 5 times per minute per IP, then 429 from memory (`Retry-After` = rest of the block, never longer, and requests made during a block never extend it). Only a request whose key turns out unknown, revoked or expired keeps its credit: a valid answer (authorized or rate limited) refunds it, so valid keys never use the budget up for each other. So 500 distinct random well-formed keys from one IP cost at most 20 + 5 = 25 RPCs per window, which the route test pins exactly. The positive cache holds sha256 hashes that authorized (or were rate limited, which only a live key can be) in the last 60 minutes (cap 1,000). It exempts a hash from the IP budget but never skips the RPC: revocation and expiry are checked on every request, and a denial removes the hash. Residual, stated plainly: during an active flood from a shared IP, a valid key that has not authorized on this isolate in the last 60 minutes may get 429 until it wins a budget slot (the flood's unknown keys spend the slots). Active integrations are unaffected. Closing this fully needs a store shared across isolates, which is out of scope (a new service). A per-hash negative cache answers 401 `invalid_key` from memory after 5 unknown results for the same hash in a minute. Corrects #10.
-2. **Rate-limited keys are shed before the database** (same files). A `rate_limited` RPC answer makes that hash a 429 from memory until the reported reset (`retryAfter`, 60 s if none), with the same `Retry-After` and `X-RateLimit-*` headers. Every guard map is separate, per isolate and capped (2,000 entries; 1,000 for the positive cache), keyed by hash only; past a cap, expired entries are swept and the oldest in that map are evicted, so an attacker's churn in one map cannot evict known-good or active rate-limit entries in another.
+1. **Request guard: admission is decided before the RPC, per client and per isolate** (`lib/api/auth.js` `createApiGuard`, `lib/api/v1.js`, `src/routes/api/v1.js`). Every window and limit is one frozen constant table, `GUARD_LIMITS` in `auth.js`:
+
+   | Constant | Value | Meaning |
+   |---|---|---|
+   | `WINDOW_MS` | 60 s | Window of the token buckets and the junk counter |
+   | `CLIENT_TOKENS` | 10 | RPCs per client per window for hashes outside the positive cache |
+   | `GLOBAL_TOKENS` | 60 | The same, per isolate across all clients |
+   | `KNOWN_IN_FLIGHT` | 4 | Concurrent RPCs per positively cached hash |
+   | `KNOWN_TTL_MS` | 60 min | Positive-cache lifetime, refreshed by each success |
+   | `DENIED_TTL_MS` | 60 s | Negative-cache lifetime |
+   | `JUNK_LIMIT` | 20 | Keyless, malformed or query-string-key requests per client per window |
+   | `MAX_CLIENTS`, `MAX_JUNK_CLIENTS`, `MAX_DENIED_KEYS`, `MAX_LIMITED_KEYS` | 2,000 each | Map caps |
+   | `MAX_KNOWN_KEYS`, `MAX_IN_FLIGHT_KEYS` | 1,000 each | Map caps (the in-flight cap refuses rather than evicts) |
+
+   - **Client key.** The IPv4 address from `cf-connecting-ip`, or the IPv6 /64 prefix (any spelling of an address in one /64 is one client; an IPv4-mapped address is its IPv4 client). Requests without the header share one bucket; accepted, since Cloudflare always sets it. The raw address still goes to the RPC and the access log.
+   - **Positive cache.** A sha256 hash that authorized (or was rate limited, which only a live key can be) on this isolate in the last 60 minutes. It never skips the RPC: revocation, expiry and the durable rate limits are enforced by the RPC on every admitted request. It only lets the hash bypass the token buckets, with at most 4 of its RPCs in flight; excess gets 429 from memory (`Retry-After: 1`). The slot is taken before the RPC and released in a `finally`.
+   - **Token buckets.** Any other well-formed key must take, synchronously before the RPC is awaited, one token from its client's bucket and one from the isolate bucket (both or neither). If either is empty: 429 from memory, `Retry-After` to that window's end. Both tokens are refunded only when the RPC answers `ok` or `rate_limited`, and only to the window that issued them (a window is replaced, never reset, when it ends, so a late refund to an ended window is a no-op). Denied, `unavailable` and transport failures keep the tokens. So, per isolate and window, hashes outside the positive cache cause at most 10 RPCs per client and 60 in all, whatever the RPC answers (outages included) and however many requests are in flight. This replaces the 20-failure threshold and the blocked-IP budget for keyed requests.
+   - **Negative cache.** The first unknown, revoked or expired answer for a hash is remembered for 60 s and answered from memory with the same 401 code (no token, no RPC). A denial also removes the hash from the positive cache.
+   - **Junk counter.** Missing or malformed keys and keys in the query string count per client; past 20 in a window, missing or malformed keys get 429 until the window ends (a query-string key is always 400). It never affects a request that carries a well-formed key.
+   - **Maps.** Each structure is its own capped `Map` that sweeps its own expired entries and then evicts its own oldest, so churn in one never evicts another. Evicting a client bucket is harmless because the isolate bucket still applies. An in-flight entry exists only while its RPCs run, so that map never evicts: at its cap a new hash gets 429 (`Retry-After: 1`); a slot always releases the entry it took. Only sha256 hex enters the per-hash maps; no raw key is stored or logged.
+
+   **Hard bound, per isolate and 60 s window** (what an attacker without a valid key can cause): at most 10 authorize RPCs per client and 60 in all, whatever the RPC answers and however many requests are in flight. A key that authorized on the isolate in the last 60 minutes adds RPCs bounded by concurrency, not by count: at most 4 in flight per hash and at most `MAX_IN_FLIGHT_KEYS` × 4 = 4,000 in flight in all (a new hash is refused at the cap, never evicting a busy one); the durable per-key limits in the RPC then shed it from memory once it is over its limit.
+
+   Measured with a fake RPC and a fake clock (route tests in `__tests__/openApiWorkers.test.js`, exact assertions). One isolate; "Before" is the second review's measurement at a750759:
+
+   | Case | Before | After |
+   |---|---|---|
+   | RPC outage (throws, or 404), 1,000 random keys from one client in 10 s | 1,000 RPCs | 10 (10 × 503, 990 × 429); the next window from 5,000 clients, 60 |
+   | 3 concurrent bursts of 1,000 random keys from one client, 61 s apart | 3,000 | 30 (10 per burst); with 1,000 more from 100 clients in each burst, 60 per window, at most 10 per client |
+   | 5,000 random keys, each from a new address in one IPv6 /64 | 5,000 | 10 (one client); the next /64 is a new client |
+   | 5,000 random keys, each from a new IPv4 address, two windows | — ¹ | 60 per window |
+   | 5 rounds of 19 random keys from one IP, 2,500 junk-only IPs between rounds | — ¹ | 10 |
+   | 2,000 concurrent requests with one known-good key | 2,000 | 4 (peak 4 in flight, 1,996 × 429 `Retry-After: 1`) |
+   | 50 concurrent requests across 5 known-good keys, `MAX_IN_FLIGHT_KEYS` set to 3 | — ¹ | 12 (3 hashes × 4) |
+   | 2,000 concurrent with a just-revoked key still in the positive cache, then 3,000 sequential over 3 min | — ¹ | 4, then 2 (one per negative-cache expiry) |
+   | A window spent (10), then 5 late refunds from the previous window, then 50 more random keys | — ¹ | 0 more; refunds to an ended window are ignored |
+
+   ¹ Not among the review's recorded measurements.
+
+   **Residuals, stated plainly.**
+   - Bounds are per isolate, so total database load scales with the number of isolates Cloudflare runs.
+   - A valid key on a shared IP during a flood can be refused: a flood of random keys from the same address (or /64) spends that client's 10 tokens, and a distributed attacker, or one rotating through /64s, can hold the isolate bucket empty. While that lasts, a valid key that this isolate has not seen in the last 60 minutes gets 429 until the window ends. Keys in the positive cache are unaffected.
+   - Requests without `cf-connecting-ip` share one client bucket (Cloudflare always sets the header on public traffic, so only non-public paths could hit this).
+   - Known-good keys are bounded by concurrency, not by count: during an RPC outage a known key's own traffic still reaches the (failing) RPC, at most 4 at a time.
+   - Closing that needs a store shared across isolates, or self-verifying keys (an HMAC tag inside the key, checked before any RPC). Self-verifying keys would add a Worker secret and change the key format. This is recorded as an owner decision (§14.9), not built.
+2. **Rate-limited keys are shed before the database** (same files). A `rate_limited` RPC answer makes that hash a 429 from memory until the reported reset (`retryAfter`, 60 s if none), with the same `Retry-After` and `X-RateLimit-*` headers.
 3. **Show-once key can no longer be copied around the clipboard policy** (`NativeAPIAccessView.swift`). `.textSelection(.enabled)` is removed from the secret, so the Copy button (local-only, 2-minute expiry, §9) is the only copy path. `native/APIAccessTests/main.swift` now fails if the view source contains `textSelection`.
 4. **Working keys are bounded including grace keys** (`20261003_api_keys.sql`, edited in place; still unapplied). Rotation ends the rotated key's own grace predecessor immediately, and after each rotate only the 5 latest-expiring grace keys keep working (the rest end now). This holds even when a replacement is revoked (which leaves its predecessor in grace with no live successor). With the live cap of 5 this gives at most 10 working keys, and rotate still never fails on the cap. Corrects #2. The verify SQL pins the grace cap in the RPC source, and `supabase/verify/local/api_keys.sh` covers lineage rotation, create/rotate/revoke churn and rotate at the live cap.
 
@@ -490,4 +535,5 @@ Four review findings, fixed and tested:
 - Native Settings → API access (§9) belongs to the native slice.
 - Hosted-project verification and a staging concurrency run wait for the owner's migration apply; the local proof covers the SQL behavior.
 - `Deprecation`/`Sunset` headers have nothing to announce until a `/v2` exists.
-- The failed-auth guard and the 10/min manage limit are in-memory per isolate, as §6 accepts; the durable limits are the RPC counters.
+- The request guard (§14.4a) and the 10/min manage limit are in-memory per isolate, as §6 accepts; the durable limits are the RPC counters.
+- **Owner decision, not built:** whether to close the §14.4a residual (an attacker holding the isolate bucket makes never-seen valid keys 429 on that isolate) with a store shared across isolates or with self-verifying keys (an HMAC tag inside the key, checked before any RPC; adds a Worker secret and changes the key format).

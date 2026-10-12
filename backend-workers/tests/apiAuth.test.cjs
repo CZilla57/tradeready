@@ -8,7 +8,7 @@ const { createHash } = require('node:crypto');
 
 const keys = require('../lib/api/keys.js');
 const { encodeCursor, decodeCursor } = require('../lib/api/cursor.js');
-const { authorizeKey, logApiRequest, eventForStatus, createAuthFailureGuard } = require('../lib/api/auth.js');
+const { authorizeKey, logApiRequest, eventForStatus, createApiGuard, clientKey, GUARD_LIMITS } = require('../lib/api/auth.js');
 const v1 = require('../lib/api/v1.js');
 const { OPENAPI_DOCUMENT, API_BASE_URL, COMPONENT, toOpenApiPath } = require('../lib/api/openapi.js');
 const { FIELDS, RESOURCE_NAMES } = require('../lib/api/resources.js');
@@ -245,37 +245,135 @@ describe('authorizeKey: the RPC envelope contract (§4)', () => {
   });
 });
 
-describe('failed-auth load guard (§6)', () => {
-  test('the 20th failure in a minute blocks that address for a minute; others are unaffected', () => {
-    const g = createAuthFailureGuard({ limit: 20, windowMs: 60_000 });
-    const t0 = 1_000_000;
-    for (let i = 0; i < 19; i++) g.fail('198.51.100.1', t0 + i);
-    assert.equal(g.blockedFor('198.51.100.1', t0 + 100), 0, '19 failures: not blocked');
-    g.fail('198.51.100.1', t0 + 200);
-    assert.equal(g.blockedFor('198.51.100.1', t0 + 300), 60, '20th failure blocks');
-    assert.equal(g.blockedFor('198.51.100.2', t0 + 300), 0, 'per address');
-    assert.equal(g.blockedFor('198.51.100.1', t0 + 200 + 60_000), 0, 'block lifts after the window');
+describe('request guard: client key (§14.4a)', () => {
+  test('IPv4 is the address; IPv6 is its /64 in any spelling; IPv4-mapped is the IPv4 client', () => {
+    assert.equal(clientKey('203.0.113.9'), '203.0.113.9');
+    assert.equal(clientKey(' 203.0.113.9 '), '203.0.113.9');
+    for (const a of ['2001:db8:1:2::1', '2001:DB8:1:2:ffff:ffff:ffff:ffff', '2001:0db8:0001:0002:0:0:0:9', '[2001:db8:1:2::a]', '2001:db8:1:2::1%eth0']) {
+      assert.equal(clientKey(a), '2001:db8:1:2::/64', a);
+    }
+    assert.notEqual(clientKey('2001:db8:1:3::1'), clientKey('2001:db8:1:2::1'), 'another /64 is another client');
+    assert.equal(clientKey('::ffff:203.0.113.9'), '203.0.113.9');
+    assert.equal(clientKey('2001:db8:1:2::203.0.113.9'), '2001:db8:1:2::/64');
+  });
+
+  test('a missing header is one shared bucket (accepted); garbage never throws', () => {
+    assert.equal(clientKey(null), clientKey(undefined));
+    assert.equal(clientKey(''), clientKey('   '));
+    assert.equal(clientKey(null), clientKey(''));
+    assert.ok(clientKey('x'.repeat(500)).length <= 64);
+    assert.equal(typeof clientKey('1::2::3'), 'string');
   });
 });
 
-describe('per-key-hash memory guards (§6)', () => {
+describe('request guard: windows and limits (§14.4a)', () => {
   const H1 = 'a'.repeat(64);
   const H2 = 'b'.repeat(64);
 
-  test('unknown hash: shed from the 5th unknown answer until the window ends; per hash', () => {
-    const g = createAuthFailureGuard({ unknownLimit: 5, windowMs: 60_000 });
+  test('the numbers live in one place', () => {
+    assert.deepEqual({ ...GUARD_LIMITS }, {
+      WINDOW_MS: 60_000, CLIENT_TOKENS: 10, GLOBAL_TOKENS: 60, KNOWN_IN_FLIGHT: 4, KNOWN_TTL_MS: 3_600_000,
+      DENIED_TTL_MS: 60_000, JUNK_LIMIT: 20, MAX_CLIENTS: 2000, MAX_JUNK_CLIENTS: 2000, MAX_KNOWN_KEYS: 1000,
+      MAX_IN_FLIGHT_KEYS: 1000, MAX_DENIED_KEYS: 2000, MAX_LIMITED_KEYS: 2000,
+    });
+    assert.ok(Object.isFrozen(GUARD_LIMITS));
+    assert.equal(createApiGuard().limits.CLIENT_TOKENS, 10);
+  });
+
+  test('junk: the 21st keyless request in a window is 429 until the window ends; per client', () => {
+    const g = createApiGuard();
+    const t0 = 1_000_000;
+    for (let i = 0; i < 20; i++) assert.equal(g.junkRequest('198.51.100.1', t0 + i), 0);
+    assert.equal(g.junkRequest('198.51.100.1', t0 + 100), 60);
+    assert.equal(g.junkRequest('198.51.100.1', t0 + 30_000), 30);
+    assert.equal(g.junkRequest('198.51.100.2', t0 + 100), 0, 'per client');
+    assert.equal(g.junkRequest('198.51.100.1', t0 + 60_000), 0, 'a new window');
+  });
+
+  test('tokens: 10 per client and 60 per isolate per window, both or neither, Retry-After to the window end', () => {
+    const g = createApiGuard();
+    const t0 = 2_000_000;
+    for (let i = 0; i < 10; i++) assert.ok(g.takeTokens('c0', t0).ticket);
+    assert.deepEqual(g.takeTokens('c0', t0 + 15_000), { retryAfter: 45 });
+    // A client-empty refusal took no isolate token: 50 more clients fill the isolate bucket exactly.
+    for (let c = 1; c <= 50; c++) assert.ok(g.takeTokens(`c${c}`, t0 + 20_000).ticket, `c${c}`);
+    assert.deepEqual(g.takeTokens('fresh', t0 + 20_000), { retryAfter: 40 }, 'isolate bucket empty');
+    assert.equal(g.sizes().clients, 51, 'a refused client stored nothing');
+    assert.ok(g.takeTokens('fresh', t0 + 60_000).ticket, 'the isolate window ends');
+    assert.ok(g.takeTokens('c0', t0 + 60_000).ticket, 'the client window ends');
+  });
+
+  test('refunds return both tokens to the issuing window only, once', () => {
+    const g = createApiGuard();
+    const t0 = 3_000_000;
+    const tickets = Array.from({ length: 10 }, () => g.takeTokens('c', t0).ticket);
+    assert.ok(g.takeTokens('c', t0).retryAfter);
+    g.refundTokens(tickets[0]);
+    g.refundTokens(tickets[0]); // a second refund of the same ticket is ignored
+    g.refundTokens(null);
+    assert.ok(g.takeTokens('c', t0 + 1).ticket, 'one token came back');
+    assert.ok(g.takeTokens('c', t0 + 2).retryAfter, 'only one');
+    // Window 2: a late refund from window 1 must not top it up.
+    const w2 = Array.from({ length: 10 }, () => g.takeTokens('c', t0 + 60_000).ticket);
+    assert.ok(w2.every(Boolean));
+    for (const t of tickets.slice(1)) g.refundTokens(t);
+    assert.ok(g.takeTokens('c', t0 + 60_001).retryAfter, 'no cross-window refund (client bucket)');
+    // Same for the isolate bucket.
+    const h = createApiGuard();
+    const old = Array.from({ length: 60 }, (_, i) => h.takeTokens(`a${i}`, t0).ticket);
+    for (let i = 0; i < 60; i++) assert.ok(h.takeTokens(`b${i}`, t0 + 60_000).ticket);
+    for (const t of old) h.refundTokens(t);
+    assert.ok(h.takeTokens('z', t0 + 60_001).retryAfter, 'no cross-window refund (isolate bucket)');
+  });
+
+  test('in flight: 4 slots per known hash, released once, entry gone at zero', () => {
+    const g = createApiGuard();
+    const slots = Array.from({ length: 4 }, () => g.takeInFlight(H1));
+    assert.ok(slots.every(Boolean));
+    assert.equal(g.takeInFlight(H1), null);
+    assert.ok(g.takeInFlight(H2), 'per hash');
+    g.releaseInFlight(slots[0]);
+    g.releaseInFlight(slots[0]); // double release is ignored
+    g.releaseInFlight(null);
+    const again = g.takeInFlight(H1);
+    assert.ok(again);
+    assert.equal(g.takeInFlight(H1), null, 'exactly one slot came back');
+    for (const s of [...slots.slice(1), again]) g.releaseInFlight(s);
+    assert.equal(g.sizes().inFlight, 1, 'H1 entry removed at zero; H2 still busy');
+    assert.equal(g.takeInFlight('not-a-hash'), null);
+  });
+
+  test('at the in-flight map cap a new hash is refused; a busy entry is never evicted', () => {
+    const g = createApiGuard({ MAX_IN_FLIGHT_KEYS: 1 });
+    const a = Array.from({ length: 4 }, () => g.takeInFlight(H1));
+    assert.ok(a.every(Boolean));
+    assert.equal(g.takeInFlight(H2), null, 'map full of busy hashes');
+    assert.equal(g.takeInFlight(H1), null, 'H1 still capped at 4 (its entry was not evicted)');
+    for (const s of a) g.releaseInFlight(s);
+    assert.equal(g.sizes().inFlight, 0);
+    assert.ok(g.takeInFlight(H2), 'room again once H1 is idle');
+  });
+
+  test('negative cache: the first denial is remembered for 60 s with its own code, and leaves the positive cache', () => {
+    const g = createApiGuard();
     const t0 = 5_000_000;
-    assert.equal(g.keyShed(H1, t0), null);
-    for (let i = 0; i < 4; i++) g.unknownKey(H1, t0 + i);
-    assert.equal(g.keyShed(H1, t0 + 10), null, 'four unknown answers: still goes to the RPC');
-    g.unknownKey(H1, t0 + 20);
-    assert.deepEqual(g.keyShed(H1, t0 + 30), { error: 'invalid_key' });
-    assert.equal(g.keyShed(H2, t0 + 30), null, 'another hash is unaffected');
-    assert.equal(g.keyShed(H1, t0 + 60_000), null, 'the window ends and the hash is looked up again');
+    g.knownKey(H1, t0);
+    g.deniedKey(H1, 'key_revoked', t0 + 1);
+    assert.equal(g.isKnownKey(H1, t0 + 2), false);
+    assert.deepEqual(g.keyShed(H1, t0 + 59_999), { error: 'key_revoked' });
+    assert.equal(g.keyShed(H1, t0 + 60_001), null);
+    g.deniedKey(H2, 'key_expired', t0);
+    assert.deepEqual(g.keyShed(H2, t0), { error: 'key_expired' });
+    g.deniedKey('c'.repeat(64), 'invalid_key', t0);
+    assert.deepEqual(g.keyShed('c'.repeat(64), t0), { error: 'invalid_key' });
+    g.deniedKey('d'.repeat(64), 'something_else', t0);
+    assert.equal(g.keyShed('d'.repeat(64), t0), null);
+    g.knownKey(H2, t0 + 5);
+    assert.equal(g.keyShed(H2, t0 + 6), null, 'a success clears the negative entry');
   });
 
   test('rate-limited hash: shed until the reported reset, with the stored rate headers', () => {
-    const g = createAuthFailureGuard();
+    const g = createApiGuard();
     const t0 = 9_000_000;
     const rate = { limit: 60, remaining: 0, reset: 123 };
     g.rateLimitedKey(H1, { retryAfter: 17, rate }, t0);
@@ -287,44 +385,21 @@ describe('per-key-hash memory guards (§6)', () => {
     assert.equal(g.keyShed(H2, t0 + 60_000), null);
   });
 
-  test('only sha256 hex is accepted as a guard key, so a presented key is never remembered', () => {
-    const g = createAuthFailureGuard();
-    const raw = `trk_${'Z'.repeat(43)}`;
-    g.unknownKey(raw, 1);
-    g.rateLimitedKey(raw, { retryAfter: 30 }, 1);
-    g.knownKey(raw, 1);
-    assert.deepEqual(g.sizes(), { ips: 0, blocked: 0, unknownKeys: 0, limitedKeys: 0, knownKeys: 0, budgets: 0 });
-  });
-
-  test('over the threshold, hashes outside the positive cache share a small per-IP budget; known hashes do not', () => {
-    const g = createAuthFailureGuard({ limit: 3, windowMs: 1000, ipBudget: 2 });
-    for (let i = 0; i < 3; i++) g.fail('ip', 0);
-    assert.ok(g.blockedFor('ip', 10) > 0);
-    assert.equal(g.takeIpBudget('ip', 10), true);
-    assert.equal(g.takeIpBudget('ip', 20), true);
-    assert.equal(g.takeIpBudget('ip', 30), false);
-    assert.equal(g.takeIpBudget('other', 30), true, 'per address');
-    g.refundIpBudget('ip');
-    assert.equal(g.takeIpBudget('ip', 31), true, 'a refunded credit can be spent again');
-    assert.equal(g.takeIpBudget('ip', 32), false);
-    g.refundIpBudget('never-seen');
-    g.fail('ip', 40); // a budgeted RPC that failed must not extend the block
-    assert.equal(g.blockedFor('ip', 1000), 0, 'block ends one window after it began');
+  test('positive cache: sixty-minute TTL', () => {
+    const g = createApiGuard();
     g.knownKey(H1, 0);
     assert.equal(g.isKnownKey(H1, 3_599_999), true);
-    assert.equal(g.isKnownKey(H1, 3_600_000), false, 'sixty-minute TTL');
-    g.knownKey(H2, 0);
-    g.forgetKey(H2);
-    assert.equal(g.isKnownKey(H2, 1), false);
+    assert.equal(g.isKnownKey(H1, 3_600_000), false);
   });
 
-  test('the IP failure window restarts after it elapses (failures do not accumulate across windows)', () => {
-    const g = createAuthFailureGuard({ limit: 3, windowMs: 1000 });
-    g.fail('ip', 0); g.fail('ip', 100);
-    g.fail('ip', 2000); g.fail('ip', 2100);
-    assert.equal(g.blockedFor('ip', 2200), 0);
-    g.fail('ip', 2200);
-    assert.ok(g.blockedFor('ip', 2300) > 0);
+  test('only sha256 hex is accepted as a guard key, so a presented key is never remembered', () => {
+    const g = createApiGuard();
+    const raw = `trk_${'Z'.repeat(43)}`;
+    g.deniedKey(raw, 'invalid_key', 1);
+    g.rateLimitedKey(raw, { retryAfter: 30 }, 1);
+    g.knownKey(raw, 1);
+    assert.equal(g.takeInFlight(raw), null);
+    assert.deepEqual(g.sizes(), { clients: 0, junk: 0, knownKeys: 0, inFlight: 0, deniedKeys: 0, limitedKeys: 0 });
   });
 });
 
