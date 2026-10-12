@@ -65,17 +65,26 @@ protocol NativeCalendarAccess: AnyObject {
     /// Event occurrences overlapping [start, end) across every calendar
     /// (recurring events arrive expanded; the domain applies exclusions).
     func samples(start: Date, end: Date) -> [NativeCalendarBusy.Sample]
-    /// Finds the TradeReady calendar by its stored identifier, then by title
-    /// among writable calendars. Never creates one.
+    /// Finds the mirror calendar by its stored identifier ONLY, among writable
+    /// calendars. Never by title (a calendar that merely shares the title is
+    /// not this account's: adoption goes through `calendars()`, `mirrorEvents`
+    /// and `NativeCalendarMirror.adoptableCalendarID`). Never creates one.
     func findMirrorCalendar(storedID: String?) -> NativeMirrorCalendarLookup
-    /// Creates the TradeReady calendar (iCloud source when present, else the
-    /// default calendar's source, else Local).
+    /// Creates the mirror calendar (iCloud source when present, else the
+    /// default calendar's source, else Local). The title comes from
+    /// `NativeCalendarMirror.newCalendarTitle`, so it never collides with an
+    /// existing calendar.
     func createMirrorCalendar() throws -> NativeMirrorCalendarLookup
-    /// Events in the mirror calendar starting inside [start, end).
+    /// Every event of the calendar overlapping [start, end) (any calendar id,
+    /// any window; ranges over EventKit's 4-year predicate limit are read in
+    /// slices). Not limited to events starting inside the window: the planner
+    /// matches events to jobs by the job id in their marker.
     func mirrorEvents(calendarID: String, start: Date, end: Date) -> [NativeCalendarMirror.Existing]
     /// Applies a reconcile plan: every save with `commit: false`, then one commit.
     func apply(_ operations: [NativeCalendarMirror.Operation], calendarID: String) throws
-    /// Deletes the TradeReady calendar (and its events) from the account.
+    /// Deletes the calendar (and its events) from the account. The caller has
+    /// already established, with `NativeCalendarMirror.removalDecision`, that
+    /// every event in it is this account's.
     func removeMirrorCalendar(calendarID: String) throws
     /// `EKEventStoreChanged` while observing; the handler runs on the main actor.
     func startObservingChanges(_ handler: @escaping @MainActor () -> Void)
@@ -163,28 +172,21 @@ final class NativeEventKitCalendarAccess: NativeCalendarAccess {
     // MARK: Mirror calendar
 
     func findMirrorCalendar(storedID: String?) -> NativeMirrorCalendarLookup {
-        guard authorization.isUsable else { return .missing }
-        if let storedID, let calendar = store.calendar(withIdentifier: storedID), calendar.allowsContentModifications {
-            return .found(id: calendar.calendarIdentifier, accountTitle: calendar.source?.title ?? "Other")
-        }
-        let byTitle = store.calendars(for: .event)
-            .filter { $0.title == NativeCalendarMirror.calendarTitle && $0.allowsContentModifications }
-            .sorted { $0.calendarIdentifier < $1.calendarIdentifier }
-        if let calendar = byTitle.first {
-            return .found(id: calendar.calendarIdentifier, accountTitle: calendar.source?.title ?? "Other")
-        }
-        return .missing
+        guard authorization.isUsable, let storedID,
+              let calendar = store.calendar(withIdentifier: storedID), calendar.allowsContentModifications else { return .missing }
+        return .found(id: calendar.calendarIdentifier, accountTitle: calendar.source?.title ?? "Other")
     }
 
     func createMirrorCalendar() throws -> NativeMirrorCalendarLookup {
         guard authorization.isUsable else { throw NativeCalendarAccessError.notAuthorized }
+        let title = NativeCalendarMirror.newCalendarTitle(existingTitles: store.calendars(for: .event).map(\.title))
         let iCloud = store.sources.first { $0.sourceType == .calDAV && $0.title.lowercased() == "icloud" }
         let fallback = store.defaultCalendarForNewEvents?.source
         let local = store.sources.first { $0.sourceType == .local }
         var tried = Set<String>()
         for source in [iCloud, fallback, local].compactMap({ $0 }) where tried.insert(source.sourceIdentifier).inserted {
             let calendar = EKCalendar(for: .event, eventStore: store)
-            calendar.title = NativeCalendarMirror.calendarTitle
+            calendar.title = title
             calendar.source = source
             do {
                 try store.saveCalendar(calendar, commit: true)
@@ -198,17 +200,28 @@ final class NativeEventKitCalendarAccess: NativeCalendarAccess {
 
     func mirrorEvents(calendarID: String, start: Date, end: Date) -> [NativeCalendarMirror.Existing] {
         guard authorization.isUsable, let calendar = store.calendar(withIdentifier: calendarID), start < end else { return [] }
-        let predicate = store.predicateForEvents(withStart: start, end: end, calendars: [calendar])
-        return store.events(matching: predicate).compactMap { event in
-            guard let startDate = event.startDate, startDate >= start, startDate < end,
-                  let fields = Self.fields(of: event) else { return nil }
-            return NativeCalendarMirror.Existing(
-                eventID: event.eventIdentifier ?? "",
-                externalID: event.calendarItemExternalIdentifier,
-                creationDate: event.creationDate,
-                notes: event.notes,
-                fields: fields)
-        }.filter { !$0.eventID.isEmpty }
+        // EventKit truncates a predicate to 4 years: read longer ranges in slices.
+        let slice: TimeInterval = 3 * 365 * 86_400
+        var seen = Set<String>()
+        var out: [NativeCalendarMirror.Existing] = []
+        var from = start
+        while from < end {
+            let to = min(from.addingTimeInterval(slice), end)
+            let predicate = store.predicateForEvents(withStart: from, end: to, calendars: [calendar])
+            for event in store.events(matching: predicate) {
+                guard let startDate = event.startDate, let fields = Self.fields(of: event),
+                      let eventID = event.eventIdentifier, !eventID.isEmpty,
+                      seen.insert("\(eventID)|\(startDate.timeIntervalSince1970)").inserted else { continue }
+                out.append(NativeCalendarMirror.Existing(
+                    eventID: eventID,
+                    externalID: event.calendarItemExternalIdentifier,
+                    creationDate: event.creationDate,
+                    notes: event.notes,
+                    fields: fields))
+            }
+            from = to
+        }
+        return out
     }
 
     /// Reads an event back into the planner's naive fields: zoned events in
@@ -259,11 +272,11 @@ final class NativeEventKitCalendarAccess: NativeCalendarAccess {
                     Self.write(desired.fields, to: event)
                     try store.save(event, span: .thisEvent, commit: false)
                 case let .update(eventID, desired):
-                    guard let event = store.event(withIdentifier: eventID) else { continue }
+                    guard let event = store.event(withIdentifier: eventID), Self.isMirrorEvent(event, in: calendarID) else { continue }
                     Self.write(desired.fields, to: event)
                     try store.save(event, span: .thisEvent, commit: false)
                 case let .delete(eventID):
-                    guard let event = store.event(withIdentifier: eventID) else { continue }
+                    guard let event = store.event(withIdentifier: eventID), Self.isMirrorEvent(event, in: calendarID) else { continue }
                     try store.remove(event, span: .thisEvent, commit: false)
                 }
             }
@@ -272,6 +285,13 @@ final class NativeEventKitCalendarAccess: NativeCalendarAccess {
             store.reset()
             throw NativeCalendarAccessError.saveFailed
         }
+    }
+
+    /// Last line of defence before an edit or delete: the event is in the
+    /// mirror calendar and carries a mirror marker. The planner already
+    /// limits every operation to events with this account's tag.
+    private static func isMirrorEvent(_ event: EKEvent, in calendarID: String) -> Bool {
+        event.calendar?.calendarIdentifier == calendarID && NativeCalendarMirror.parseMarker(event.notes) != nil
     }
 
     private static func write(_ fields: NativeCalendarMirror.Fields, to event: EKEvent) {

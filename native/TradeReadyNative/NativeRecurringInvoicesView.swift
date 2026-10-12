@@ -58,6 +58,40 @@ struct NativeRecurringInvoicesView: View {
         (.quarterly, "Quarterly"), (.annually, "Annually"),
     ]
 
+    /// The plans list, split out of `body` so the type checker finishes in time
+    /// (Phase 24 added a header, footer and autopay line here).
+    private var plansSection: some View {
+        Section {
+            if store.recurringInvoiceRules.isEmpty {
+                Text("No maintenance plans yet.").foregroundStyle(.secondary)
+            }
+            ForEach(store.recurringInvoiceRules, id: \.id) { rule in
+                Button { planActions.showActions(for: rule) } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(rule.customerName).font(.headline)
+                            Text("\(cadenceLabel(rule.cadence)) · \(rule.amount.currency) · \(endText(rule))")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                            Text("\(rule.occurrenceCount) generated · Next \(rule.nextDueDate)")
+                                .font(.caption).foregroundStyle(.secondary)
+                            autopayLine(for: rule)
+                        }
+                        Spacer()
+                        Text(rule.isActive ? "Active" : "Paused")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(rule.isActive ? Color.tradeSuccessText : Color.tradeWarningText)
+                    }
+                }.buttonStyle(.plain)
+            }
+        } header: {
+            Text("Plans")
+        } footer: {
+            if showsAutopayStatusError, let error = store.autopayStatusError {
+                Text(error)
+            }
+        }
+    }
+
     var body: some View {
         List {
             Section {
@@ -77,35 +111,7 @@ struct NativeRecurringInvoicesView: View {
             if let saveError {
                 Section { Text(saveError).foregroundStyle(Color.tradeDangerText) }
             }
-            Section {
-                if store.recurringInvoiceRules.isEmpty {
-                    Text("No maintenance plans yet.").foregroundStyle(.secondary)
-                }
-                ForEach(store.recurringInvoiceRules, id: \.id) { rule in
-                    Button { planActions.showActions(for: rule) } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(rule.customerName).font(.headline)
-                                Text("\(cadenceLabel(rule.cadence)) · \(rule.amount.currency) · \(endText(rule))")
-                                    .font(.subheadline).foregroundStyle(.secondary)
-                                Text("\(rule.occurrenceCount) generated · Next \(rule.nextDueDate)")
-                                    .font(.caption).foregroundStyle(.secondary)
-                                autopayLine(for: rule)
-                            }
-                            Spacer()
-                            Text(rule.isActive ? "Active" : "Paused")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(rule.isActive ? Color.tradeSuccessText : Color.tradeWarningText)
-                        }
-                    }.buttonStyle(.plain)
-                }
-            } header: {
-                Text("Plans")
-            } footer: {
-                if showsAutopayStatusError, let error = store.autopayStatusError {
-                    Text(error)
-                }
-            }
+            plansSection
         }
         .nativeContentColumn(.list)
         .tradeReadyListStyle()

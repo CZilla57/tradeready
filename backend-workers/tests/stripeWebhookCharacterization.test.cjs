@@ -130,10 +130,11 @@ describe('webhook characterization (pre-Phase-24 behavior)', () => {
     assert.deepEqual([res.status, res.body], [200, { received: true }]);
     const [up] = upserts();
     assert.equal(up.headers.prefer, 'resolution=merge-duplicates');
-    assert.deepEqual(Object.keys(up.json).sort(), ['data', 'deleted', 'id', 'updated_at', 'user_id']);
+    // Changed 2026-10-04 (autopay spec §13.7): the booking no longer writes
+    // `deleted` (it used to write false, resurrecting deleted invoices).
+    assert.deepEqual(Object.keys(up.json).sort(), ['data', 'id', 'updated_at', 'user_id']);
     assert.equal(up.json.id, 'inv_1');
     assert.equal(up.json.user_id, USER);
-    assert.equal(up.json.deleted, false);
     assert.deepEqual(up.json.data.payments, [
       { id: 'stripe_cs_test_1', amount: 120.5, date: TODAY, method: 'stripe', stripeSessionId: 'cs_test_1' },
     ]);

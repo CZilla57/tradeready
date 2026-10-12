@@ -8,6 +8,9 @@
 -- there are deliberately NO insert/update/delete policies, so no client can
 -- write a consent record or a charge claim. Rows hold no card numbers: only
 -- brand, last 4, expiry and Stripe ids. Both cascade on account deletion.
+-- The owner role reads enrollments through a column grant that leaves out
+-- the consent IP and user agent (spec §4.8: never sent to the owner); the
+-- Worker reads everything with the service role.
 --
 -- Applied out-of-band by the owner (no CLI runner in this repo), BEFORE the
 -- Worker deploy (spec §9 step 3). Then run:
@@ -64,12 +67,16 @@ create table if not exists public.autopay_charges (
   amount_cents       integer not null,
   status             text not null check (status in ('claimed','succeeded','failed','skipped')),
   payment_intent_id  text,
+  charge_sent_at     timestamptz,             -- stamped right before paymentIntents.create; once set the claim is never released (§13.7)
   failure_code       text, decline_code text, failure_message text,
   customer_notified_at timestamptz, owner_notified_at timestamptz,
   created_at         timestamptz not null default now(),
   updated_at         timestamptz not null default now(),
   unique (user_id, invoice_id, attempt)
 );
+
+-- Re-runs over an earlier draft of this table (unapplied, so local only).
+alter table public.autopay_charges add column if not exists charge_sent_at timestamptz;
 
 -- The owner status route reads the last 120 days per user.
 create index if not exists autopay_charges_by_user_created
@@ -87,3 +94,22 @@ drop policy if exists "read own autopay charges" on public.autopay_charges;
 create policy "read own autopay charges"
   on public.autopay_charges for select
   using (auth.uid() = user_id);
+
+-- Grants (review fix 2026-10-04, spec §13.7). Hosted Supabase grants every
+-- new public table to anon/authenticated, and the owner-read policies above
+-- would then expose every column over PostgREST, including the customer's
+-- consent IP and user agent. No client reads these tables (the app goes
+-- through the Worker's owner routes, which use the service role), so the
+-- client roles get exactly the owner-read surface: enrollments minus the
+-- consent IP / user agent, and charges. No client write grants at all.
+revoke all on table public.autopay_enrollments from public, anon, authenticated;
+revoke all on table public.autopay_charges from public, anon, authenticated;
+grant select, insert, update, delete on table public.autopay_enrollments to service_role;
+grant select, insert, update, delete on table public.autopay_charges to service_role;
+grant select (
+  id, user_id, stripe_account_id, customer_id, recurring_invoice_id, stripe_customer_id,
+  payment_method_id, card_brand, card_last4, card_exp_month, card_exp_year, card_wallet,
+  billing_email, max_amount_cents, status, consent_version, consent_text, consented_at,
+  checkout_session_id, activated_at, revoked_at, revoked_by, revoke_reason, created_at, updated_at
+) on public.autopay_enrollments to authenticated;
+grant select on table public.autopay_charges to authenticated;

@@ -41,7 +41,7 @@ func decodeJSON<T: Decodable>(_ type: T.Type, _ fields: [String: Any]) -> T {
 func customer(
     _ id: String, _ name: String, source: String? = nil, createdAt: String? = nil, archivedAt: String? = nil,
     code: String? = nil, aliases: [String]? = nil, referrer: String? = nil, reward: [String: Any]? = nil,
-    email: String = "", phone: String = ""
+    email: String = "", phone: String = "", extra: [String: Any] = [:]
 ) -> Canonical.Customer {
     var fields: [String: Any] = ["id": id, "name": name, "email": email, "phone": phone, "address": "", "notes": ""]
     if let source { fields["leadSource"] = source }
@@ -51,6 +51,7 @@ func customer(
     if let aliases { fields["referralCodeAliases"] = aliases }
     if let referrer { fields["referredByCustomerId"] = referrer }
     if let reward { fields["referralReward"] = reward }
+    for (key, value) in extra { fields[key] = value }
     return decodeJSON(Canonical.Customer.self, fields)
 }
 
@@ -479,6 +480,37 @@ func testReport() {
                 "attribution: same-bucket duplicates still resolve by name")
 }
 
+// MARK: - The referral share honours the marketing opt-out (campaigns spec §4.3, D4)
+
+func testShareBlock() {
+    typealias O = NativeMarketingOptOut
+    let optedOut: [String: Any] = ["marketingOptOutOn": "2026-09-01", "marketingOptOutVia": "text_stop"]
+    let sam = customer("sam", "Sam Lee", email: "Sam@Example.com", phone: "(602) 555-0188", extra: optedOut)
+    let samuel = customer("samuel", "Samuel Lee", email: "samuel@example.com", phone: "+1 602 555 0188")
+    let emailTwin = customer("twin", "Twin Lee", email: " sam@example.com ", phone: "6025550100")
+    let stranger = customer("stranger", "Stranger", email: "x@example.com", phone: "6025550999")
+    let all = [sam, samuel, emailTwin, stranger]
+
+    expectEqual(O.block(for: sam, medium: .text, among: all), .optedOut, "share: an opted-out customer is blocked by text")
+    expectEqual(O.block(for: sam, medium: .email, among: all), .optedOut, "share: an opted-out customer is blocked by email")
+    expectEqual(O.block(for: samuel, medium: .text, among: all), .sharedContact,
+                "share: another record with an opted-out record's phone is blocked by text")
+    expectEqual(O.block(for: samuel, medium: .email, among: all), nil,
+                "share: that record's own (different) email is not blocked")
+    expectEqual(O.block(for: emailTwin, medium: .email, among: all), .sharedContact,
+                "share: another record with an opted-out record's email is blocked by email")
+    expectEqual(O.block(for: emailTwin, medium: .text, among: all), nil, "share: a different phone is not blocked")
+    expectEqual(O.block(for: stranger, medium: .text, among: all), nil, "share: an unrelated customer is allowed (text)")
+    expectEqual(O.block(for: stranger, medium: .email, among: all), nil, "share: an unrelated customer is allowed (email)")
+    expectEqual(O.block(for: customer("short", "Short", phone: "555-0188"), medium: .text,
+                        among: all + [customer("shortOpt", "Short Opt", phone: "555-0188", extra: optedOut)]), nil,
+                "share: a phone under 10 digits is not a shared contact")
+    expectEqual(O.block(for: samuel, medium: .text, among: [samuel]), nil, "share: nothing opted out blocks nothing")
+    expect(O.Block.optedOut.explanation(name: "Sam Lee").contains("asked not to get marketing messages")
+           && O.Block.sharedContact.explanation(name: "Samuel Lee").contains("Samuel Lee"),
+           "share: each block carries an explanation naming the customer")
+}
+
 func testGroupsAndSummary() {
     let groups = NativeReferralReport.groups(customers: reportCustomers, invoices: reportInvoices,
                                              start: september.start, end: september.end)
@@ -613,6 +645,7 @@ testReport()
 testGroupsAndSummary()
 testCoachBlock()
 testThanksInsight()
+testShareBlock()
 
 if failures == 0 {
     print("referral tests: all \(checks) checks passed")

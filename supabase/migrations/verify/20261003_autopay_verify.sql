@@ -15,7 +15,7 @@
 -- transaction, which would leave the seeded verify_autopay_* rows behind in
 -- real data despite the trailing `rollback`.
 --
--- Success prints one NOTICE per check, ending with "ALL CHECKS PASSED". Any
+-- Success prints one NOTICE per check (11), ending with "ALL CHECKS PASSED". Any
 -- failure raises an exception and (with ON_ERROR_STOP) a non-zero exit.
 
 begin;
@@ -173,6 +173,38 @@ begin
     raise exception 'CHECK 9 FAILED: % charge rows survived their enrollment', n;
   end if;
   raise notice 'CHECK 9 ok: charge rows cascade with their enrollment';
+
+  ------------- 10. the owner role never reads consent IP / user agent (§4.8)
+  if has_table_privilege('authenticated', 'public.autopay_enrollments', 'SELECT')
+     or has_column_privilege('authenticated', 'public.autopay_enrollments', 'consent_ip', 'SELECT')
+     or has_column_privilege('authenticated', 'public.autopay_enrollments', 'consent_user_agent', 'SELECT') then
+    raise exception 'CHECK 10 FAILED: authenticated can read consent IP / user agent';
+  end if;
+  if not has_column_privilege('authenticated', 'public.autopay_enrollments', 'card_last4', 'SELECT')
+     or not has_column_privilege('authenticated', 'public.autopay_enrollments', 'consented_at', 'SELECT')
+     or not has_table_privilege('authenticated', 'public.autopay_charges', 'SELECT') then
+    raise exception 'CHECK 10 FAILED: authenticated lost the owner-read columns';
+  end if;
+  if has_table_privilege('anon', 'public.autopay_enrollments', 'SELECT')
+     or has_column_privilege('anon', 'public.autopay_enrollments', 'consent_ip', 'SELECT')
+     or has_table_privilege('anon', 'public.autopay_charges', 'SELECT') then
+    raise exception 'CHECK 10 FAILED: anon can read autopay rows';
+  end if;
+  if has_table_privilege('authenticated', 'public.autopay_charges', 'INSERT')
+     or has_table_privilege('authenticated', 'public.autopay_charges', 'UPDATE')
+     or has_table_privilege('authenticated', 'public.autopay_charges', 'DELETE')
+     or has_table_privilege('authenticated', 'public.autopay_enrollments', 'UPDATE') then
+    raise exception 'CHECK 10 FAILED: authenticated holds a write grant';
+  end if;
+  raise notice 'CHECK 10 ok: owner role reads enrollments without consent IP / user agent, and charges; no client writes';
+
+  ------------------------------- 11. the charge-sent stamp exists and is optional
+  if not exists (select 1 from information_schema.columns
+                  where table_schema = 'public' and table_name = 'autopay_charges'
+                    and column_name = 'charge_sent_at' and data_type = 'timestamp with time zone' and is_nullable = 'YES') then
+    raise exception 'CHECK 11 FAILED: autopay_charges.charge_sent_at (timestamptz, nullable) is missing';
+  end if;
+  raise notice 'CHECK 11 ok: autopay_charges.charge_sent_at exists';
 
   raise notice 'ALL CHECKS PASSED';
 end

@@ -623,5 +623,88 @@ do {
     expect(lead(noCampaigns)?.campaignId == nil, "the default campaigns list resolves nothing")
 }
 
+// 16. Referral code + campaign code together (campaigns spec §9.2): a referral
+// that resolves to a referrer wins and fills exactly what a referral-only
+// booking would, on a new customer and on a matched blank-source customer; an
+// unresolvable referral loses to the campaign (new customer), and a campaign
+// alone still never fills a matched customer's source.
+do {
+    let samCode = "0123456789abcdef"
+    let campaignCode = "04hmasw9nf6yy41j"
+    let sam = decodeCustomer("""
+    {"id":"c_sam","name":"Sam Ortiz","email":"sam@example.com","phone":"(602) 555-0177",
+     "address":"9 Oak Ave","notes":"","leadSource":"google","referralCode":"\(samCode)"}
+    """)
+    let blank = decodeCustomer("""
+    {"id":"c1","name":"Dana Rivers","email":"","phone":"","address":"12 Elm St","notes":""}
+    """)
+    let sourced = decodeCustomer("""
+    {"id":"c1","name":"Dana Rivers","email":"dana@example.com","phone":"555-0142","address":"12 Elm St","notes":"","leadSource":"yelp"}
+    """)
+    let campaigns = [
+        Canonical.Campaign(id: "cmp_fall", name: "Fall", code: campaignCode, createdAt: "2026-10-01T00:00:00.000Z"),
+    ]
+    func request(referral: String?, campaign: String?, name: String = "Dana Rivers",
+                 email: String = "dana@example.com", phone: String = "555-0142") -> Canonical.BookingRequest {
+        var fields = """
+        {"id":"bk_both","status":"new","name":"\(name)",
+         "phone":"\(phone)","email":"\(email)","address":"12 Elm St",
+         "details":"Tune-up","preferredTiming":"","createdAt":"2026-10-04T15:00:00.000Z"
+        """
+        if let referral { fields += ",\"referralCode\":\"\(referral)\"" }
+        if let campaign { fields += ",\"campaignCode\":\"\(campaign)\"" }
+        return decodeRequest(fields + "}")
+    }
+    func plan(_ request: Canonical.BookingRequest, _ customers: [Canonical.Customer]) -> NativeBookingIntake.Plan {
+        NativeBookingIntake.plan(requests: [request], jobs: [], customers: customers, campaigns: campaigns,
+                                 settings: settings, makeCustomerID: idFactory("c_new"), nowISO: { fixedNow })
+    }
+    func lead(_ plan: NativeBookingIntake.Plan) -> Canonical.Job? { plan.jobs.first { $0.id == "jbk_bk_both" } }
+
+    // New customer: the referral wins; the job is still stamped with the campaign.
+    let created = plan(request(referral: samCode, campaign: campaignCode), [sam])
+    let fresh = created.customers.first { $0.id == "c_new" }
+    expect(fresh?.leadSource == "referral" && fresh?.referredByCustomerId == "c_sam",
+           "both codes, new customer: a resolving referral wins over the campaign")
+    expect(lead(created)?.campaignId == "cmp_fall", "both codes, new customer: the lead job still carries the campaign")
+    let referralOnly = plan(request(referral: samCode, campaign: nil), [sam]).customers.first { $0.id == "c_new" }
+    expect(fresh?.leadSource == referralOnly?.leadSource && fresh?.referredByCustomerId == referralOnly?.referredByCustomerId,
+           "both codes, new customer: identical to a referral-only booking")
+
+    // Matched blank-source customer: the referral fills exactly like a referral-only booking.
+    let matchedBoth = plan(request(referral: samCode, campaign: campaignCode), [sam, blank])
+    let matchedDana = matchedBoth.customers.first { $0.id == "c1" }
+    expect(matchedDana?.leadSource == "referral" && matchedDana?.referredByCustomerId == "c_sam",
+           "both codes, matched blank-source customer: the referral source and referrer are filled")
+    expect(matchedBoth.drafts.contains { $0.table == "customers" && $0.recordId == "c1" }, "both codes, matched: the fill is published")
+    expect(lead(matchedBoth)?.campaignId == "cmp_fall", "both codes, matched: the lead job is stamped with the campaign")
+    let matchedReferralOnly = plan(request(referral: samCode, campaign: nil), [sam, blank]).customers.first { $0.id == "c1" }
+    expect(matchedDana?.leadSource == matchedReferralOnly?.leadSource
+           && matchedDana?.referredByCustomerId == matchedReferralOnly?.referredByCustomerId,
+           "both codes, matched: identical to a referral-only booking")
+
+    // A matched customer that already has a source keeps it (first touch).
+    let matchedSourced = plan(request(referral: samCode, campaign: campaignCode), [sam, sourced]).customers.first { $0.id == "c1" }
+    expect(matchedSourced?.leadSource == "yelp" && matchedSourced?.referredByCustomerId == nil,
+           "both codes, matched sourced customer: unchanged")
+
+    // Unresolvable referral + campaign: the campaign applies.
+    let unknownNew = plan(request(referral: "zzzzzzzzzzzzzzzz", campaign: campaignCode), [sam])
+    let unknownFresh = unknownNew.customers.first { $0.id == "c_new" }
+    expect(unknownFresh?.leadSource == "campaign" && unknownFresh?.referredByCustomerId == nil,
+           "unresolvable referral + campaign, new customer: the campaign source applies")
+    expect(lead(unknownNew)?.campaignId == "cmp_fall", "unresolvable referral + campaign: the job carries the campaign")
+    let unknownMatched = plan(request(referral: "zzzzzzzzzzzzzzzz", campaign: campaignCode), [sam, blank])
+    expect(unknownMatched.customers.first { $0.id == "c1" }?.leadSource == nil
+           && unknownMatched.customers.first { $0.id == "c1" }?.referredByCustomerId == nil,
+           "unresolvable referral + campaign, matched blank customer: still never filled")
+
+    // A self-referral is no referral: the campaign applies to a new customer.
+    let selfNew = plan(request(referral: samCode, campaign: campaignCode, name: "S Ortiz", email: "sam@example.com", phone: ""), [sam])
+    let selfFresh = selfNew.customers.first { $0.id == "c_new" }
+    expect(selfFresh?.leadSource == "campaign" && selfFresh?.referredByCustomerId == nil,
+           "self-referral + campaign: the campaign applies")
+}
+
 if failures == 0 { print("PASS: native booking intake tests") }
 else { print("\(failures) booking intake test(s) failed"); exit(1) }

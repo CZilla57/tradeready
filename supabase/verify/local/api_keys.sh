@@ -3,7 +3,7 @@
 #
 # Compiles 20261003_api_keys.sql (Roadmap Phase 23, read-only open API) on a
 # THROWAWAY local PostgreSQL and exercises both RPCs with real sessions:
-# grants, column privileges, RLS, the 5-key cap, rotate/revoke/replay, the
+# grants, column privileges, RLS, the 5-key cap, the grace-key ceiling, rotate/revoke/replay, the
 # denied-log throttle, and the per-key minute counter under 70 concurrent
 # callers (exactly 60 admitted). Same harness as run.sh; it does NOT replace
 # running supabase/migrations/verify/20261003_api_keys_verify.sql on the
@@ -182,8 +182,44 @@ echo "== service_role writes the access log (the Worker's insert)"
 r=$(pq -q -c "begin; set local role service_role; insert into public.api_access_log (user_id, key_id, event, route, status, ip) values ('$OWNER', '$K8', 'ok', '/v1/invoices', 200, null) returning event; commit;" | sed -n 1p)
 eq "service_role inserts an ok row (identity column usable)" "$r" "ok"
 
+echo "== working-key ceiling: grace keys are bounded (5 live + 5 grace)"
+working() { pq -c "select count(*) from public.api_keys where user_id = '$OTHER' and revoked_at is null and (expires_at is null or expires_at > now())"; }
+graceing() { pq -c "select count(*) from public.api_keys where user_id = '$OTHER' and revoked_at is null and replaced_by is not null and expires_at > now()"; }
+keyid() { pq -c "select id from public.api_keys where operation_id = '$(op $1)'"; }
+pfx() { printf 'trk_%08d' "$1"; }
+G=100
+r=$(admin create "'$(op $G)'" null "'Lineage'" "array['jobs:read']" 90 "$(h g$G)" "'$(pfx $G)'" null "$OTHER"); case "$r" in *committed*) ok "ceiling: lineage root created";; *) bad "ceiling create: $r";; esac
+CUR=$(keyid $G); FIRST=$CUR
+for n in 1 2 3 4 5 6; do
+  G=$((G+1))
+  r=$(admin rotate "'$(op $G)'" "'$CUR'" null null null "$(h g$G)" "'$(pfx $G)'" 86400 "$OTHER")
+  case "$r" in *'"decision": "committed"'*) ;; *) bad "ceiling rotate $n: $r";; esac
+  CUR=$(keyid $G)
+done
+eq "six rotations of one key leave 2 working keys (live + one grace predecessor)" "$(working)" "2"
+eq "the first key's grace was ended when its successor rotated" "$(pq -c "select (expires_at <= now())::text from public.api_keys where id = '$FIRST'")" "true"
+# A revoked replacement leaves its predecessor in grace with no live successor.
+# Repeat create + rotate + revoke: the lineage rule alone would leave one
+# grace key per round; the hard bound keeps it at 5.
+for n in 1 2 3 4 5 6 7 8; do
+  G=$((G+1)); admin create "'$(op $G)'" null "'Churn'" "array['jobs:read']" 90 "$(h g$G)" "'$(pfx $G)'" null "$OTHER" >/dev/null
+  OLD=$(keyid $G); G=$((G+1))
+  admin rotate "'$(op $G)'" "'$OLD'" null null null "$(h g$G)" "'$(pfx $G)'" 86400 "$OTHER" >/dev/null
+  admin revoke null "'$(keyid $G)'" null null null null null null "$OTHER" >/dev/null
+done
+eq "create/rotate/revoke churn leaves at most 5 grace keys" "$(graceing)" "5"
+eq "and 6 working keys in all (1 live + 5 grace)" "$(working)" "6"
+# Fill the live cap, then rotate at the cap: rotate must not fail on it.
+for n in 1 2 3 4; do G=$((G+1)); admin create "'$(op $G)'" null "'Fill'" "array['jobs:read']" 90 "$(h g$G)" "'$(pfx $G)'" null "$OTHER" >/dev/null; done
+r=$(admin create "'$(op 200)'" null "'Over'" "array['jobs:read']" 90 "$(h g200)" "'$(pfx 200)'" null "$OTHER")
+eq "five live keys: a sixth create is key_limit" "$r" '{"ok": false, "error": "key_limit"}'
+G=$((G+1)); r=$(admin rotate "'$(op $G)'" "'$(keyid $((G-1)))'" null null null "$(h g$G)" "'$(pfx $G)'" 86400 "$OTHER")
+case "$r" in *'"decision": "committed"'*) ok "rotate at the live cap still commits";; *) bad "rotate at cap: $r";; esac
+eq "working keys never exceed 5 live + 5 grace" "$(pq -c "select (count(*) <= 10)::text from public.api_keys where user_id = '$OTHER' and revoked_at is null and (expires_at is null or expires_at > now())")" "true"
+eq "live keys stay at 5" "$(pq -c "select count(*) from public.api_keys where user_id = '$OTHER' and revoked_at is null and replaced_by is null and (expires_at is null or expires_at > now())")" "5"
+
 echo "== account deletion cascades"
-pq -q -c "delete from auth.users where id = '$OWNER'" >/dev/null
+pq -q -c "delete from auth.users where id in ('$OWNER', '$OTHER')" >/dev/null
 eq "keys, log rows and counters are gone" "$(pq -c "select (select count(*) from public.api_keys) + (select count(*) from public.api_access_log) + (select count(*) from public.api_usage_counters)")" "0"
 
 echo

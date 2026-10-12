@@ -7,6 +7,34 @@ import Foundation
 // only, so every runner that compiles a capture point (the editor save plan,
 // merge, CSV import) can include this file on its own.
 
+/// Contact rules shared by segments, the live pre-send check and the list.
+enum NativeCampaignContact {
+    /// The digits of a phone number.
+    static func phoneDigits(_ phone: String) -> String {
+        String(phone.unicodeScalars.filter { CharacterSet.decimalDigits.contains($0) && $0.isASCII }.map(Character.init))
+    }
+
+    /// Spec §5.2 step 4: a phone counts with at least 10 digits.
+    static func isTextable(_ phone: String) -> Bool { phoneDigits(phone).count >= 10 }
+
+    /// The duplicate-contact key: the last 10 digits.
+    static func phoneKey(_ phone: String) -> String? {
+        let digits = phoneDigits(phone)
+        return digits.count >= 10 ? String(digits.suffix(10)) : nil
+    }
+
+    /// The booking validator's `EMAIL_RE` (`/^[^\s@]+@[^\s@]+\.[^\s@]+$/`)
+    /// over the trimmed address.
+    static func isEmailable(_ email: String) -> Bool {
+        let value = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.range(of: #"^[^\s@]+@[^\s@]+\.[^\s@]+$"#, options: .regularExpression) != nil
+    }
+
+    static func emailKey(_ email: String) -> String? {
+        isEmailable(email) ? email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() : nil
+    }
+}
+
 /// Free-form customer labels: at most 10 per customer, 24 characters each,
 /// matched case- and diacritic-insensitively (D3). The vocabulary is derived
 /// from the customers themselves; there is no settings list.
@@ -23,14 +51,15 @@ enum NativeCustomerTags {
     }
 
     /// One label, spec §3.1: control characters stripped, commas and
-    /// semicolons (the editor and CSV separators) turned into spaces,
+    /// semicolons (the editor and CSV separators) and the pipe (the third
+    /// import separator, `split`) turned into spaces,
     /// whitespace collapsed and trimmed, leading `#` dropped, cut to 24
     /// characters on a grapheme boundary. Empty is `nil`.
     static func normalize(_ raw: String?) -> String? {
         guard let raw else { return nil }
         var scalars = String.UnicodeScalarView()
         for scalar in raw.unicodeScalars {
-            if scalar == "," || scalar == ";" {
+            if scalar == "," || scalar == ";" || scalar == "|" {
                 scalars.append(" ")
             } else if scalar.properties.generalCategory == .control {
                 // Tabs and newlines are separators; every other C0/C1
@@ -177,6 +206,67 @@ enum NativeMarketingOptOut {
             case .imported: "Imported"
             }
         }
+    }
+
+    // MARK: Opt-out reaches the contact, not just the record
+
+    /// The way a message reaches the person: a text goes to a phone number,
+    /// an email to an address.
+    enum Medium: Equatable {
+        case text, email
+    }
+
+    /// The normalized phone and email keys (`NativeCampaignContact`, the same
+    /// ones the duplicate-contact step uses) of every opted-out customer.
+    struct ContactKeys: Equatable {
+        var phones = Set<String>()
+        var emails = Set<String>()
+    }
+
+    /// Spec §4.3 / D4, per contact: an opt-out on **any** live customer record
+    /// covers every record that shares its phone (for text) or email (for
+    /// email), because the person, not the record, asked to stop. Archived
+    /// records count: a customer list holds only live (non-deleted) records.
+    static func optedOutKeys(_ customers: [Canonical.Customer]) -> ContactKeys {
+        var keys = ContactKeys()
+        for customer in customers where customer.isMarketingOptedOut {
+            if let phone = NativeCampaignContact.phoneKey(customer.phone) { keys.phones.insert(phone) }
+            if let email = NativeCampaignContact.emailKey(customer.email) { keys.emails.insert(email) }
+        }
+        return keys
+    }
+
+    /// Why a marketing message to this customer over `medium` is blocked.
+    enum Block: Equatable {
+        /// The customer's own record is opted out.
+        case optedOut
+        /// Another record with the same phone (text) or email is opted out.
+        case sharedContact
+
+        /// The explanation shown where the send is disabled.
+        func explanation(name: String) -> String {
+            switch self {
+            case .optedOut:
+                return "\(name) asked not to get marketing messages."
+            case .sharedContact:
+                return "\(name) shares this contact with a customer who asked not to get marketing messages."
+            }
+        }
+    }
+
+    static func block(for customer: Canonical.Customer, medium: Medium, keys: ContactKeys) -> Block? {
+        if customer.isMarketingOptedOut { return .optedOut }
+        switch medium {
+        case .text:
+            if let phone = NativeCampaignContact.phoneKey(customer.phone), keys.phones.contains(phone) { return .sharedContact }
+        case .email:
+            if let email = NativeCampaignContact.emailKey(customer.email), keys.emails.contains(email) { return .sharedContact }
+        }
+        return nil
+    }
+
+    static func block(for customer: Canonical.Customer, medium: Medium, among customers: [Canonical.Customer]) -> Block? {
+        block(for: customer, medium: medium, keys: optedOutKeys(customers))
     }
 
     /// Lowercased CSV values that set the opt-out on import (spec §3.4).

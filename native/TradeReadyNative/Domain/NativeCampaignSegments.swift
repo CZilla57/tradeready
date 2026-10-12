@@ -14,34 +14,6 @@ import Foundation
 // and `NativeCashBasis` for local-date math) and `NativeCampaignMessage`
 // (first names).
 
-/// Contact rules shared by segments, the live pre-send check and the list.
-enum NativeCampaignContact {
-    /// The digits of a phone number.
-    static func phoneDigits(_ phone: String) -> String {
-        String(phone.unicodeScalars.filter { CharacterSet.decimalDigits.contains($0) && $0.isASCII }.map(Character.init))
-    }
-
-    /// Spec §5.2 step 4: a phone counts with at least 10 digits.
-    static func isTextable(_ phone: String) -> Bool { phoneDigits(phone).count >= 10 }
-
-    /// The duplicate-contact key: the last 10 digits.
-    static func phoneKey(_ phone: String) -> String? {
-        let digits = phoneDigits(phone)
-        return digits.count >= 10 ? String(digits.suffix(10)) : nil
-    }
-
-    /// The booking validator's `EMAIL_RE` (`/^[^\s@]+@[^\s@]+\.[^\s@]+$/`)
-    /// over the trimmed address.
-    static func isEmailable(_ email: String) -> Bool {
-        let value = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.range(of: #"^[^\s@]+@[^\s@]+\.[^\s@]+$"#, options: .regularExpression) != nil
-    }
-
-    static func emailKey(_ email: String) -> String? {
-        isEmailable(email) ? email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() : nil
-    }
-}
-
 /// The evaluated audience of one segment (spec §5.2).
 struct NativeCampaignAudience: Equatable {
     struct Member: Equatable, Identifiable {
@@ -272,6 +244,9 @@ enum NativeCampaignSegments {
         let lastContacted = lastSentDayByCustomer(campaigns)
         let today = NativeCashBasis.ymd(now)
         let manual = Set(manualExclusions)
+        // Opt-out is per contact (spec §4.3 / D4): an opted-out record also
+        // suppresses every other record with the same phone (text) or email.
+        let optOutKeys = NativeMarketingOptOut.optedOutKeys(customers)
 
         struct Candidate {
             let customer: Canonical.Customer
@@ -350,6 +325,14 @@ enum NativeCampaignSegments {
                     counts.reachableOnceAddressSet += 1
                 }
                 exclude(customer, .noContact); continue
+            }
+            // An opt-out on another record with this phone (text) or email.
+            // The customer's own opt-out was dropped in step 1, and this runs
+            // before the duplicate-contact step so a kept record can never be
+            // the opted-out person's twin.
+            if NativeMarketingOptOut.block(for: customer, medium: choice.channel == .text ? .text : .email,
+                                           keys: optOutKeys) != nil {
+                exclude(customer, .optedOut); continue
             }
             candidates.append(.init(customer: customer, channel: choice.channel, contact: choice.contact, last: last))
         }
@@ -605,6 +588,8 @@ enum NativeCampaignQueue {
         case deleted
         case owner
         case ended
+        /// Sent by another campaign after this one was frozen (the guard).
+        case recentlyContacted = "recently_contacted"
 
         var displayName: String {
             switch self {
@@ -614,6 +599,7 @@ enum NativeCampaignQueue {
             case .deleted: "customer deleted"
             case .owner: "skipped"
             case .ended: "campaign ended"
+            case .recentlyContacted: "contacted recently"
             }
         }
     }
@@ -717,15 +703,28 @@ enum NativeCampaignQueue {
     }
 
     /// Before each composer opens: the customer exists, is not archived, is
-    /// not opted out, and the channel's contact is still usable. The
-    /// composer always uses the live contact, never a snapshot.
+    /// not opted out (on their own record or, for this channel's phone or
+    /// email, on any other live record), has not been sent another campaign
+    /// since this one was frozen (inside the guard window), and the channel's
+    /// contact is still usable. The composer always uses the live contact,
+    /// never a snapshot.
+    ///
+    /// `campaign` and `campaigns` (with `today`, local `YYYY-MM-DD`) feed the
+    /// recently-contacted guard; without them only the contact checks run.
     static func liveCheck(
         _ recipient: Canonical.Campaign.Recipient,
-        customers: [Canonical.Customer]
+        customers: [Canonical.Customer],
+        campaign: Canonical.Campaign? = nil,
+        campaigns: [Canonical.Campaign] = [],
+        today: String? = nil
     ) -> LiveCheck {
         guard let customer = customers.first(where: { $0.id == recipient.customerId }) else { return .skip(.deleted) }
         if !(customer.archivedAt ?? "").isEmpty { return .skip(.archived) }
-        if customer.isMarketingOptedOut { return .skip(.optedOut) }
+        let medium: NativeMarketingOptOut.Medium = channel(recipient) == .text ? .text : .email
+        if NativeMarketingOptOut.block(for: customer, medium: medium, among: customers) != nil { return .skip(.optedOut) }
+        if let campaign, let today, contactedByAnotherCampaign(
+            customerID: recipient.customerId, campaign: campaign, campaigns: campaigns, today: today
+        ) { return .skip(.recentlyContacted) }
         switch channel(recipient) {
         case .text:
             guard NativeCampaignContact.isTextable(customer.phone) else { return .skip(.noContact) }
@@ -734,6 +733,31 @@ enum NativeCampaignQueue {
             guard NativeCampaignContact.isEmailable(customer.email) else { return .skip(.noContact) }
             return .ready(contact: customer.email.trimmingCharacters(in: .whitespacesAndNewlines))
         }
+    }
+
+    /// True when a **different** campaign sent to this customer on or after
+    /// the day `campaign` was frozen and still inside its
+    /// `excludeContactedWithinDays` window (0 turns the guard off). Freeze
+    /// only counts sent recipients, so two campaigns frozen together could
+    /// otherwise both message one customer.
+    static func contactedByAnotherCampaign(
+        customerID: String,
+        campaign: Canonical.Campaign,
+        campaigns: [Canonical.Campaign],
+        today: String
+    ) -> Bool {
+        let window = campaign.segment.excludeContactedWithinDays
+        guard window > 0 else { return false }
+        let frozen = campaign.frozenOn ?? ""
+        for other in campaigns where other.id != campaign.id {
+            for recipient in other.recipients ?? []
+            where recipient.customerId == customerID && status(recipient) == .sent {
+                guard let day = NativeCampaignSegments.localDay(recipient.sentAt), day >= frozen,
+                      let days = NativeCampaignSegments.daysBetween(day, today), days < window else { continue }
+                return true
+            }
+        }
+        return false
     }
 
     // MARK: Outcomes (spec §7.3)

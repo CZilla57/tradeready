@@ -663,6 +663,119 @@ func testLiveCheck() {
                 "live: the composer uses the live contact, not a snapshot")
 }
 
+// MARK: - Opt-out is per contact, not per record (spec §4.3, D4)
+
+func testSharedContactOptOut() {
+    // "Sam Lee" replied STOP; "Samuel Lee" is a separate record, same phone.
+    let optedOut = ["marketingOptOutOn": "2026-09-01", "marketingOptOutVia": "text_stop"]
+    let byPhone = [
+        customer("sam", "Sam Lee", phone: "(602) 555-0188", extra: optedOut),
+        customer("samuel", "Samuel Lee", phone: "+1 602-555-0188"),
+        customer("other", "Other Person", phone: "6025550999"),
+    ]
+    let jobs = byPhone.map { job("j_\($0.id)", customer: $0.id, date: "2026-01-10") }
+    let served = Canonical.Campaign.Segment(service: "served")
+    let phoneResult = audience(served, customers: byPhone, jobs: jobs)
+    expectEqual(ids(phoneResult), ["other"], "segment: a record sharing an opted-out record's phone is suppressed")
+    expectEqual(reason(phoneResult, "sam"), .optedOut, "segment: the opted-out record keeps its own reason")
+    expectEqual(reason(phoneResult, "samuel"), .optedOut, "segment: the twin record is excluded as opted out")
+
+    // Same, even when the opted-out record is archived (still a live record).
+    let archivedOptOut = [
+        customer("sam", "Sam Lee", phone: "6025550188", extra: optedOut.merging(["archivedAt": "2026-02-01"]) { $1 }),
+        customer("samuel", "Samuel Lee", phone: "602.555.0188"),
+    ]
+    expectEqual(reason(audience(served, customers: archivedOptOut, jobs: jobs), "samuel"), .optedOut,
+                "segment: an archived opted-out record still suppresses its twin")
+
+    // Email: same normalized address (case, spacing), text plan irrelevant.
+    let byEmail = [
+        customer("sam", "Sam Lee", email: "Sam@Example.com", extra: optedOut),
+        customer("samuel", "Samuel Lee", email: " sam@example.com "),
+        customer("other", "Other Person", email: "other@example.com"),
+    ]
+    let emailJobs = byEmail.map { job("j_\($0.id)", customer: $0.id, date: "2026-01-10") }
+    let emailResult = audience(served, plan: .emailOnly, customers: byEmail, jobs: emailJobs)
+    expectEqual(ids(emailResult), ["other"], "segment: a record sharing an opted-out record's email is suppressed")
+    expectEqual(reason(emailResult, "samuel"), .optedOut, "segment: the email twin is excluded as opted out")
+
+    // Per channel: a shared email does not suppress a text recipient, and a
+    // shared phone does not suppress an email recipient.
+    let mixed = [
+        customer("sam", "Sam Lee", phone: "6025550188", email: "sam@example.com", extra: optedOut),
+        customer("twinText", "Twin Text", phone: "6025550177", email: "sam@example.com"),
+        customer("twinMail", "Twin Mail", phone: "6025550188", email: "twin@example.com"),
+    ]
+    let mixedJobs = mixed.map { job("j_\($0.id)", customer: $0.id, date: "2026-01-10") }
+    expectEqual(ids(audience(served, plan: .textOnly, customers: mixed, jobs: mixedJobs)), ["twinText"],
+                "text: only the shared phone is suppressed (a shared email is not the texted contact)")
+    expectEqual(ids(audience(served, plan: .emailOnly, customers: mixed, jobs: mixedJobs)), ["twinMail"],
+                "email: only the shared email is suppressed (a shared phone is not the emailed contact)")
+
+    // Live check at send time.
+    typealias Q = NativeCampaignQueue
+    let text = Canonical.Campaign.Recipient(customerId: "samuel", name: "Samuel Lee", channel: "text")
+    let mail = Canonical.Campaign.Recipient(customerId: "samuel", name: "Samuel Lee", channel: "email")
+    let stopAfterFreeze = [
+        customer("sam", "Sam Lee", phone: "6025550188", email: "sam@example.com", extra: optedOut),
+        customer("samuel", "Samuel Lee", phone: "602-555-0188", email: "SAM@example.com"),
+    ]
+    expectEqual(Q.liveCheck(text, customers: stopAfterFreeze), .skip(.optedOut), "live: a shared phone opted out since the freeze")
+    expectEqual(Q.liveCheck(mail, customers: stopAfterFreeze), .skip(.optedOut), "live: a shared email opted out since the freeze")
+    let unrelated = [
+        customer("sam", "Sam Lee", phone: "6025550100", email: "x@example.com", extra: optedOut),
+        customer("samuel", "Samuel Lee", phone: "602-555-0188", email: "samuel@example.com"),
+    ]
+    expectEqual(Q.liveCheck(text, customers: unrelated), .ready(contact: "602-555-0188"),
+                "live: an unrelated opted-out record changes nothing")
+    let shortPhone = [
+        customer("sam", "Sam Lee", phone: "555-0188", extra: optedOut),
+        customer("samuel", "Samuel Lee", phone: "555-0188"),
+    ]
+    expectEqual(NativeMarketingOptOut.block(for: shortPhone[1], medium: .text, among: shortPhone), nil,
+                "an unusable (under 10 digit) phone is no shared contact")
+}
+
+// MARK: - Two campaigns frozen at once (the live recently-contacted guard)
+
+func testOverlappingCampaigns() {
+    typealias Q = NativeCampaignQueue
+    let people = [customer("ana", "Ana", phone: "6025550101")]
+    let recipient = Canonical.Campaign.Recipient(customerId: "ana", name: "Ana", channel: "text")
+    func campaign(_ id: String, frozenOn: String, window: Int = 30, sent: String? = nil) -> Canonical.Campaign {
+        var segment = Canonical.Campaign.Segment(service: "served")
+        segment.excludeContactedWithinDays = window
+        var item = recipient
+        if let sent { item.status = "sent"; item.sentAt = sent }
+        return Canonical.Campaign(id: id, name: id, code: "0123456789abcdef", createdAt: "2026-10-01T00:00:00.000Z",
+                                  status: "sending", segment: segment, frozenOn: frozenOn, recipients: [item])
+    }
+    let first = campaign("cmp_a", frozenOn: "2026-10-02")
+    let secondSent = campaign("cmp_b", frozenOn: "2026-10-02", sent: "2026-10-03T17:00:00.000Z")
+    func check(_ mine: Canonical.Campaign, _ all: [Canonical.Campaign], today: String = "2026-10-04") -> Q.LiveCheck {
+        Q.liveCheck(recipient, customers: people, campaign: mine, campaigns: all, today: today)
+    }
+    // Both were frozen with Ana pending; B texted her first.
+    let pendingOnly = campaign("cmp_b", frozenOn: "2026-10-02")
+    expectEqual(check(first, [first, pendingOnly]), .ready(contact: "6025550101"),
+                "overlap: a pending-only overlap does not block")
+    expectEqual(check(first, [first, secondSent]), .skip(.recentlyContacted),
+                "overlap: sent by another campaign since the freeze is skipped as recently contacted")
+    expectEqual(check(first, [first]), .ready(contact: "6025550101"), "overlap: this campaign's own sends never count")
+    expectEqual(check(first, [first, campaign("cmp_b", frozenOn: "2026-09-01", sent: "2026-10-02T17:00:00.000Z")]),
+                .skip(.recentlyContacted), "overlap: a send on the freeze day itself counts (day >= frozenOn)")
+    expectEqual(check(first, [first, campaign("cmp_b", frozenOn: "2026-09-01", sent: "2026-10-01T05:00:00.000Z")]),
+                .ready(contact: "6025550101"), "overlap: a send that predates the freeze is the freeze's job, not this check")
+    expectEqual(check(first, [first, secondSent], today: "2026-11-03"), .ready(contact: "6025550101"),
+                "overlap: 31 days after the other send the guard has lapsed")
+    let guardOff = campaign("cmp_a", frozenOn: "2026-10-02", window: 0)
+    expectEqual(check(guardOff, [guardOff, secondSent]), .ready(contact: "6025550101"),
+                "overlap: the guard toggled off at freeze stays off")
+    expectEqual(Q.liveCheck(recipient, customers: people), .ready(contact: "6025550101"),
+                "overlap: without campaign context only the contact checks run")
+    expectEqual(Q.SkipReason.recentlyContacted.displayName, "contacted recently", "overlap: the skip reason reads naturally")
+}
+
 func testQuietHours() {
     typealias Q = NativeCampaignQueue
     func at(_ hour: Int, _ minute: Int) -> String? {
@@ -767,6 +880,8 @@ testValidation()
 testDrafting()
 testQueue()
 testLiveCheck()
+testSharedContactOptOut()
+testOverlappingCampaigns()
 testQuietHours()
 testResults()
 testAttributionCode()
