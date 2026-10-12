@@ -94,6 +94,11 @@ export async function changeRespondHandler(c) {
       && esignActive(c.env, existing.snapshot);
     let typedName = signerName;
     if (signing) {
+      // No document to seal: a clean 409 before any name check or store.
+      if (existing.snapshot === null || typeof existing.snapshot !== 'object' || Array.isArray(existing.snapshot)) {
+        const e = fail('snapshot_missing');
+        return c.json({ error: e.error, code: e.code }, 409);
+      }
       const name = validateTypedName(signerName);
       if (name.error) return c.json({ error: name.error, code: name.code }, 400);
       typedName = name.value;
