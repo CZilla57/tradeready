@@ -152,6 +152,66 @@ function fakeStripe(handlers = {}) {
   return client;
 }
 
+// Stateful stand-in for Stripe Checkout Sessions on one connected account,
+// returned as `fakeStripe` handlers. Models what the pay page depends on and
+// the plain handlers can't: an idempotency key replays the CACHED original
+// create response (status as it was then, `open`) even after the session was
+// expired since, while `retrieve` and `list` show the live status. Reusing a
+// key with different parameters is an idempotency error, as on Stripe.
+//   const cs = fakeCheckoutSessions();
+//   fakeStripe({ ...cs.handlers, 'customers.create': ... });
+//   cs.complete(id) / cs.sessions: drive and inspect the state.
+function fakeCheckoutSessions() {
+  const sessions = new Map(); // id -> live session
+  const byKey = new Map(); // idempotency key -> { params, response }
+  let n = 0;
+  const copy = (x) => JSON.parse(JSON.stringify(x));
+  const handlers = {
+    'checkout.sessions.create': async (params, opts = {}) => {
+      const key = opts.idempotencyKey;
+      if (key && byKey.has(key)) {
+        const hit = byKey.get(key);
+        if (JSON.stringify(hit.params) !== JSON.stringify(params)) {
+          throw invalidRequest('Keys for idempotent requests can only be used with the same parameters they were first used with.');
+        }
+        return copy(hit.response);
+      }
+      n += 1;
+      const session = {
+        id: `cs_fake_${String(n).padStart(4, '0')}_abcdefghijklmnop`,
+        status: 'open',
+        metadata: { ...(params.metadata || {}) },
+        url: `https://checkout.stripe.com/c/pay/cs_fake_${n}`,
+      };
+      sessions.set(session.id, session);
+      const response = copy(session);
+      if (key) byKey.set(key, { params: copy(params), response });
+      return copy(response);
+    },
+    'checkout.sessions.retrieve': async (id) => {
+      if (!sessions.has(id)) throw invalidRequest(`No such checkout.session: '${id}'`);
+      return copy(sessions.get(id));
+    },
+    'checkout.sessions.list': async (params = {}) => ({
+      data: [...sessions.values()].filter((s) => !params.status || s.status === params.status).map(copy),
+      has_more: false,
+    }),
+    'checkout.sessions.expire': async (id) => {
+      const s = sessions.get(id);
+      if (!s) throw invalidRequest(`No such checkout.session: '${id}'`);
+      if (s.status !== 'open') throw invalidRequest('Only Checkout Sessions with a status of open can be expired.');
+      s.status = 'expired';
+      return copy(s);
+    },
+  };
+  return {
+    handlers,
+    sessions,
+    complete: (id) => { sessions.get(id).status = 'complete'; },
+    open: () => [...sessions.values()].filter((s) => s.status === 'open'),
+  };
+}
+
 // --- Fake Supabase (PostgREST subset) ----------------------------------------
 //
 // Tables are arrays of rows. Supports the filters this codebase uses:
@@ -326,6 +386,7 @@ module.exports = {
   fakeC,
   installFetch,
   fakeStripe,
+  fakeCheckoutSessions,
   stripeError,
   cardError,
   connectionError,

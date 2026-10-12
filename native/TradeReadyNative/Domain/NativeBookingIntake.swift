@@ -138,7 +138,10 @@ public enum NativeBookingIntake {
                     phone: request.phone,
                     address: request.address,
                     leadSource: referralWins ? referral.leadSource : NativeLeadSource.campaignKey,
-                    fillsBlankLeadSource: campaignID == nil,
+                    // A campaign alone never fills a matched customer's blank
+                    // source, but a referral that resolves to a referrer wins
+                    // (§9.2) and fills it exactly like a referral-only booking.
+                    fillsBlankLeadSource: referralWins,
                     referredByCustomerId: referral.referredByCustomerId,
                     makeCustomerID: makeCustomerID,
                     nowISO: nowISO

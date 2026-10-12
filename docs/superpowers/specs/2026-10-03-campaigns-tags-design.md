@@ -769,3 +769,11 @@ Stage 1, native only, on `feat/campaigns` (stacked on Phase 20 forms, Phase 27 l
   - `sh native/run-doc-reference-check.sh` reports 0 missing.
 - **Release compile:** `xcodebuild … -configuration Release -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build` gives BUILD SUCCEEDED, with no warnings in Phase 33 files.
 - **Not run:** Worker Jest and `book.html` checks, since §9.1 and §9.3 are not in this build.
+
+### 16.6 Review fixes (2026-10-04, `fix/campaigns-optout`)
+
+- **Opt-out is per contact (§4.3, D4).** An opt-out on any live customer record now suppresses every record sharing its normalized phone (for text) or email (for email), using the duplicate-contact step's keys (`NativeCampaignContact.phoneKey`/`emailKey`). The check runs in segment evaluation after the channel is chosen (reason `opted_out`), in `NativeCampaignQueue.liveCheck`, and in the referral share. Who is marked opted out is unchanged. `NativeCampaignContact` moved into `N/Domain/NativeCustomerTags.swift` (next to `NativeMarketingOptOut.block(for:medium:among:)`) so the referral runner can compile it.
+- **Referral share (§4.3).** `NativeReferralShareView` disables Continue and Copy for a blocked customer and shows `NativeMarketingOptOut.Block.explanation`.
+- **Overlapping campaigns.** `liveCheck` also takes the campaign, all campaigns and today: a recipient another campaign sent to on or after this one's `frozenOn`, inside `excludeContactedWithinDays`, is skipped with the new skip reason `recently_contacted` ("contacted recently"). Pending-only overlaps still do not block at freeze.
+- **Tags.** `normalize` turns `|` into a space as well as `,` and `;`, so every stored tag survives export (`; `) and import (`,;|`).
+- **Intake.** A booking with a referral code that resolves to a referrer and a campaign code now fills a matched blank-source customer's `leadSource` and `referredByCustomerId` exactly like a referral-only booking (§9.2 row 2).

@@ -320,7 +320,10 @@ extension AppStore {
         guard let recipient = stored.recipients?.first(where: { $0.customerId == customerID }) else {
             return .failure(.recipientNotFound)
         }
-        let check = NativeCampaignQueue.liveCheck(recipient, customers: canonicalCustomers)
+        let check = NativeCampaignQueue.liveCheck(
+            recipient, customers: canonicalCustomers,
+            campaign: stored, campaigns: campaignRecords, today: NativeCashBasis.ymd(date)
+        )
         if case let .skip(reason) = check {
             do {
                 let skipped = try NativeCampaignQueue.skip(stored, customerID: customerID, reason: reason,

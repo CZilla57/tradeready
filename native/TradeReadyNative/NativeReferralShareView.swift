@@ -38,6 +38,16 @@ struct NativeReferralShareView: View {
         return value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Spec §4.3 / D4: asking for a referral is promotional, so an opted-out
+    /// customer (or one who shares this phone or email with an opted-out
+    /// record) gets no share. The decision lives in `NativeMarketingOptOut`.
+    private var marketingBlock: NativeMarketingOptOut.Block? {
+        guard let customer else { return nil }
+        return NativeMarketingOptOut.block(
+            for: customer, medium: channel == .email ? .email : .text, among: store.canonicalCustomers
+        )
+    }
+
     private var isReady: Bool {
         if case .ready = linkState { return true }
         return false
@@ -67,6 +77,10 @@ struct NativeReferralShareView: View {
                             Text("Email").tag(NativeAppointmentMessageChannel.email)
                         }
                         .pickerStyle(.segmented)
+                        if let block = marketingBlock {
+                            Label(block.explanation(name: customer.name), systemImage: "hand.raised")
+                                .font(.footnote).foregroundStyle(Color.tradeWarningText)
+                        }
                         if recipient.isEmpty {
                             Text(channel == .email
                                  ? "Add an email address to this customer, or copy the message for manual sending."
@@ -97,7 +111,7 @@ struct NativeReferralShareView: View {
                                 .frame(maxWidth: .infinity)
                         }
                         .tradeReadyProminentButtonStyle()
-                        .disabled(!isReady || recipient.isEmpty || messageIsBlank || showingComposer)
+                        .disabled(!isReady || recipient.isEmpty || messageIsBlank || showingComposer || marketingBlock != nil)
 
                         Button {
                             UIPasteboard.general.string = message
@@ -106,7 +120,7 @@ struct NativeReferralShareView: View {
                             Label("Copy for manual sending", systemImage: "doc.on.doc")
                                 .frame(maxWidth: .infinity)
                         }
-                        .disabled(!isReady || messageIsBlank)
+                        .disabled(!isReady || messageIsBlank || marketingBlock != nil)
                     } footer: {
                         Text("Nothing is sent automatically. People who book through this link never see who referred them.")
                     }

@@ -357,3 +357,19 @@ No new app-facing route. The app and the Worker meet in two synced blobs.
 - Voiding (`voidedAt`) voids the tip with the payment. The Worker never writes `voidedAt`.
 - `tipAmount` appears only on pay-page payments (`stripeSessionId` set). It never appears on autopay entries (`channel: "autopay"`), legacy Payment Link entries, or manual entries.
 - The cached `paid` / `paidAt` on the invoice blob are derived from `amount` only. An invoice paid exactly, with a tip on top, is `paid: true` and not overpaid.
+
+#### 13.2 Checkout rules the Worker enforces (`POST /api/pay/checkout`)
+
+Recorded after review; the code is `W/lib/pay/payService.js`. The native client and `pay.html` meet these responses.
+
+| Request | Response | Notes |
+|---|---|---|
+| `baseCents` present and not equal to the amount the Worker would charge now | 409 `changed` | `baseCents` is optional. The page sends the amount it based the tip on, so a balance that moved since the page loaded (a part-payment, an edit) cannot carry a tip computed from the old amount. Absent, it is not checked. The tip is still capped against the live amount. |
+| `tipCents` malformed (negative, fractional, a string, boolean, object, array, `NaN`, or above `MAX_CENTS`), or above the invoice amount being paid | 400 `tip_invalid` | Checked before any Stripe call. 100% of the amount is allowed, one cent more is not. `null`, absent and `0` mean no tip and never fail, even when tips are off. |
+| `tipCents > 0` while `tipsEnabled` is not `true`, or on a link that offers no tip | 409 `tips_off` | See §13.1 for the setting. |
+
+- **A link minted as a deposit never offers a tip, even after the deposit is paid.** A link stamped as a partial ask (`b` in the token payload; or an `a` below the live balance) charges the live balance once the deposit is paid, but it is still a deposit link: the view returns `tips: null` and a checkout with `tipCents > 0` gets 409 `tips_off`. The same link without a tip still pays the balance. The customer who wants to tip uses the full-balance link.
+- **One payment in flight per invoice.** Before it creates a session, checkout lists the owner's completed Checkout Sessions (the helper in `W/lib/autopay/sessions.js`, the same call and 8-day window the autopay sweep uses) and refuses with 409 `in_flight` when one for this invoice has no `stripe_<session id>` ledger entry yet: the customer paid and the webhook has not booked it. Without this, a second checkout with a different tip got a fresh idempotency key and a second session, and the invoice ended up overpaid. A completed session that is booked does not block a later payment of a remaining balance. The response is the one the page already shows for an autopay charge in flight; its text no longer says "automatic" ("A payment for this invoice is being processed. Please check back in a few minutes.").
+- **Replayed sessions are checked live.** Stripe replays the cached original create response for a repeated key, and that response says `open` even after the session was expired. Switching the tip A, then B, then A inside one 10-minute bucket therefore returned A's dead session. After every create the Worker retrieves the session's live status (if that read fails it uses the create response); an expired session is replaced under `<key>:r<last 12 chars of the dead session id>`, up to three times, and a session that completed gives 409 `maybe_paid`. Two identical requests still share one session: the key is deterministic, and `expireOtherOpenSessions` leaves `<key>` and `<key>:r…` sessions alone.
+
+**Fixes 2026-10-04.** The two behaviors above (in-flight refusal on an unbooked completed session; live-status check with a fresh key on a replayed expired session) were added after the Phase 28 review, with the `in_flight` text change. No contract change for the ledger entry or the view.
