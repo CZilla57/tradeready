@@ -373,6 +373,21 @@ struct InvoiceDetailView: View {
                             ContactButtons(phone: invoice.phone, email: invoice.email)
                         }.padding(.vertical, 5)
                     }
+                    // Phase 24 §6.3: a plan invoice's autopay outlook, one line.
+                    if let banner = store.autopayInvoiceBanner(invoiceID: invoice.id) {
+                        Section {
+                            Label {
+                                Text(banner.text)
+                            } icon: {
+                                Image(systemName: banner.isProblem ? "exclamationmark.triangle" : "creditcard")
+                                    .accessibilityHidden(true)
+                            }
+                            .font(.subheadline)
+                            .foregroundStyle(banner.isProblem ? Color.tradeWarningText : Color.primary)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(banner.accessibilityText)
+                        }
+                    }
                     Section("Invoice") { LabeledContent("Number", value: invoice.number); LabeledContent("Customer", value: invoice.customer); if !invoice.description.isEmpty { Text(invoice.description) } }
                     Section("Document") {
                         Button { sharePDF() } label: { Label("Save or share PDF", systemImage: "doc.richtext") }
@@ -397,14 +412,23 @@ struct InvoiceDetailView: View {
                         }
                     }
                     Section("Payments") {
+                        // Phase 18: hidden until Tap to Pay is available.
+                        NativeTapToPayInvoiceRow(invoice: invoice, onSendReceipt: sharePDF)
                         if invoice.effectivePayments.isEmpty { Text("No payments recorded yet.").foregroundStyle(.secondary) }
                         ForEach(invoice.effectivePayments) { payment in
                             VStack(alignment: .leading, spacing: 3) {
                                 HStack {
                                     Text(payment.amount.currency).fontWeight(.semibold)
                                     Spacer()
-                                    Text("\(payment.date.shortDate) · \(payment.method)")
+                                    Text("\(payment.date.shortDate) · \(payment.displayMethod)")
                                         .font(.caption).foregroundStyle(.secondary)
+                                }
+                                // Phase 28 (tips spec §6.3): the tip rides beside the
+                                // payment; it is never part of the amount above.
+                                if let tip = payment.tip, tip > 0 {
+                                    Text("+ \(tip.currency) tip")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .accessibilityLabel("plus \(tip.currency) tip")
                                 }
                                 if payment.id.hasPrefix("legacy_") {
                                     Text("Recorded before itemized history").font(.caption).italic().foregroundStyle(.secondary)
@@ -503,7 +527,8 @@ struct InvoiceDetailView: View {
                     Button("Cancel", role: .cancel) { paymentToVoid = nil }
                 } message: { payment in
                     let restored = invoice.voidingPayment(id: payment.id, on: .now).balance
-                    Text("This can't be undone. \(invoice.number) will go back to \(restored.currency) due. To correct a mistake, record a new payment.")
+                    let notice = NativeCardPresentPayment.isStripePayment(id: payment.id) ? " \(NativeCardPresentPayment.voidNotice)" : ""
+                    Text("This can't be undone. \(invoice.number) will go back to \(restored.currency) due. To correct a mistake, record a new payment.\(notice)")
                 }
             } else {
                 VStack(spacing: 8) {

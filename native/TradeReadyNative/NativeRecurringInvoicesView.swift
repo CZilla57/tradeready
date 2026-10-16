@@ -13,6 +13,8 @@ struct NativeRecurringInvoicesView: View {
     /// dialog's plan, which SwiftUI clears as the dialog dismisses.
     @State private var planActions = NativeRecurringPlanActionState<Canonical.RecurringInvoice>()
     @State private var saveError: String?
+    /// Phase 24: a failed "Remove saved card", shown as a text alert.
+    @State private var removeCardError: String?
 
     /// The open plan editor. One `sheet(item:)` carries the plan with the
     /// presentation (Task 11.11 fix round 1): the old `sheet(isPresented:)`
@@ -36,7 +38,14 @@ struct NativeRecurringInvoicesView: View {
 
     /// Task 11.11 fix round 1: anything this screen presents over itself.
     private var isPresentingAnything: Bool {
-        editorTarget != nil || planActions.isPresentingAnything
+        editorTarget != nil || planActions.isPresentingAnything || removeCardError != nil
+    }
+
+    /// Phase 24: the status-read failure only matters once autopay is in use.
+    private var showsAutopayStatusError: Bool {
+        store.autopayStatusError != nil
+            && (store.recurringInvoiceRules.contains { $0.autopayEnabled == true }
+                || !(store.autopayStatus?.enrollments.isEmpty ?? true))
     }
 
     /// ⌘N (new plan) never fires under the editor, the plan actions or their alerts.
@@ -48,6 +57,40 @@ struct NativeRecurringInvoicesView: View {
         (.daily, "Daily"), (.weekly, "Weekly"), (.monthly, "Monthly"),
         (.quarterly, "Quarterly"), (.annually, "Annually"),
     ]
+
+    /// The plans list, split out of `body` so the type checker finishes in time
+    /// (Phase 24 added a header, footer and autopay line here).
+    private var plansSection: some View {
+        Section {
+            if store.recurringInvoiceRules.isEmpty {
+                Text("No maintenance plans yet.").foregroundStyle(.secondary)
+            }
+            ForEach(store.recurringInvoiceRules, id: \.id) { rule in
+                Button { planActions.showActions(for: rule) } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(rule.customerName).font(.headline)
+                            Text("\(cadenceLabel(rule.cadence)) · \(rule.amount.currency) · \(endText(rule))")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                            Text("\(rule.occurrenceCount) generated · Next \(rule.nextDueDate)")
+                                .font(.caption).foregroundStyle(.secondary)
+                            autopayLine(for: rule)
+                        }
+                        Spacer()
+                        Text(rule.isActive ? "Active" : "Paused")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(rule.isActive ? Color.tradeSuccessText : Color.tradeWarningText)
+                    }
+                }.buttonStyle(.plain)
+            }
+        } header: {
+            Text("Plans")
+        } footer: {
+            if showsAutopayStatusError, let error = store.autopayStatusError {
+                Text(error)
+            }
+        }
+    }
 
     var body: some View {
         List {
@@ -68,32 +111,13 @@ struct NativeRecurringInvoicesView: View {
             if let saveError {
                 Section { Text(saveError).foregroundStyle(Color.tradeDangerText) }
             }
-            Section("Plans") {
-                if store.recurringInvoiceRules.isEmpty {
-                    Text("No maintenance plans yet.").foregroundStyle(.secondary)
-                }
-                ForEach(store.recurringInvoiceRules, id: \.id) { rule in
-                    Button { planActions.showActions(for: rule) } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(rule.customerName).font(.headline)
-                                Text("\(cadenceLabel(rule.cadence)) · \(rule.amount.currency) · \(endText(rule))")
-                                    .font(.subheadline).foregroundStyle(.secondary)
-                                Text("\(rule.occurrenceCount) generated · Next \(rule.nextDueDate)")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Text(rule.isActive ? "Active" : "Paused")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(rule.isActive ? Color.tradeSuccessText : Color.tradeWarningText)
-                        }
-                    }.buttonStyle(.plain)
-                }
-            }
+            plansSection
         }
         .nativeContentColumn(.list)
         .tradeReadyListStyle()
         .navigationTitle("Maintenance plans")
+        // Phase 24 §6.3: opening the plans list always rereads autopay status.
+        .task { await store.refreshAutopayStatus(trigger: .plansList) }
         .toolbar {
             Button {
                 guard !isPresentingAnything else { return }
@@ -127,6 +151,14 @@ struct NativeRecurringInvoicesView: View {
             }
             Button("Delete plan", role: .destructive) {
                 planActions.requestDestructive(.deletePlan, for: rule)
+            }
+            // Phase 24 §6.3: only while a card is on file and not already
+            // being removed.
+            if let enrollment = store.autopayActiveEnrollment(planID: rule.id),
+               !store.autopayRemovalsInFlight.contains(enrollment.id) {
+                Button("Remove saved card", role: .destructive) {
+                    planActions.requestDestructive(.removeSavedCard, for: rule)
+                }
             }
             Button("Dismiss", role: .cancel) { planActions.dismissActions() }
         }
@@ -163,10 +195,69 @@ struct NativeRecurringInvoicesView: View {
                 planActions.endConfirmation()
             }
             Button("Keep plan", role: .cancel) { planActions.endConfirmation() }
-        } message: { _ in
-            Text("This removes the plan permanently. Invoices it already generated are not affected.")
+        } message: { target in
+            // Phase 24: the Worker removes a deleted plan's saved card.
+            Text("This removes the plan permanently. Invoices it already generated are not affected."
+                 + (store.autopayActiveEnrollment(planID: target.rule.id) != nil ? " Its saved card is removed too." : ""))
+        }
+        .alert(
+            NativeAutopay.removeTitle,
+            isPresented: Binding(
+                get: { planActions.isConfirming(.removeSavedCard) },
+                set: { if !$0 { planActions.endConfirmation() } }
+            ),
+            presenting: planActions.pendingDestructive
+        ) { target in
+            Button("Remove card", role: .destructive) {
+                removeSavedCard(for: target.rule)
+                planActions.endConfirmation()
+            }
+            Button("Keep card", role: .cancel) { planActions.endConfirmation() }
+        } message: { target in
+            Text(NativeAutopay.removeMessage(
+                card: store.autopayActiveEnrollment(planID: target.rule.id)?.card,
+                customerName: target.rule.customerName))
+        }
+        .alert(
+            NativeAutopay.removeFailedTitle,
+            isPresented: Binding(get: { removeCardError != nil }, set: { if !$0 { removeCardError = nil } })
+        ) {
+            Button("OK", role: .cancel) { removeCardError = nil }
+        } message: {
+            Text(removeCardError ?? "")
         }
         .nativeAnalyticsScreen(.recurringInvoices)
+    }
+
+    /// Phase 24 §6.3: the row's autopay line ("Autopay on · Visa •••• 4242",
+    /// "Autopay offered", "Autopay failed Nov 1: card declined"). The words
+    /// carry the meaning; the warning color only repeats it.
+    @ViewBuilder
+    private func autopayLine(for rule: Canonical.RecurringInvoice) -> some View {
+        let status = store.autopayPlanStatus(planID: rule.id)
+        if let enrollment = store.autopayActiveEnrollment(planID: rule.id),
+           store.autopayRemovalsInFlight.contains(enrollment.id) {
+            Text("Removing saved card…").font(.caption).foregroundStyle(.secondary)
+        } else if let line = NativeAutopay.planRowText(status) {
+            Text(line)
+                .font(.caption)
+                .foregroundStyle(NativeAutopay.planRowIsProblem(status) ? Color.tradeWarningText : Color.secondary)
+                .accessibilityLabel(NativeAutopay.planRowAccessibilityText(status) ?? line)
+        }
+    }
+
+    /// Runs the confirmed remove. The store refuses a second request for the
+    /// same card while one is in flight; a failure comes back as an alert.
+    private func removeSavedCard(for rule: Canonical.RecurringInvoice) {
+        guard let enrollment = store.autopayActiveEnrollment(planID: rule.id) else {
+            removeCardError = "This card is no longer on file."
+            return
+        }
+        Task {
+            if case .failed(let message) = await store.removeAutopayCard(enrollmentID: enrollment.id) {
+                removeCardError = message
+            }
+        }
     }
 
     private func cadenceLabel(_ raw: String) -> String {
@@ -199,9 +290,34 @@ private struct NativeRecurringInvoiceEditor: View {
     @State private var endDate = Date.now
     @State private var autoSend = false
     @State private var confirmingAutoSend = false
+    /// Phase 24 §6.2: "Offer autopay" and its two confirmations.
+    @State private var autopay = false
+    @State private var autopayConfirmation: AutopayConfirmation?
     @State private var saveError: String?
 
+    private enum AutopayConfirmation: Identifiable {
+        case turnOn, turnOff
+        var id: Self { self }
+    }
+
     private var isEditing: Bool { rule != nil }
+
+    private var autopayAvailability: NativeAutopayOfferAvailability {
+        NativeAutopay.offerAvailability(
+            paymentProvider: store.settings.paymentProvider,
+            stripeConnected: store.stripeConnectStatus?.connected,
+            stripeDetailsSubmitted: store.stripeConnectStatus?.detailsSubmitted,
+            stripeStatusLoading: store.stripeConnectLoading)
+    }
+
+    /// Warnings for an edit that changes what a saved card covers.
+    private var autopayEditNotes: [String] {
+        guard let rule else { return [] }
+        return NativeAutopay.editNotes(
+            active: store.autopayActiveEnrollment(planID: rule.id),
+            newAmount: Double(amount).map { Decimal($0) },
+            newCustomerID: customerId)
+    }
 
     var body: some View {
         NavigationStack {
@@ -257,6 +373,48 @@ private struct NativeRecurringInvoiceEditor: View {
                     Text("Only the newest generated invoice ever sends, and only when automatic email is also on. Enabling this never emails pre-existing invoices.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                Section("Payment") {
+                    Toggle("Offer autopay", isOn: Binding(
+                        get: { autopay },
+                        set: { value in
+                            guard value != autopay else { return }
+                            if value {
+                                autopayConfirmation = .turnOn
+                            } else if rule?.autopayEnabled == true {
+                                autopayConfirmation = .turnOff
+                            } else {
+                                autopay = false
+                            }
+                        }))
+                    // Turning it on needs Stripe; turning it off never does.
+                    .disabled(!autopay && autopayAvailability != .available)
+                    .confirmationDialog(
+                        autopayConfirmation == .turnOff ? NativeAutopay.turnOffTitle : NativeAutopay.turnOnTitle,
+                        isPresented: Binding(
+                            get: { autopayConfirmation != nil },
+                            set: { if !$0 { autopayConfirmation = nil } }),
+                        titleVisibility: .visible,
+                        presenting: autopayConfirmation
+                    ) { kind in
+                        switch kind {
+                        case .turnOn:
+                            Button("Offer autopay") { autopay = true }
+                            Button("Keep off", role: .cancel) {}
+                        case .turnOff:
+                            Button("Turn off autopay", role: .destructive) { autopay = false }
+                            Button("Keep on", role: .cancel) {}
+                        }
+                    } message: { kind in
+                        Text(kind == .turnOn ? NativeAutopay.turnOnMessage : NativeAutopay.turnOffMessage)
+                    }
+                    if !autopay, let caption = NativeAutopay.offerCaption(autopayAvailability) {
+                        Text(caption).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text(NativeAutopay.offerExplanation).font(.caption).foregroundStyle(.secondary)
+                    ForEach(autopayEditNotes, id: \.self) { note in
+                        Text(note).font(.caption).foregroundStyle(Color.tradeWarningText)
+                    }
+                }
             }
             .nativeContentColumn(.list)
             .scrollContentBackground(.hidden).background(Color.tradeCanvas)
@@ -268,6 +426,12 @@ private struct NativeRecurringInvoiceEditor: View {
                 ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.keyboardShortcut("s", modifiers: .command) }
             }
             .onAppear(perform: hydrate)
+            // Phase 24: the Payment section needs the Stripe connection.
+            .task {
+                if store.settings.paymentProvider == "stripe", store.stripeConnectStatus == nil {
+                    await store.refreshStripeStatus()
+                }
+            }
             .confirmationDialog("Email invoices automatically?", isPresented: $confirmingAutoSend, titleVisibility: .visible) {
                 Button("Enable auto-email") { autoSend = true }
                 Button("Keep off", role: .cancel) {}
@@ -295,6 +459,7 @@ private struct NativeRecurringInvoiceEditor: View {
         endCondition = RecurrenceEndCondition(rawValue: rule.endCondition) ?? .never
         endCount = rule.endCount.map(String.init) ?? ""
         autoSend = rule.autoSendEnabled ?? false
+        autopay = rule.autopayEnabled ?? false
     }
 
     private func save() {
@@ -310,6 +475,12 @@ private struct NativeRecurringInvoiceEditor: View {
             guard let count = Int(endCount.trimmingCharacters(in: .whitespacesAndNewlines)), count >= 1 else {
                 saveError = "Enter how many invoices the plan should generate."; return
             }
+        }
+        // Phase 24 §2.2: autopay binds a card to a customer on file, so a
+        // typed-in name can't offer it.
+        if autopay && customerId.isEmpty {
+            saveError = "Offer autopay needs a customer chosen from your list."
+            return
         }
         if autoSend {
             let email = store.customers.first(where: { $0.id == customerId })?.email ?? ""
@@ -330,6 +501,7 @@ private struct NativeRecurringInvoiceEditor: View {
                 occurrenceCount: rule.occurrenceCount, lastGeneratedDate: rule.lastGeneratedDate,
                 nextDueDate: rule.nextDueDate, isActive: rule.isActive,
                 createdAt: rule.createdAt, autoSendEnabled: autoSend,
+                autopayEnabled: autopay ? true : (rule.autopayEnabled == nil ? nil : false),
                 preservation: rule.preservation)
             if store.updateRecurringInvoice(updated) { dismiss() }
             else { saveError = "The plan could not be saved. Nothing was changed." }
@@ -343,7 +515,8 @@ private struct NativeRecurringInvoiceEditor: View {
                 endCount: endCondition == .count ? Int(endCount) : nil,
                 endDate: endCondition == .date ? NativeRecurringJobs.todayString(from: endDate) : nil,
                 occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: start,
-                isActive: true, createdAt: start, autoSendEnabled: autoSend)
+                isActive: true, createdAt: start, autoSendEnabled: autoSend,
+                autopayEnabled: autopay ? true : nil)
             if store.createRecurringInvoice(created) { dismiss() }
             else { saveError = "The plan could not be saved. Nothing was changed." }
         }

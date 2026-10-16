@@ -8,7 +8,7 @@
 // Required bindings:
 //   STRIPE_SECRET_KEY, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
 
-import Stripe from 'stripe';
+import { makeStripe } from '../../../lib/stripe/client.js';
 import { appCors } from '../../appCors.js';
 
 export async function createConnectAccountHandler(c) {
@@ -34,10 +34,7 @@ export async function createConnectAccountHandler(c) {
   if (!userId) return c.json({ error: 'Unauthorized' }, 401);
 
   try {
-    const stripe = new Stripe(STRIPE_SECRET_KEY, {
-      apiVersion: '2023-10-16',
-      httpClient: Stripe.createFetchHttpClient(),
-    });
+    const stripe = makeStripe(c.env);
 
     // Reuse an existing account if one was already created for this user.
     let stripeAccountId = await getStripeAccountId(c.env, userId);

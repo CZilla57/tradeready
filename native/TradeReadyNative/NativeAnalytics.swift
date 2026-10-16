@@ -99,10 +99,12 @@ enum NativeAnalyticsCatalogFixture {
     "PaymentMethod": ["stripe","cash","check","card","other"],
     "JobStatus": ["lead","estimate_sent","approved","scheduled","in_progress","complete","invoiced","paid","declined"],
     "ExpenseCategoryId": ["materials","tools","fuel","labor","insurance","software","marketing","other"],
-    "InsightKind": ["labor_overrun","low_margin_estimate","uninvoiced_complete","due_soon","open_slot","unscheduled_approved","maintenance_due","expense_anomaly"]
+    "InsightKind": ["labor_overrun","low_margin_estimate","uninvoiced_complete","due_soon","open_slot","unscheduled_approved","maintenance_due","warranty_expiring","expense_anomaly","quote_expiring","quote_expired"]
   },
   "events": {
     "ai_chat_sent": [{"source": "insight_prefill|organic", "provider": "anthropic|groq|backend"}],
+    "api_key_created": [{"scopeCount": "number"}],
+    "api_key_revoked": [{"scopeCount": "number"}],
     "appointment_confirm_opened": [{}],
     "appointment_confirm_sent": [{}],
     "booking_request_opened": [{}],

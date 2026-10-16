@@ -71,6 +71,47 @@ private func testCustomers() {
     expectEqual(NativeImportEngine.fields(existingAfter)["notes"], .string(""), "matched customer notes untouched")
 }
 
+// Phase 27 (spec 2026-10-02-lead-source-design.md §3-§4): an imported source
+// is normalized; created customers take it, matched customers only fill a
+// blank one (and that fill counts as a change).
+private func testCustomerLeadSource() {
+    var sourced = customer("c-sourced", "Ada Lovelace", email: "ada@x.com")
+    sourced.leadSource = "referral"
+    let blank = customer("c-blank", "Alan Turing", email: "alan@x.com")
+    let rows = [
+        ["Ada Lovelace", "Nextdoor"],          // matched with a source: kept
+        ["Alan Turing", " google  ads "],      // matched, blank source: filled (normalized)
+        ["Grace Hopper", "Home   Show"],       // created: custom label, collapsed
+        ["Katherine Johnson", ""],             // created: no source
+        ["Grace Hopper", "Yelp"],              // same-batch match: first touch kept
+    ]
+    let mapping: [String?] = ["name", "leadSource"]
+    let result = NativeImportEngine.buildCustomerImport(
+        rows: rows, mapping: mapping, existing: [sourced, blank], batchID: "imp_ls", environment: environment()
+    )
+    func record(_ name: String) -> Canonical.Customer? { result.records.first { $0.name == name } }
+    expectEqual(record("Ada Lovelace")?.leadSource, "referral", "a matched customer's source is never replaced")
+    expectEqual(record("Alan Turing")?.leadSource, "google", "a matched blank source is filled with the normalized value")
+    expectEqual(record("Grace Hopper")?.leadSource, "Home Show", "a created customer keeps a custom label")
+    expect(record("Katherine Johnson")?.leadSource == nil
+           && NativeImportEngine.fields(record("Katherine Johnson")!)["leadSource"] == nil,
+           "a created customer without a source has no key")
+    expect(NativeImportEngine.fields(record("Alan Turing")!)["importBatchId"] == nil,
+           "a source fill does not stamp the matched customer")
+    expectEqual(result.counts.created, 2, "two created customers")
+    expectEqual(result.counts.matched, 3, "three matched rows")
+
+    let filled = NativeImportEngine.upsertCustomer([blank], name: "alan turing", leadSource: "Thumbtack",
+                                                   createdAt: "2026-03-01", newID: { "unused" })
+    expect(filled.changed && filled.customer?.leadSource == "thumbtack_angi", "a source-only fill is a change")
+    let unchanged = NativeImportEngine.upsertCustomer([sourced], name: "Ada Lovelace", leadSource: "yelp",
+                                                      createdAt: "2026-03-01", newID: { "unused" })
+    expect(!unchanged.changed && unchanged.customer?.leadSource == "referral", "a kept source is not a change")
+    let none = NativeImportEngine.upsertCustomer([blank], name: "Alan Turing", leadSource: "   ",
+                                                 createdAt: "2026-03-01", newID: { "unused" })
+    expect(!none.changed && none.customer?.leadSource == nil, "a blank imported source changes nothing")
+}
+
 // MARK: - jobs
 
 private func testJobs() {
@@ -209,6 +250,7 @@ private func testStripBatch() {
 // MARK: - run
 
 testCustomers()
+testCustomerLeadSource()
 testJobs()
 testInvoices()
 testExpenses()

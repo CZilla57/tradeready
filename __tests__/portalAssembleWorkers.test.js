@@ -83,9 +83,9 @@ function assemble(over = {}) {
 }
 
 describe("assemblePortalView — whitelist boundary", () => {
-  test("top level has exactly the seven keys", () => {
+  test("top level has exactly the eight keys", () => {
     expect(Object.keys(assemble()).sort()).toEqual(
-      ["appointments", "businessName", "changeOrders", "customerName", "estimates", "invoices", "photos"]
+      ["appointments", "autopay", "businessName", "changeOrders", "customerName", "estimates", "invoices", "photos"]
     );
   });
 
@@ -104,7 +104,7 @@ describe("assemblePortalView — whitelist boundary", () => {
     for (const a of out.appointments)
       expect(Object.keys(a).sort()).toEqual(["date", "end", "icsUrl", "jobRef", "manageUrl", "start", "title"]);
     for (const e of out.estimates)
-      expect(Object.keys(e).sort()).toEqual(["approvalUrl", "decision", "title", "total"]);
+      expect(Object.keys(e).sort()).toEqual(["approvalUrl", "decision", "expired", "hasOptions", "title", "total", "validUntil"]);
     for (const co of out.changeOrders)
       expect(Object.keys(co).sort()).toEqual(["amount", "changeUrl", "jobTitle", "status", "title"]);
     for (const i of out.invoices)
@@ -159,9 +159,117 @@ describe("change orders", () => {
 describe("estimates (v1 behavior unchanged)", () => {
   test("only approval-carrying jobs, frozen snapshot values", () => {
     expect(assemble().estimates).toEqual([
-      { title: "Fence build", total: 2400, decision: null,
+      { title: "Fence build", total: 2400, decision: null, hasOptions: false, validUntil: null, expired: false,
         approvalUrl: `https://gettradereadyapp.com/estimate.html?j=j_est&t=${"t".repeat(48)}` },
     ]);
+  });
+});
+
+describe("estimates with good/better/best options (Phase 25)", () => {
+  // Top level mirrors the recommended tier (spec §2.2); tier totals differ so
+  // "lowest" and "recommended" are distinguishable.
+  const optionsSnapshot = {
+    jobTitle: "AC replacement", total: 1850.5,
+    lineItems: [{ label: "Labor (6 hrs @ $95/hr)", amount: 570 }],
+    options: {
+      recommendedTierId: "qt_better",
+      tiers: [
+        { id: "qt_better", name: "Standard unit", lineItems: [], total: 1850.5 },
+        { id: "qt_good", name: "Repair", lineItems: [], total: 1200 },
+        { id: "qt_best", name: "High-efficiency unit", lineItems: [], total: 2999.99 },
+      ],
+      addOns: [{ id: "qa_haul", label: "Haul away old unit", amount: 150 }],
+    },
+  };
+  const selection = {
+    tierId: "qt_better", tierName: "Standard unit", addOnIds: ["qa_haul"],
+    addOns: [{ id: "qa_haul", label: "Haul away old unit", amount: 150 }],
+    lineItems: [{ label: "Haul away old unit", amount: 150 }], total: 2000.5,
+  };
+  const estimatesFor = (approval) => assemble({
+    jobRows: [{ id: "j_opt", data: { title: "AC", customerId: "c1", approval: { token: "o".repeat(48), ...approval } } }],
+  }).estimates;
+
+  test("undecided: hasOptions and the lowest tier total (the page shows From $X)", () => {
+    expect(estimatesFor({ snapshot: optionsSnapshot })).toEqual([
+      { title: "AC replacement", total: 1200, decision: null, hasOptions: true, validUntil: null, expired: false,
+        approvalUrl: `https://gettradereadyapp.com/estimate.html?j=j_opt&t=${"o".repeat(48)}` },
+    ]);
+  });
+
+  test("accepted: the selection total the customer agreed to", () => {
+    const [e] = estimatesFor({ snapshot: optionsSnapshot, decision: "approved", selection });
+    expect(e.total).toBe(2000.5);
+    expect(e.hasOptions).toBe(true);
+    expect(e.decision).toBe("approved");
+  });
+
+  test("a selection only counts once approved; declined falls back to the lowest tier", () => {
+    expect(estimatesFor({ snapshot: optionsSnapshot, decision: "declined", selection })[0].total).toBe(1200);
+  });
+
+  test("approved without a stored selection: lowest tier; legacy approved: snapshot total", () => {
+    expect(estimatesFor({ snapshot: optionsSnapshot, decision: "approved" })[0].total).toBe(1200);
+    const [legacy] = estimatesFor({ snapshot: { jobTitle: "Fence", total: 2400 }, decision: "approved" });
+    expect(legacy).toMatchObject({ total: 2400, hasOptions: false });
+  });
+
+  test("no tier internals or selection details cross the wire", () => {
+    const flat = JSON.stringify(estimatesFor({ snapshot: optionsSnapshot, decision: "approved", selection }));
+    expect(flat).not.toContain("Standard unit");
+    expect(flat).not.toContain("qa_haul");
+    expect(flat).not.toContain("tiers");
+  });
+});
+
+describe("estimate valid-until dates (Phase 32)", () => {
+  // validUntil is inclusive in the owner's zone (spec §2.4): Phoenix is
+  // UTC-7, so Nov 2 ends at 2026-11-03T07:00Z.
+  const dated = (validUntil, validUntilTimeZone = "America/Phoenix") => ({
+    jobTitle: "Fence build", total: 2400, validUntil, validUntilTimeZone,
+  });
+  const estimatesAt = (nowMs, approval) => assemble({
+    nowMs,
+    jobRows: [{ id: "j_d", data: { title: "Fence", customerId: "c1", approval: { token: "d".repeat(48), ...approval } } }],
+  }).estimates;
+
+  test("undecided and valid: the date crosses, not expired (23:30 local on the date)", () => {
+    const [e] = estimatesAt(Date.parse("2026-11-03T06:30:00Z"), { snapshot: dated("2026-11-02") });
+    expect(e).toMatchObject({ validUntil: "2026-11-02", expired: false, decision: null });
+  });
+
+  test("undecided and past the date in the owner zone: expired", () => {
+    const [e] = estimatesAt(Date.parse("2026-11-03T07:00:00Z"), { snapshot: dated("2026-11-02") });
+    expect(e).toMatchObject({ validUntil: "2026-11-02", expired: true, decision: null });
+  });
+
+  test("an option estimate past its date is expired and still shows its lowest tier", () => {
+    const snapshot = {
+      ...dated("2026-11-02"),
+      options: { recommendedTierId: "b", tiers: [{ id: "a", name: "A", lineItems: [], total: 900 }, { id: "b", name: "B", lineItems: [], total: 2400 }] },
+    };
+    const [e] = estimatesAt(Date.parse("2026-11-04T00:00:00Z"), { snapshot });
+    expect(e).toMatchObject({ total: 900, hasOptions: true, expired: true });
+  });
+
+  test("expired is false once the customer decided", () => {
+    const later = Date.parse("2026-12-01T00:00:00Z");
+    expect(estimatesAt(later, { snapshot: dated("2026-11-02"), decision: "declined" })[0])
+      .toMatchObject({ validUntil: "2026-11-02", expired: false, decision: "declined" });
+    expect(estimatesAt(later, { snapshot: dated("2026-11-02"), decision: "approved" })[0])
+      .toMatchObject({ validUntil: "2026-11-02", expired: false, decision: "approved" });
+  });
+
+  test("an unknown zone is judged anywhere-on-Earth; undated never expires", () => {
+    expect(estimatesAt(Date.parse("2026-11-03T11:59:59Z"), { snapshot: dated("2026-11-02", "Mars/Olympus") })[0].expired).toBe(false);
+    expect(estimatesAt(Date.parse("2026-11-03T12:00:00Z"), { snapshot: dated("2026-11-02", "Mars/Olympus") })[0].expired).toBe(true);
+    expect(estimatesAt(Date.parse("2099-01-01T00:00:00Z"), { snapshot: { jobTitle: "Old", total: 1 } })[0])
+      .toMatchObject({ validUntil: null, expired: false });
+  });
+
+  test("the zone itself never crosses the wire", () => {
+    const flat = JSON.stringify(estimatesAt(Date.parse("2026-11-01T00:00:00Z"), { snapshot: dated("2026-11-02") }));
+    expect(flat).not.toContain("America/Phoenix");
   });
 });
 
@@ -213,5 +321,65 @@ describe("photos (Phase 12B — fail closed)", () => {
     const out = assemble({ photoSecret: undefined });
     expect(out.photos).toEqual([]);
     expect(out.invoices.length).toBeGreaterThan(0);
+  });
+});
+
+describe("automatic payments (Phase 24 §4.9)", () => {
+  const { verifyPayToken } = require("../backend-workers/lib/pay/payToken.js");
+  const OWNER = "11111111-2222-4333-8444-555555555555";
+  const PAY_SECRET = "y".repeat(40);
+  const plan = (id, data = {}) => ({ id, data: { customerId: "c1", customerName: "Pat", description: `Plan ${id}`, amount: 120, cadence: "monthly", isActive: true, autopayEnabled: true, ...data } });
+  const planRows = [
+    plan("ri_on"),
+    plan("ri_avail", { amount: 49.5, cadence: "quarterly" }),
+    plan("ri_paused", { isActive: false }),
+    plan("ri_off", { autopayEnabled: false }),
+    plan("ri_absent", { autopayEnabled: undefined }),
+    plan("ri_other", { customerId: "c2" }),
+  ];
+  const enrollmentRows = [
+    { id: "6f1c2a4e-1d2b-4c3d-8e9f-0a1b2c3d4e5f", recurring_invoice_id: "ri_on", customer_id: "c1", status: "active", card_brand: "visa", card_last4: "4242", max_amount_cents: 12000 },
+  ];
+  const withAutopay = (over = {}) => assemble({ userId: OWNER, planRows, enrollmentRows, paySecret: PAY_SECRET, payEnv: {}, stripeConnected: true, ...over });
+
+  test("only active, autopay-offering plans of THIS customer, with exact entry keys", () => {
+    const out = withAutopay().autopay;
+    expect(out.map((a) => a.description)).toEqual(["Plan ri_on", "Plan ri_avail"]);
+    for (const a of out)
+      expect(Object.keys(a).sort()).toEqual(["amount", "cadence", "card", "description", "manageUrl", "setupUrl", "status"]);
+  });
+
+  test("on: card label + manage link; available: a setup link bound to this customer", () => {
+    const [on, avail] = withAutopay().autopay;
+    expect(on).toMatchObject({ status: "on", card: "Visa ending 4242", setupUrl: null, amount: 120, cadence: "every month" });
+    const m = new URL(on.manageUrl);
+    expect(`${m.origin}${m.pathname}`).toBe("https://gettradereadyapp.com/pay.html");
+    expect(verifyPayToken(PAY_SECRET, m.searchParams.get("m"), { expectKind: "m" }).payload).toEqual({ v: 1, u: OWNER, e: enrollmentRows[0].id });
+    expect(avail).toMatchObject({ status: "available", card: null, manageUrl: null, amount: 49.5, cadence: "every 3 months" });
+    const sTok = new URL(avail.setupUrl).searchParams.get("s");
+    expect(verifyPayToken(PAY_SECRET, sTok, { expectKind: "s", nowSec: Math.floor(NOW_MS / 1000) }).payload).toEqual({
+      v: 1, u: OWNER, r: "ri_avail", c: "c1", x: Math.floor(NOW_MS / 1000) + 7 * 86400,
+    });
+  });
+
+  test("no pay-link secret or no Stripe connection → empty section, portal intact", () => {
+    expect(withAutopay({ paySecret: null }).autopay).toEqual([]);
+    expect(withAutopay({ stripeConnected: false }).autopay).toEqual([]);
+    expect(assemble().autopay).toEqual([]);
+    expect(withAutopay({ stripeConnected: false }).invoices.length).toBeGreaterThan(0);
+  });
+
+  test("another customer's enrollment never marks a plan on", () => {
+    const out = withAutopay({ enrollmentRows: [{ ...enrollmentRows[0], customer_id: "c2" }] }).autopay;
+    expect(out.find((a) => a.description === "Plan ri_on").status).toBe("available");
+  });
+
+  test("nothing sensitive crosses the wire from plans or enrollments", () => {
+    const flat = JSON.stringify(withAutopay().autopay);
+    expect(flat).not.toContain("c1\"");
+    expect(flat).not.toContain("Pat");
+    expect(flat).not.toContain("12000");
+    expect(flat).not.toContain("max_amount");
+    expect(flat).not.toContain("recurring_invoice_id");
   });
 });

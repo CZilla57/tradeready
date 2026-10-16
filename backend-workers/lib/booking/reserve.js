@@ -8,12 +8,9 @@
 // notify. Time (`nowMs`), the id suffix (`randHex`), and the manage token
 // are injected by the route wrapper so this core is deterministic in tests.
 
-const {
-  resolveSchedule,
-  computeCandidateSlots,
-  resolveSlotsUtc,
-  nowInZone,
-} = require('./availability.js');
+const { resolveSchedule, resolveSlotsUtc } = require('./availability.js');
+const { fetchCalendarBusy } = require('../calendar/busyStore.js');
+const { offerableCandidates } = require('./offerable.js');
 const {
   lookupUserByBookingToken,
   insertBookingRequest,
@@ -70,11 +67,12 @@ async function reserveCore(env, { body, nowMs, randHex, manageToken }) {
     return { status: 404, body: { error: 'This link is invalid.' } };
   }
 
-  let jobs, reservations;
+  let jobs, reservations, calendarRow;
   try {
-    [jobs, reservations] = await Promise.all([
+    [jobs, reservations, calendarRow] = await Promise.all([
       fetchJobsData(env, row.user_id),
       fetchActiveReservations(env, row.user_id),
+      fetchCalendarBusy(env, row.user_id),
     ]);
   } catch (err) {
     console.error('[booking/reserve] data fetch failed:', err.message);
@@ -83,16 +81,13 @@ async function reserveCore(env, { body, nowMs, randHex, manageToken }) {
 
   // Server-authoritative membership check: the requested slot must be a
   // CURRENT candidate. Stale offer and taken slot answer identically — the
-  // page's remedy is the same (refresh the slot list).
-  const now = nowInZone(schedule.timeZone, nowMs);
-  const candidates = computeCandidateSlots({
-    schedule,
-    jobs,
-    extraBusy: reservations.map((r) => ({ date: r.slot_date, start: r.slot_start, end: r.slot_end })),
-    fromDate: now.date,
-    days: schedule.slotWindowDays,
-    now,
-  });
+  // page's remedy is the same (refresh the slot list). Phase 26: the same
+  // pipeline as the offers, so calendar busy times (and a stale snapshot,
+  // which offers nothing) gate reserve exactly as they gate slots.
+  const { state, candidates } = offerableCandidates({ schedule, jobs, reservations, calendarRow, nowMs });
+  if (state === 'stale') {
+    console.warn(`[booking/reserve] calendar_stale user=${String(row.user_id).slice(0, 8)}`);
+  }
   const match = candidates.find((s) => s.date === slot.date && s.start === slot.start);
   if (!match) return { status: 409, body: { error: 'slot_taken' } };
 

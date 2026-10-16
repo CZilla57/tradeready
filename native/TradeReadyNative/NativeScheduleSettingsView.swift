@@ -371,9 +371,8 @@ struct NativeScheduleSettingsView: View {
     }
 
     private func save() {
-        guard validationErrors.isEmpty else { return }
+        guard validationErrors.isEmpty, !isSaving else { return }
         isSaving = true
-        defer { isSaving = false }
         // Enabling slots preserves the existing valid zone; otherwise stamp
         // the device zone with a UTC fallback (never a fabricated offer —
         // an invalid zone still refuses via the validator above).
@@ -396,7 +395,16 @@ struct NativeScheduleSettingsView: View {
             bookableSlotsEnabled: slotsEnabled,
             blackoutsToAdd: blackouts.map(Self.canonicalBlackout).compactMap { $0 },
             blackoutIDsToRemove: removedBlackoutIDs())
-        switch store.commitScheduleSettings(draft) {
+        // Phase 26 (§4.4): turning slots on with calendar checks on awaits a
+        // busy-time push before the change is queued; Save stays disabled.
+        Task { @MainActor in
+            defer { isSaving = false }
+            finishSave(await store.commitScheduleSettingsAwaitingCalendar(draft))
+        }
+    }
+
+    private func finishSave(_ outcome: AppStore.ScheduleSettingsOutcome) {
+        switch outcome {
         case .saved:
             // Offline changes do not claim public publication: label the
             // pending-sync state instead of a published state.

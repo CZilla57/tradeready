@@ -133,6 +133,19 @@ struct InitialSyncTests {
                 return (200, try JSONEncoder().encode([row(
                     id: "bk-1", value: rich["bookingRequest"]!
                 )]))
+            case "forms":
+                // Phase 20: an instance, a template, and a tombstone.
+                return (200, try JSONEncoder().encode([
+                    row(id: "fm1759420800000_k3x9", value: rich["form"]!),
+                    row(id: "fm1759420700000_z0", value: rich["formTemplate"]!),
+                    row(id: "fm1_gone", value: .object(["id": .string("fm1_gone")]), deleted: true)
+                ]))
+            case "campaigns":
+                // Phase 33: a campaign and a tombstone.
+                return (200, try JSONEncoder().encode([
+                    row(id: "cmp_3f6c2a10-8d4e-4b7a-9c1d-2e5f6a7b8c9d", value: rich["campaign"]!),
+                    row(id: "cmp_gone", value: .object(["id": .string("cmp_gone")]), deleted: true)
+                ]))
             case "settings":
                 return (200, try JSONEncoder().encode([Canonical.JSONValue.object([
                     "user_id": .string(subject),
@@ -199,8 +212,20 @@ struct InitialSyncTests {
         let collectionRequests = loader.requests.filter {
             !["settings", "customer_notes"].contains(tableName($0))
         }
-        expect(Set(collectionRequests.map(tableName)).count == 10,
-               "all ten production collection tables are pulled")
+        expect(Set(collectionRequests.map(tableName)).count == 12,
+               "all twelve production collection tables are pulled")
+        expect(Set(collectionRequests.map(tableName)).contains("campaigns"), "Phase 33: the campaigns table is pulled")
+        expect(pulled.payload.campaigns?.map(\.id) == ["cmp_3f6c2a10-8d4e-4b7a-9c1d-2e5f6a7b8c9d"],
+               "Phase 33: a campaign row lands in the snapshot; a tombstone adds nothing")
+        expect(pulled.payload.campaigns?.first?.segment.preservation.unknownFields["futureSegmentField"] != nil
+               && pulled.payload.campaigns?.first?.recipients?.first?.preservation.unknownFields["futureRecipientField"] != nil,
+               "Phase 33: a pulled campaign keeps unknown keys in its segment and recipients")
+        expect(Set(collectionRequests.map(tableName)).contains("forms"), "Phase 20: the forms table is pulled")
+        expect(pulled.payload.forms?.map(\.id) == ["fm1759420800000_k3x9", "fm1759420700000_z0"],
+               "forms rows (instance and template) land in the snapshot; a tombstone adds nothing")
+        expect(pulled.payload.forms?.first?.preservation.unknownFields["futureFormField"] != nil
+               && pulled.payload.forms?.first?.items[4].kind == "signature",
+               "a pulled form keeps unknown keys and an unknown item kind")
         expect(loader.requests.allSatisfy {
             $0.httpMethod == "GET"
                 && $0.value(forHTTPHeaderField: "apikey") == "publishable-key"
@@ -247,6 +272,57 @@ struct InitialSyncTests {
                 "HTTP failures expose only a bounded table and status diagnostic"
             )
         }
+
+        // Phase 18 (Tap to Pay): the device copy and the webhook copy of the SAME
+        // `stripe_<pi>` entry both exist. They share an id and identical bytes, so
+        // the merge keeps ONE entry and the invoice is credited once.
+        func tapEntry(voidedAt: String? = nil) -> Canonical.JSONValue {
+            var fields: [String: Canonical.JSONValue] = [
+                "id": .string("stripe_pi_tap_1"), "amount": .number(Decimal(120)), "date": .string("2026-10-13"),
+                "method": .string("stripe"), "stripePaymentIntentId": .string("pi_tap_1"), "channel": .string("card_present"),
+            ]
+            if let voidedAt { fields["voidedAt"] = .string(voidedAt) }
+            return .object(fields)
+        }
+        func tapInvoice(_ payments: [Canonical.JSONValue]) -> Canonical.JSONValue {
+            var fields = invoiceFields
+            fields["id"] = .string("inv_tap"); fields["amount"] = .number(Decimal(120))
+            fields["paid"] = .bool(false); fields["paidAt"] = .null
+            fields["payments"] = .array(payments)
+            return .object(fields)
+        }
+        func tapPull(local localPayments: [Canonical.JSONValue]?, remote remotePayments: [Canonical.JSONValue]) async throws -> Canonical.Invoice? {
+            let localSnapshot = Canonical.Snapshot(payload: .init(
+                invoices: try localPayments.map { [try decoded(Canonical.Invoice.self, tapInvoice($0))] } ?? []))
+            let tapLoader = InitialSyncLoader { request in
+                tableName(request) == "invoices"
+                    ? (200, try JSONEncoder().encode([row(id: "inv_tap", value: tapInvoice(remotePayments))]))
+                    : (200, Data("[]".utf8))
+            }
+            let result = try await NativeSupabaseInitialSyncService(
+                supabaseURL: URL(string: "https://project.supabase.co")!,
+                publishableKey: "publishable-key", loader: tapLoader
+            ).pull(sessionBytes: session, expectedUserSubject: subject, localSnapshot: localSnapshot)
+            return result.payload.invoices?.first { $0.id == "inv_tap" }
+        }
+        func credited(_ invoice: Canonical.Invoice?) -> Decimal {
+            (invoice?.payments ?? []).reduce(Decimal.zero) { $0 + ($1.voidedAt == nil ? $1.amount : 0) }
+        }
+        let both = try await tapPull(local: [tapEntry()], remote: [tapEntry()])
+        expect(both?.payments?.count == 1 && both?.payments?.first?.id == "stripe_pi_tap_1",
+               "Phase 18: the device copy and the webhook copy of one stripe_<pi> entry merge into ONE entry")
+        expect(credited(both) == 120 && both?.paid == true && both?.paidAt == "2026-10-13",
+               "Phase 18: the invoice is credited once (120, not 240) and settles on the payment's day")
+        expect(both?.payments?.first?.preservation.unknownFields["channel"] == .string("card_present")
+               && both?.payments?.first?.preservation.unknownFields["stripePaymentIntentId"] == .string("pi_tap_1"),
+               "Phase 18: the merged entry keeps channel and the intent id")
+        let webhookFirst = try await tapPull(local: nil, remote: [tapEntry()])
+        expect(webhookFirst?.payments?.count == 1 && credited(webhookFirst) == 120,
+               "Phase 18: a webhook-only copy pulled to a device that has none books once")
+        let voidedHere = try await tapPull(local: [tapEntry(voidedAt: "2026-10-14T10:00:00Z")], remote: [tapEntry()])
+        expect(voidedHere?.payments?.count == 1 && voidedHere?.payments?.first?.voidedAt != nil
+               && credited(voidedHere) == 0 && voidedHere?.paid == false,
+               "Phase 18: a void on the device wins over the webhook's live copy (one entry, nothing credited)")
 
         if failures == 0 { print("PASS: native initial sync tests") }
         else { exit(1) }

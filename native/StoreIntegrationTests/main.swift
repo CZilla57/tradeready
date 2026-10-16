@@ -966,7 +966,7 @@ struct StoreIntegrationTests {
             description: "Maintenance", amount: 150, dueDays: 30,
             cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
             occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: "2026-09-01",
-            isActive: true, createdAt: "2026-09-01", autoSendEnabled: false)
+            isActive: true, createdAt: "2026-09-01", autoSendEnabled: false, autopayEnabled: nil)
         let prePlanCount = empty.invoices.count
         expect(empty.createRecurringInvoice(planRule), "maintenance plan creates")
         expect(empty.createRecurringInvoice(planRule) == false, "duplicate plan id refused")
@@ -1046,6 +1046,193 @@ struct StoreIntegrationTests {
         let partialURL = try await empty.generateInvoicePaymentLink(
             invoiceID: storedLinkID, amount: 200, provider: .paypal)
         expect(partialURL.absoluteString == "https://paypal.me/acme-shop/200.00", "changed amount mints fresh, never reuses stale")
+
+        // Phase 24 §6.1: Stripe links through an injected delivery service.
+        // The old post-await check required the requested amount to equal the
+        // latest balance, so every deposit link failed after minting. The
+        // check now compares the balance before and after the await (a payment
+        // arrived) and refuses only a request above the balance.
+        do {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tradeready-p24-deposit-\(UUID().uuidString)", isDirectory: true)
+            let stripe = StoreTestStripeDelivery()
+            let store = AppStore(fileURL: dir.appendingPathComponent("store.json"), seedIfMissing: false,
+                                 invoiceDeliveryService: stripe, secureSettingsStore: hostTestSecureSettingsStore())
+            store.scheduleBookingTestSeedSignedInOwner(subject: "user-p24", binding: String(repeating: "4", count: 64))
+            store.scheduleBookingTestCredentials = NativeSyncCredentials(
+                subject: "user-p24", sessionBytes: Data("{\"access_token\":\"p24\"}".utf8))
+            let depositInvoice = Invoice(customer: "Deposit Customer", number: "INV-P24", amount: 400)
+            store.upsert(depositInvoice)
+            func stored() -> Canonical.Invoice? {
+                store.canonicalInvoices.first { $0.id == depositInvoice.id }
+            }
+            func refusal(_ amount: Decimal) async -> NativeInvoiceDeliveryError? {
+                do {
+                    _ = try await store.generateInvoicePaymentLink(invoiceID: depositInvoice.id, amount: amount, provider: .stripe)
+                    return nil
+                } catch { return error as? NativeInvoiceDeliveryError ?? .unavailable }
+            }
+
+            // Full balance.
+            let full = try? await store.generateInvoicePaymentLink(invoiceID: depositInvoice.id, amount: 400, provider: .stripe)
+            expect(full?.absoluteString == "https://gettradereadyapp.com/pay.html?t=mint1"
+                       && stored()?.paymentLinkUrl == full?.absoluteString && stored()?.paymentLinkAmount == 400,
+                   "§6.1 a full-balance Stripe link mints and persists against its amount")
+
+            // 50% deposit: strictly below the balance by construction, now succeeds.
+            let deposit = try? await store.generateInvoicePaymentLink(invoiceID: depositInvoice.id, amount: 200, provider: .stripe)
+            expect(deposit?.absoluteString == "https://gettradereadyapp.com/pay.html?t=mint2",
+                   "§6.1 a 50% deposit Stripe link succeeds (it always failed before)")
+            expect(stored()?.paymentLinkUrl == deposit?.absoluteString && stored()?.paymentLinkAmount == 200,
+                   "§6.1 the deposit link persists against the deposit amount")
+            let cachedDeposit = try? await store.generateInvoicePaymentLink(invoiceID: depositInvoice.id, amount: 200, provider: .stripe)
+            expect(cachedDeposit == deposit && stripe.mintedAmounts.count == 2,
+                   "§6.1 the deposit link is reused for the same amount without another mint")
+
+            // Above the balance: refused before any mint, nothing persisted.
+            let aboveBalance = await refusal(500)
+            expect(aboveBalance == .invalidAmount, "§6.1 a request above the balance is refused")
+            expect(stripe.mintedAmounts.count == 2, "§6.1 a request above the balance never reaches the Worker")
+            expect(stored()?.paymentLinkAmount == 200, "§6.1 a refused request leaves the stored link alone")
+
+            // A payment lands while the full-balance mint is in flight.
+            stripe.duringMint = {
+                _ = store.recordPayment(invoiceID: depositInvoice.id,
+                                        payment: Payment(id: "pay-p24-race-1", amount: 100, date: Date(), method: "Cash"))
+            }
+            let racedFull = await refusal(400)
+            expect(racedFull == .invalidAmount, "§6.1 a concurrent payment during the await refuses the full-balance link")
+            expect(stripe.mintedAmounts.count == 3, "§6.1 sanity: the racing request did mint")
+            expect(stored()?.paymentLinkUrl == deposit?.absoluteString && stored()?.paymentLinkAmount == 200,
+                   "§6.1 the stale-amount link is never persisted as current")
+            // And while a deposit mint is in flight.
+            stripe.duringMint = {
+                _ = store.recordPayment(invoiceID: depositInvoice.id,
+                                        payment: Payment(id: "pay-p24-race-2", amount: 50, date: Date(), method: "Cash"))
+            }
+            let racedDeposit = await refusal(150)
+            expect(racedDeposit == .invalidAmount, "§6.1 a concurrent payment during the await refuses a deposit link")
+            expect(stored()?.paymentLinkAmount == 200, "§6.1 the racing deposit link is not persisted")
+            stripe.duringMint = nil
+            // With the balance settled at 250, a fresh deposit request works again.
+            let after = try? await store.generateInvoicePaymentLink(invoiceID: depositInvoice.id, amount: 125, provider: .stripe)
+            expect(after != nil && stored()?.paymentLinkAmount == 125, "§6.1 a deposit after the payments mints against the new balance")
+        }
+
+        // Phase 24 §6.2/§6.3: the plan's "Offer autopay" persists and pushes,
+        // and the owner's autopay status and "Remove saved card" run through
+        // an injected owner-route service.
+        do {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tradeready-p24-autopay-\(UUID().uuidString)", isDirectory: true)
+            let storeURL = dir.appendingPathComponent("store.json")
+            let autopay = StoreTestAutopayService()
+            let store = AppStore(fileURL: storeURL, seedIfMissing: false,
+                                 autopayService: autopay, secureSettingsStore: hostTestSecureSettingsStore())
+            store.scheduleBookingTestSeedSignedInOwner(subject: "user-p24-ap", binding: String(repeating: "5", count: 64))
+            store.scheduleBookingTestCredentials = NativeSyncCredentials(
+                subject: "user-p24-ap", sessionBytes: Data("{\"access_token\":\"p24\"}".utf8))
+            let noPlans = await store.refreshAutopayStatus(trigger: .plansList)
+            expect(!noPlans && autopay.statusCalls == 0, "§6.3 an owner without plans makes no autopay read")
+
+            let apCustomer = Customer(name: "Autopay Customer", email: "autopay@example.com")
+            store.upsert(apCustomer)
+            let apPlan = Canonical.RecurringInvoice(
+                id: "rinv-p24", customerId: apCustomer.id, customerName: apCustomer.name,
+                description: "Monthly service", amount: 120, dueDays: 0,
+                cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
+                occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: "2026-11-01",
+                isActive: true, createdAt: "2026-10-01", autoSendEnabled: false, autopayEnabled: nil)
+            expect(store.createRecurringInvoice(apPlan), "§6.2 the plan creates without autopay")
+            var offering = apPlan
+            offering.autopayEnabled = true
+            expect(store.updateRecurringInvoice(offering), "§6.2 the plan saves with Offer autopay on")
+            let apReloaded = AppStore(fileURL: storeURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
+            expect(apReloaded.recurringInvoiceRules.first { $0.id == "rinv-p24" }?.autopayEnabled == true,
+                   "§6.2 Offer autopay persists across a reload")
+            let apQueued = Canonical.NativeMutationQueue(
+                fileURL: storeURL.deletingLastPathComponent().appendingPathComponent("mutation-queue.json")
+            ).load().last { $0.table == "recurringInvoices" && $0.recordId == "rinv-p24" }
+            if case let .object(payload)? = apQueued?.payload {
+                expect(apQueued?.op == .upsert && payload["autopayEnabled"] == .bool(true),
+                       "§6.2 Offer autopay pushes with the plan (the Worker reads it from the synced row)")
+            } else { expect(false, "§6.2 the plan upsert is queued with an object payload") }
+            expect(store.setRecurringInvoiceActive(id: "rinv-p24", isActive: false)
+                   && store.recurringInvoiceRules.first { $0.id == "rinv-p24" }?.autopayEnabled == true,
+                   "§6.2 pausing a plan keeps its autopay choice")
+            expect(store.setRecurringInvoiceActive(id: "rinv-p24", isActive: true, today: "2026-10-01"), "the plan resumes")
+            expect(store.autopayPlanStatus(planID: "rinv-p24") == .offered,
+                   "§6.3 before any status read the row follows the plan's toggle")
+
+            // A status read, then the 10-minute foreground rule.
+            let readAt = Date(timeIntervalSince1970: 1_792_000_000)
+            let apCard = NativeAutopayCard(brand: "visa", last4: "4242", expMonth: 8, expYear: 2027, wallet: nil)
+            let activeEnrollment = NativeAutopayEnrollment(
+                id: "enr-p24", recurringInvoiceId: "rinv-p24", customerId: apCustomer.id, status: "active",
+                card: apCard, maxAmount: 120, activatedAt: ISO8601DateFormatter().date(from: "2026-10-02T15:00:00Z"),
+                revokedAt: nil, revokedBy: nil, revokeReason: nil)
+            autopay.statusResult = .success(NativeAutopayStatusSnapshot(enrollments: [activeEnrollment], charges: []))
+            let firstRead = await store.refreshAutopayStatus(trigger: .plansList, now: readAt)
+            expect(firstRead && autopay.statusCalls == 1, "§6.3 opening the plans list reads autopay status")
+            expect(store.autopayPlanStatus(planID: "rinv-p24") == .on(apCard)
+                   && NativeAutopay.planRowText(store.autopayPlanStatus(planID: "rinv-p24")) == "Autopay on · Visa •••• 4242",
+                   "§6.3 the plan row reads Autopay on with the card")
+            let soon = await store.refreshAutopayStatus(trigger: .foreground, now: readAt.addingTimeInterval(300))
+            expect(!soon && autopay.statusCalls == 1, "§6.3 a foreground within 10 minutes reuses the last read")
+            let later = await store.refreshAutopayStatus(trigger: .foreground, now: readAt.addingTimeInterval(600))
+            expect(later && autopay.statusCalls == 2, "§6.3 a foreground after 10 minutes reads again")
+
+            // The invoice banner for the plan's next invoice.
+            expect(store.runRecurringInvoiceGeneration(today: "2026-11-01"), "the plan generates its Nov 1 invoice")
+            let apInvoiceID = store.canonicalInvoices.first { $0.recurringInvoiceId == "rinv-p24" }?.id ?? ""
+            expect(store.autopayInvoiceBanner(invoiceID: apInvoiceID, now: readAt)?.text
+                   == "Will be charged automatically on Nov 1, 2026 (Visa •••• 4242)",
+                   "§6.3 the plan invoice shows when it will be charged")
+            expect(store.autopayInvoiceBanner(invoiceID: "no-such-invoice", now: readAt) == nil, "no banner for a missing invoice")
+
+            // A failed remove leaves the card shown; a rejected session asks to sign in.
+            autopay.removeError = .unavailable
+            let failedRemove = await store.removeAutopayCard(enrollmentID: "enr-p24")
+            expect(failedRemove == .failed("The card couldn't be removed. Check your connection and try again."),
+                   "§6.3 a failed remove reports a text error")
+            expect(store.autopayPlanStatus(planID: "rinv-p24") == .on(apCard) && store.autopayRemovalsInFlight.isEmpty,
+                   "§6.3 a failed remove changes nothing")
+            autopay.removeError = .rejectedSession
+            let expiredRemove = await store.removeAutopayCard(enrollmentID: "enr-p24")
+            expect(expiredRemove == .failed("Your session expired. Sign in again to remove the card."),
+                   "§6.3 a rejected session without a refresh asks to sign in again")
+            autopay.removeError = nil
+
+            // The remove itself: no double submit while in flight, the card
+            // reads removed at once, and status is reread afterwards.
+            autopay.holdsRemove = true
+            let callsBeforeRemove = autopay.statusCalls
+            let firstRemove = Task { await store.removeAutopayCard(enrollmentID: "enr-p24") }
+            var spins = 0
+            while !autopay.removeStarted && spins < 100_000 { await Task.yield(); spins += 1 }
+            expect(autopay.removeStarted, "sanity: the remove reached the service")
+            expect(store.autopayRemovalsInFlight.contains("enr-p24"), "§6.3 the card reads as being removed while in flight")
+            let doubleTap = await store.removeAutopayCard(enrollmentID: "enr-p24")
+            expect(doubleTap == .alreadyInProgress, "§6.3 a second remove while one is in flight sends nothing")
+            autopay.statusResult = .failure(.unavailable)
+            autopay.releaseRemove()
+            let removed = await firstRemove.value
+            expect(removed == .removed && autopay.removedIDs == ["enr-p24", "enr-p24", "enr-p24"],
+                   "§6.3 the remove posts the enrollment id (once per attempt, never for the double tap)")
+            expect(autopay.statusCalls == callsBeforeRemove + 1, "§6.3 status is reread after a remove")
+            expect(store.autopayPlanStatus(planID: "rinv-p24") == .removed(by: "owner", reason: nil)
+                   && store.autopayActiveEnrollment(planID: "rinv-p24") == nil,
+                   "§6.3 the removed card stays removed even when the reread fails")
+            expect(store.autopayRemovalsInFlight.isEmpty, "§6.3 nothing is left in flight")
+
+            // A read that lands after the owner changed is dropped.
+            let beforeSwitch = store.autopayStatus
+            autopay.statusResult = .success(NativeAutopayStatusSnapshot(enrollments: [activeEnrollment], charges: []))
+            autopay.duringStatus = { store.scheduleBookingTestSeedSignedInOwner(subject: "user-p24-other", binding: String(repeating: "6", count: 64)) }
+            let raced = await store.refreshAutopayStatus(trigger: .plansList)
+            expect(!raced && store.autopayStatus == beforeSwitch, "§6.3 another owner's autopay read is never applied")
+            autopay.duringStatus = nil
+        }
 
         let canonicalCustomer: Canonical.Customer = try field("customer")
         let canonicalSettings: Canonical.Settings = try field("settings")
@@ -1640,6 +1827,566 @@ struct StoreIntegrationTests {
         expect(pendingMutations(queueURL).allSatisfy { $0.recordId != "never-existed" },
                "deleting a record that never existed enqueues nothing")
 
+        // MARK: - Phase 20: job forms through AppStore (add, answer, complete, delete + undo)
+
+        do {
+            func queuedForm(_ id: String) -> Canonical.MutationItem? {
+                pendingMutations(queueURL).last { $0.table == "forms" && $0.recordId == id }
+            }
+            func queuedFormValue(_ id: String) -> Canonical.Form? {
+                guard let payload = queuedForm(id)?.payload, let data = try? JSONEncoder().encode(payload) else { return nil }
+                return try? JSONDecoder().decode(Canonical.Form.self, from: data)
+            }
+            let formsJob = Job(customerId: queuedCustomer.id, customerName: queuedCustomer.name, title: "Panel inspection")
+            expect(queueStore.upsert(formsJob), "forms: the job saves")
+            let jpeg = Data([0xFF, 0xD8, 0x01, 0x02, 0xFF, 0xD9])
+
+            expect(queueStore.addForm(jobID: "no-such-job", templateRef: .builtin("site-safety")) == .failure(.jobNotFound),
+                   "forms: a form needs a job on this device")
+            expect(queueStore.addForm(jobID: formsJob.id, templateRef: .builtin("nope")) == .failure(.unknownTemplate("builtin:nope")),
+                   "forms: an unknown built-in is refused")
+            guard case let .success(added) = queueStore.addForm(jobID: formsJob.id, templateRef: .builtin("electrical-safety")) else {
+                expect(false, "forms: a built-in form is added")
+                throw StoreTestError.missingFixture
+            }
+            let formID = added.id
+            expect(NativeJobForms.isValidFormID(formID) && added.templateId == "builtin:electrical-safety" && added.jobId == formsJob.id,
+                   "forms: the instance has a random id, its job and its template")
+            expect(queueStore.forms(forJob: formsJob.id).map(\.id) == [formID], "forms: the job lists its form")
+            expect(queuedForm(formID)?.op == .upsert && queuedFormValue(formID)?.title == "Electrical safety inspection",
+                   "forms: adding enqueues one forms upsert")
+            expect(queueStore.formProgress(added).label == "0/10", "forms: progress starts at 0/10")
+
+            // Answers: each change is one forms upsert; the queue keeps the latest.
+            _ = queueStore.setFormItemChecked(formID: formID, itemID: "fi_2", true)
+            _ = queueStore.setFormItemResult(formID: formID, itemID: "fi_3", .pass)
+            _ = queueStore.setFormItemResult(formID: formID, itemID: "fi_4", .fail)
+            _ = queueStore.setFormItemNote(formID: formID, itemID: "fi_4", "Scorch mark at slot 14")
+            let textResult = queueStore.setFormItemText(formID: formID, itemID: "fi_12", "Two unlabelled breakers")
+            expect((try? textResult.get())?.items[11].text == "Two unlabelled breakers", "forms: a text answer commits")
+            expect(queueStore.setFormItemChecked(formID: formID, itemID: "fi_3", true) == .failure(.wrongItemKind("fi_3")),
+                   "forms: a wrong-kind answer is refused")
+            expect(pendingMutations(queueURL).filter { $0.table == "forms" && $0.recordId == formID }.count == 1,
+                   "forms: repeated edits collapse to one queued forms upsert")
+            expect(queuedFormValue(formID)?.items[3].note == "Scorch mark at slot 14"
+                   && queuedFormValue(formID)?.items[11].text == "Two unlabelled breakers",
+                   "forms: the queued row carries the latest answers")
+            expect(queueStore.formProgress(queueStore.form(id: formID)!).label == "4/10", "forms: progress counts answers")
+
+            // Completion is refused with typed reasons.
+            guard case let .incomplete(missing) = queueStore.completeForm(id: formID) else {
+                expect(false, "forms: completion is refused while items are missing")
+                throw StoreTestError.missingFixture
+            }
+            expect(missing.map(\.itemID) == ["fi_2", "fi_7"] && missing.map(\.reasons) == [[.noPhoto], [.noResult]],
+                   "forms: the refusal lists the missing photo and the unanswered item")
+            expect(queueStore.form(id: formID)?.completedAt == nil, "forms: a refused completion changes nothing")
+
+            // A photo captured from the item is stamped and attached in one commit.
+            expect(queueStore.createJobPhoto(jobID: formsJob.id, sourceData: jpeg, formID: formID, formItemID: "fi_1") == nil,
+                   "forms: a photo cannot attach to a section")
+            expect(queueStore.createJobPhoto(jobID: formsJob.id, sourceData: jpeg, formID: formID) == nil,
+                   "forms: a form photo needs both the form and the item")
+            expect(queueStore.createJobPhoto(jobID: "other-job", sourceData: jpeg, formID: formID, formItemID: "fi_2") == nil,
+                   "forms: a form photo must belong to the form's job")
+            expect(queueStore.jobPhotos(for: formsJob.id).isEmpty, "forms: refused captures write no photo")
+            queueStore.migrationMessage = nil
+            guard let photo = queueStore.createJobPhoto(jobID: formsJob.id, sourceData: jpeg, formID: formID, formItemID: "fi_2") else {
+                expect(false, "forms: a photo is captured from a form item")
+                throw StoreTestError.missingFixture
+            }
+            expect(photo.formId == formID && photo.formItemId == "fi_2", "forms: the photo carries its form back-references")
+            expect(queueStore.jobPhotos(for: formsJob.id).map(\.id) == [photo.id], "forms: the photo is in the job's Photos")
+            expect(queueStore.form(id: formID)?.items[1].photoIds == [photo.id], "forms: the photo id is appended to the item")
+            expect(queueStore.formItemPhotos(formID: formID, itemID: "fi_2").map(\.id) == [photo.id], "forms: the item resolves its photo")
+            let photoQueue = pendingMutations(queueURL)
+            expect(photoQueue.contains { $0.table == "jobPhotos" && $0.recordId == photo.id && $0.op == .upsert }
+                   && queuedFormValue(formID)?.items[1].photoIds == [photo.id],
+                   "forms: the photo and the form are both queued")
+
+            _ = queueStore.setFormItemResult(formID: formID, itemID: "fi_7", .na)
+            guard case let .completed(completed) = queueStore.completeForm(id: formID, on: Date(timeIntervalSince1970: 1_759_420_800)) else {
+                expect(false, "forms: a fully answered form completes")
+                throw StoreTestError.missingFixture
+            }
+            expect(completed.completedAt == "2025-10-02T16:00:00.000Z" && queuedFormValue(formID)?.completedAt == completed.completedAt,
+                   "forms: completion is stamped and queued")
+            expect(queueStore.completeForm(id: formID) == .completed(completed), "forms: completing twice writes nothing new")
+            expect(queueStore.setFormItemNote(formID: formID, itemID: "fi_3", "late") == .failure(.readOnlyCompleted),
+                   "forms: a completed form is read-only")
+            expect(queueStore.renameForm(id: formID, title: "Renamed") == .failure(.readOnlyCompleted),
+                   "forms: a completed form cannot be renamed")
+            expect(queueStore.createJobPhoto(jobID: formsJob.id, sourceData: jpeg, formID: formID, formItemID: "fi_2") == nil
+                   && queueStore.jobPhotos(for: formsJob.id).count == 1,
+                   "forms: no photo is captured into a completed form")
+            guard case let .success(reopened) = queueStore.reopenForm(id: formID) else {
+                expect(false, "forms: a completed form reopens")
+                throw StoreTestError.missingFixture
+            }
+            expect(reopened.completedAt == nil && reopened.items == completed.items, "forms: reopening keeps the answers")
+            expect(queueStore.reopenForm(id: formID) == .failure(.notCompleted), "forms: reopening twice is refused")
+
+            // Review fix (2026-10-03): the form PDF reads each photo from its
+            // file inside the render task instead of holding every photo's bytes.
+            let photoFile = queueStore.jobPhotoFileURL(photoID: photo.id)
+            expect(photoFile.flatMap { try? Data(contentsOf: $0) } == queueStore.jobPhotoBytes(photoID: photo.id)
+                   && photoFile != nil,
+                   "forms: a photo's file holds the same bytes the screen shows")
+            expect(queueStore.jobPhotoFileURL(photoID: "p1_missing") == nil && queueStore.jobPhotoFileURL(photoID: "../x") == nil,
+                   "forms: a photo with no bytes here, or an invalid id, has no file")
+
+            // A deleted photo leaves a dangling id that no longer satisfies the item.
+            expect(queueStore.deleteJobPhoto(photoID: photo.id), "forms: the job photo deletes")
+            expect(queueStore.jobPhotoFileURL(photoID: photo.id) == nil, "forms: a deleted photo's file is gone")
+            expect(queueStore.form(id: formID)?.items[1].photoIds == [photo.id], "forms: the item keeps the dangling id")
+            expect(queueStore.formItemPhotos(formID: formID, itemID: "fi_2").isEmpty, "forms: a dangling id resolves to nothing")
+            expect(queueStore.formMissingItems(queueStore.form(id: formID)!).map(\.reasons) == [[.photoUnavailable]],
+                   "forms: a dangling photo id blocks completion")
+
+            // Edits.
+            guard case let .success(edit) = queueStore.addFormItem(formID: formID, kind: .check, label: " Bonding checked ", required: true) else {
+                expect(false, "forms: an item is added")
+                throw StoreTestError.missingFixture
+            }
+            expect(edit.itemID == "fi_14" && edit.form.items.last?.label == "Bonding checked", "forms: the new item is added last")
+            expect(queueStore.renameForm(id: formID, title: "  Panel inspection  ").map(\.title) == .success("Panel inspection"),
+                   "forms: rename commits")
+            expect(queueStore.renameForm(id: formID, title: " ") == .failure(.invalidTitle), "forms: a blank title is refused")
+            expect(queueStore.deleteFormItem(formID: formID, itemID: "fi_14").map(\.items.count) == .success(13),
+                   "forms: an item is deleted")
+            expect(queueStore.moveFormItems(formID: formID, fromOffsets: [12], toOffset: 0).map { $0.items.first?.id } == .success("fi_13"),
+                   "forms: items reorder")
+
+            // Save as template, instantiate it, archive it.
+            guard case let .success(template) = queueStore.saveFormAsTemplate(id: formID, title: "My panel check") else {
+                expect(false, "forms: save as template")
+                throw StoreTestError.missingFixture
+            }
+            expect(template.isTemplate && template.items.allSatisfy { $0.checked == nil && $0.result == nil && $0.photoIds == nil && $0.note == nil },
+                   "forms: the template carries no responses")
+            expect(queueStore.customFormTemplates.map(\.id) == [template.id] && queuedForm(template.id)?.op == .upsert,
+                   "forms: the template is listed and queued")
+            queueStore.settings.trade = "Electrical"
+            let picker = queueStore.formPickerSections(showAll: false)
+            expect(picker.map(\.group) == [.custom, .trade("electrical"), .general]
+                   && picker.first?.entries.map(\.ref) == [.custom(template.id)],
+                   "forms: the picker shows the owner's templates, then the Settings trade, then General")
+            guard case let .success(fromTemplate) = queueStore.addForm(jobID: formsJob.id, templateRef: .custom(template.id)) else {
+                expect(false, "forms: a custom template instantiates")
+                throw StoreTestError.missingFixture
+            }
+            expect(fromTemplate.templateId == template.id && fromTemplate.title == "My panel check"
+                   && queueStore.forms(forJob: formsJob.id).count == 2,
+                   "forms: the job has two forms")
+            expect(queueStore.archiveFormTemplate(id: template.id).map(\.isArchived) == .success(true)
+                   && queueStore.customFormTemplates.isEmpty
+                   && queueStore.formPickerSections(showAll: true).allSatisfy { $0.group != .custom },
+                   "forms: an archived template leaves the picker")
+            expect(queueStore.addForm(jobID: formsJob.id, templateRef: .custom(template.id)) == .failure(.templateArchived),
+                   "forms: an archived template is not instantiated")
+            expect(queueStore.form(id: fromTemplate.id) != nil, "forms: archiving keeps existing instances")
+
+            // Delete + undo through the shared exact-record undo.
+            let beforeDelete = queueStore.form(id: formID)
+            expect(queueStore.deleteForm(id: formID), "forms: the form deletes")
+            expect(queueStore.form(id: formID) == nil && queueStore.forms(forJob: formsJob.id).map(\.id) == [fromTemplate.id],
+                   "forms: the deleted form is gone")
+            expect(queuedForm(formID)?.op == .delete, "forms: the delete replaces the queued upsert with a tombstone")
+            expect(queueStore.pendingRecordDeleteUndo?.kind == .form
+                   && queueStore.pendingRecordDeleteUndo?.bannerMessage == "Deleted form Panel inspection",
+                   "forms: the delete offers the shared undo")
+            queueStore.undoRecordDeletion()
+            expect(queueStore.form(id: formID) == beforeDelete, "forms: undo restores the exact form with its answers")
+            expect(queuedForm(formID)?.op == .upsert, "forms: undo replaces the tombstone with an upsert")
+            expect(!queueStore.deleteForm(id: "fm1_never"), "forms: deleting a missing form fails closed")
+
+            // A deleted job's forms stay stored but hidden (no cascade).
+            expect(queueStore.deleteJob(id: formsJob.id), "forms: the job deletes")
+            expect(queueStore.forms(forJob: formsJob.id).isEmpty && queueStore.formRecords.contains { $0.id == formID },
+                   "forms: a deleted job hides its forms without deleting them")
+            expect(!pendingMutations(queueURL).contains { $0.table == "forms" && $0.op == .delete },
+                   "forms: deleting a job queues no form delete")
+            expect(queueStore.setFormItemNote(formID: formID, itemID: "fi_3", "x") == .failure(.jobNotFound),
+                   "forms: a hidden form is not edited")
+            queueStore.undoRecordDeletion()
+            expect(queueStore.forms(forJob: formsJob.id).count == 2, "forms: restoring the job shows its forms again")
+
+            // Durable: a relaunch reads the forms from disk.
+            let relaunched = AppStore(fileURL: queueURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
+            expect(relaunched.form(id: formID) == queueStore.form(id: formID) && relaunched.customFormTemplates.isEmpty
+                   && relaunched.formRecords.count == 3,
+                   "forms: every form row survives a relaunch")
+        }
+
+        // MARK: - Phase 21: properties & equipment through AppStore
+
+        do {
+            func queuedCustomerValue(_ id: String) -> Canonical.Customer? {
+                guard let payload = pendingMutations(queueURL).last(where: { $0.table == "customers" && $0.recordId == id })?.payload,
+                      let data = try? JSONEncoder().encode(payload) else { return nil }
+                return try? JSONDecoder().decode(Canonical.Customer.self, from: data)
+            }
+            func queuedJobValue(_ id: String) -> Canonical.Job? {
+                guard let payload = pendingMutations(queueURL).last(where: { $0.table == "jobs" && $0.recordId == id })?.payload,
+                      let data = try? JSONEncoder().encode(payload) else { return nil }
+                return try? JSONDecoder().decode(Canonical.Job.self, from: data)
+            }
+            let owner = Customer(name: "Pat Property", phone: "555-0142", address: "12 Oak St")
+            expect(queueStore.upsert(owner), "properties: the customer saves")
+            let implicit = queueStore.customerProperties(customerID: owner.id)
+            expect(implicit.map(\.id) == [NativePropertiesEquipment.implicitPrimaryID] && implicit.first?.address == "12 Oak St",
+                   "properties: a customer starts with one implicit primary at their address")
+            expect(queueStore.canonicalCustomer(id: owner.id)?.properties == nil, "properties: nothing is stored yet")
+
+            // The first equipment action materializes the primary.
+            guard case let .success(furnace) = queueStore.addEquipment(
+                customerID: owner.id, propertyID: NativePropertiesEquipment.implicitPrimaryID,
+                draft: .init(type: "gas furnace", make: "Carrier", model: "59SC5", serial: "CAR-77",
+                             installDate: "2019-04-02", warrantyExpires: "2029-04-02")
+            ) else {
+                expect(false, "properties: equipment is added to the implicit primary")
+                throw StoreTestError.missingFixture
+            }
+            let materialized = queueStore.canonicalCustomer(id: owner.id)?.properties
+            expect(materialized?.count == 1 && materialized?.first?.primary == true && materialized?.first?.id == furnace.propertyID
+                   && materialized?.first?.address == nil, "properties: the primary is materialized with no stored address")
+            expect(queuedCustomerValue(owner.id)?.properties?.first?.equipment?.first?.type == "furnace",
+                   "properties: the change is queued as one customers upsert")
+
+            guard case let .success(rentalID) = queueStore.addProperty(
+                customerID: owner.id, draft: .init(label: "Rental on Elm", address: "44 Elm St", notes: "Lockbox 1234")
+            ) else {
+                expect(false, "properties: a property is added")
+                throw StoreTestError.missingFixture
+            }
+            expect(queueStore.customerProperties(customerID: owner.id).map(\.id) == [furnace.propertyID, rentalID],
+                   "properties: primary first, then the new property")
+            expect(queueStore.addProperty(customerID: owner.id, draft: .init(address: "44 elm st.")) == .failure(.duplicateAddress),
+                   "properties: a duplicate address is refused")
+            expect(queueStore.customerProperties(customerID: owner.id).count == 2, "properties: a refusal changes nothing")
+            expect(queueStore.addProperty(customerID: "missing", draft: .init(address: "1 A")) == .failure(.customerNotFound),
+                   "properties: an unknown customer is refused")
+            expect(queueStore.showsPropertyPicker(customerID: owner.id)
+                   && queueStore.propertyPickerOptions(customerID: owner.id).map(\.id) == [furnace.propertyID, rentalID],
+                   "properties: the job editor shows the picker for two properties")
+
+            // A customer edit (address included) keeps the nested properties;
+            // the primary's address follows.
+            var moved = queueStore.customers.first { $0.id == owner.id } ?? owner
+            moved.address = "14 Oak St"
+            expect(queueStore.upsert(moved), "properties: the customer edit saves")
+            expect(queueStore.canonicalCustomer(id: owner.id)?.properties?.count == 2
+                   && queueStore.customerProperty(customerID: owner.id, propertyID: furnace.propertyID)?.address == "14 Oak St",
+                   "properties: editing the customer keeps properties and moves the primary's address")
+
+            // "Add as a property" from a booking-style job at a new address.
+            let bookingJob = Job(customerId: owner.id, customerName: owner.name, title: "Leak at the cabin",
+                                 address: "9 Cabin Rd", estimateTotal: 250)
+            expect(queueStore.upsert(bookingJob), "properties: the job saves")
+            let before = queueStore.jobPropertyContext(jobID: bookingJob.id)
+            expect(before?.canAddAsProperty == true && before?.property == nil, "properties: a new address offers Add as a property")
+            expect(queueStore.estimateReviewDraft(jobID: bookingJob.id)?.serviceAddress == "9 Cabin Rd",
+                   "properties: the estimate shows the job's service address when it differs")
+            guard case let .success(cabinID) = queueStore.addJobAddressAsProperty(jobID: bookingJob.id) else {
+                expect(false, "properties: the job address becomes a property")
+                throw StoreTestError.missingFixture
+            }
+            let after = queueStore.jobPropertyContext(jobID: bookingJob.id)
+            expect(after?.linkedProperty?.id == cabinID && after?.canAddAsProperty == false,
+                   "properties: the job is linked and the offer is gone")
+            expect(queuedJobValue(bookingJob.id)?.propertyId == cabinID
+                   && queuedCustomerValue(owner.id)?.properties?.last?.address == "9 Cabin Rd",
+                   "properties: the job and the customer are queued together")
+            expect(queueStore.jobs.first { $0.id == bookingJob.id }?.propertyId == cabinID, "properties: the screen model carries the link")
+            expect(queueStore.propertyJobHistory(customerID: owner.id, propertyID: cabinID).map(\.id) == [bookingJob.id],
+                   "properties: the property's history lists the job")
+
+            // The job editor's pick writes through the normal job save.
+            var picked = queueStore.jobs.first { $0.id == bookingJob.id } ?? bookingJob
+            picked.propertyId = rentalID
+            expect(queueStore.upsert(picked) && queueStore.jobPropertyContext(jobID: bookingJob.id)?.linkedProperty?.id == rentalID,
+                   "properties: re-picking a property saves")
+            let atHome = Job(customerId: owner.id, customerName: owner.name, title: "Tune-up", address: "14 Oak St", estimateTotal: 90)
+            expect(queueStore.upsert(atHome), "properties: a job at the customer's address saves")
+            expect(queueStore.propertyJobHistory(customerID: owner.id, propertyID: furnace.propertyID).map(\.id) == [atHome.id],
+                   "properties: an unlinked job at the customer's address is in the primary's history")
+            expect(queueStore.estimateReviewDraft(jobID: atHome.id)?.serviceAddress == "",
+                   "properties: no service address at the customer's own address")
+
+            // Edits, archive and restore.
+            expect((try? queueStore.updateProperty(customerID: owner.id, propertyID: rentalID,
+                                                   draft: .init(label: "Elm duplex", address: "44 Elm St")).get())?
+                       .properties?.first { $0.id == rentalID }?.label == "Elm duplex",
+                   "properties: a property edit commits")
+            expect((try? queueStore.setPropertyArchived(customerID: owner.id, propertyID: rentalID, archived: true).get()) != nil
+                   && queueStore.jobPropertyContext(jobID: bookingJob.id)?.linkedProperty == nil,
+                   "properties: an archived property no longer resolves for its jobs (P3)")
+            expect(queueStore.jobs.first { $0.id == bookingJob.id }?.propertyId == rentalID,
+                   "properties: archiving never rewrites the job")
+            if case .failure(.primaryLocked) = queueStore.setPropertyArchived(
+                customerID: owner.id, propertyID: furnace.propertyID, archived: true
+            ) {} else {
+                expect(false, "properties: the primary can't be archived")
+            }
+            _ = queueStore.setPropertyArchived(customerID: owner.id, propertyID: rentalID, archived: false)
+            expect(queueStore.jobPropertyContext(jobID: bookingJob.id)?.linkedProperty?.id == rentalID, "properties: restore resolves again")
+            expect((try? queueStore.updateEquipment(customerID: owner.id, propertyID: furnace.propertyID, equipmentID: furnace.equipmentID,
+                                                    draft: .init(type: "furnace", serial: "CAR-78")).get()) != nil
+                   && queueStore.customerEquipmentSearchIndex[owner.id] == ["CAR-78"],
+                   "properties: an equipment edit commits and feeds search")
+            _ = queueStore.setEquipmentArchived(customerID: owner.id, propertyID: furnace.propertyID, equipmentID: furnace.equipmentID, archived: true)
+            expect(queueStore.customerProperty(customerID: owner.id, propertyID: furnace.propertyID)?.archivedEquipment.count == 1,
+                   "properties: Mark as removed keeps the item as past equipment")
+
+            // Delete + undo through the shared undo.
+            let snapshotBefore = queueStore.canonicalCustomer(id: owner.id)
+            expect(queueStore.deleteEquipment(customerID: owner.id, propertyID: furnace.propertyID, equipmentID: furnace.equipmentID),
+                   "properties: the equipment entry deletes")
+            expect(queueStore.pendingRecordDeleteUndo?.kind == .equipment
+                   && queuedCustomerValue(owner.id)?.properties?.first?.equipment == nil,
+                   "properties: the delete offers the shared undo and queues the customer")
+            queueStore.undoRecordDeletion()
+            let sortedEncoder = JSONEncoder()
+            sortedEncoder.outputFormatting = .sortedKeys
+            let restoredProperties = try sortedEncoder.encode(queueStore.canonicalCustomer(id: owner.id)?.properties)
+            let propertiesBefore = try sortedEncoder.encode(snapshotBefore?.properties)
+            expect(restoredProperties == propertiesBefore, "properties: undo restores the equipment exactly")
+            expect(queueStore.deleteProperty(customerID: owner.id, propertyID: cabinID), "properties: a property deletes")
+            expect(queueStore.pendingRecordDeleteUndo?.bannerMessage == "Deleted property 9 Cabin Rd",
+                   "properties: the property delete names its address")
+            queueStore.undoRecordDeletion()
+            expect(queueStore.customerProperty(customerID: owner.id, propertyID: cabinID) != nil, "properties: undo restores the property")
+            expect(!queueStore.deleteProperty(customerID: owner.id, propertyID: furnace.propertyID)
+                   && queueStore.customerProperties(customerID: owner.id).count == 3,
+                   "properties: the primary can't be deleted")
+
+            // Insight policy and durability.
+            expect(NativeInsightsCardPolicy.isMuteable(.warrantyExpiring) && NativeInsightsCardPolicy.snoozeDays(for: .warrantyExpiring) == 14,
+                   "properties: the warranty insight is muteable with a 14-day snooze")
+            let relaunched = AppStore(fileURL: queueURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
+            expect(relaunched.customerProperties(customerID: owner.id).map(\.id) == queueStore.customerProperties(customerID: owner.id).map(\.id)
+                   && relaunched.jobs.first { $0.id == bookingJob.id }?.propertyId == rentalID,
+                   "properties: properties and links survive a relaunch")
+        }
+
+        // MARK: - Phase 33: tags, the opt-out and campaigns through AppStore
+
+        do {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tradeready-phase33-\(UUID().uuidString)", isDirectory: true)
+            let backupDir = dir.appendingPathComponent("backups", isDirectory: true)
+            try FileManager.default.createDirectory(at: backupDir, withIntermediateDirectories: true)
+            defer {
+                try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: backupDir.path)
+                try? FileManager.default.removeItem(at: dir)
+            }
+            let url = dir.appendingPathComponent("store.json")
+            let repository = Canonical.SnapshotRepository(
+                primaryURL: url, backupURL: backupDir.appendingPathComponent("store.json.backup")
+            )
+            let loader = CoachTestLoader()
+            let store = AppStore(
+                fileURL: url, seedIfMissing: false, repository: repository,
+                subscriptionService: StoreSubscriptionServiceStub(),
+                coachTransport: NativeCoachTransport(backendBaseURL: URL(string: "https://backend.invalid")!, loader: loader),
+                secureSettingsStore: hostTestSecureSettingsStore()
+            )
+            func queued(_ table: String, _ id: String) -> Canonical.MutationItem? {
+                pendingMutations(url).last { $0.table == table && $0.recordId == id }
+            }
+            func queuedObject(_ table: String, _ id: String) -> [String: Canonical.JSONValue]? {
+                guard case let .object(fields)? = queued(table, id)?.payload else { return nil }
+                return fields
+            }
+            func queuedCampaign(_ id: String) -> Canonical.Campaign? {
+                guard let payload = queued("campaigns", id)?.payload, let data = try? JSONEncoder().encode(payload) else { return nil }
+                return try? JSONDecoder().decode(Canonical.Campaign.self, from: data)
+            }
+            store.settings.businessName = "Saguaro Heating"
+            store.settings.contactName = "Rafa"
+            store.settings.address = "PO Box 12, Mesa, AZ 85201"
+            let dana = Customer(name: "Dana Ortiz", phone: "602-555-0101")
+            let sam = Customer(name: "Sam Lee", email: "sam@example.com")
+            let lee = Customer(name: "Lee Park", phone: "480-555-0102")
+            expect(store.upsert(dana) && store.upsert(sam) && store.upsert(lee), "campaigns: customers save")
+            let served = Calendar.current.date(byAdding: .month, value: -8, to: .now) ?? .now
+            var leeJobID = ""
+            for (customer, title) in [(dana, "Furnace tune-up"), (sam, "AC repair"), (lee, "Water heater")] {
+                let job = Job(customerId: customer.id, customerName: customer.name, title: title, status: .paid, scheduledAt: served)
+                if customer.id == lee.id { leeJobID = job.id }
+                expect(store.upsert(job), "campaigns: a delivered job saves (\(title))")
+            }
+
+            // Tags (spec §3.2): normalized, enqueued, projected; missing customers refused.
+            expect(store.setCustomerTags(customerID: dana.id, tags: ["#VIP", "ac", "vip"]), "tags: set")
+            expect(store.canonicalCustomer(id: dana.id)?.tags == ["ac", "VIP"], "tags: stored normalized and sorted")
+            expect(queuedObject("customers", dana.id)?["tags"] == .array([.string("ac"), .string("VIP")]),
+                   "tags: the customer upsert is enqueued with the tags")
+            expect(store.customers.first { $0.id == dana.id }?.tags == ["ac", "VIP"], "tags: the UI projection carries them")
+            expect(store.customerTagVocabulary.map(\.key) == ["ac", "vip"], "tags: the vocabulary is derived from customers")
+            expect(!store.setCustomerTags(customerID: "missing", tags: ["x"]), "tags: a missing customer is refused")
+            expect(store.setCustomerTags(customerID: dana.id, tags: []), "tags: clearing succeeds")
+            expect(store.canonicalCustomer(id: dana.id)?.tags == nil && queuedObject("customers", dana.id)?["tags"] == nil,
+                   "tags: clearing removes the key from the record and the queued upsert")
+            _ = store.setCustomerTags(customerID: dana.id, tags: ["VIP"])
+
+            // The opt-out toggle (spec §4.1): today's local date and the reason.
+            let optDay = NativeCashBasis.localDate(year: 2026, month: 9, day: 3, hour: 9)
+            expect(store.setMarketingOptOut(customerID: lee.id, via: .textStop, on: optDay), "opt-out: set")
+            expect(queuedObject("customers", lee.id)?["marketingOptOutOn"] == .string("2026-10-03")
+                   && queuedObject("customers", lee.id)?["marketingOptOutVia"] == .string("text_stop"),
+                   "opt-out: the customer upsert carries the local date and the reason")
+            expect(store.customerOptedOutOfMarketing(jobID: leeJobID), "opt-out: the review-request line sees it")
+            expect(store.clearMarketingOptOut(customerID: lee.id)
+                   && store.canonicalCustomer(id: lee.id)?.isMarketingOptedOut == false
+                   && queuedObject("customers", lee.id)?["marketingOptOutOn"] == nil,
+                   "opt-out: turning it off clears both fields and enqueues")
+            _ = store.setMarketingOptOut(customerID: lee.id, via: .asked)
+
+            // Campaign drafts (spec §5.4, §7.1).
+            let campaignsBefore = store.campaignRecords.count
+            var draft = store.makeCampaignDraft(preset: .everyoneServed)
+            expect(store.campaignRecords.count == campaignsBefore && store.campaign(id: draft.id) == nil,
+                   "draft: making one stores nothing until it is saved")
+            expect(draft.id.hasPrefix("cmp_") && draft.id.count == 40 && NativeAttributionCode.isValid(draft.code)
+                   && draft.status == "draft", "draft: a cmp_ UUID id, a valid ?c= code, draft status")
+            draft.message.text = "Hi {firstName}, it's {ownerName}. Time for a check-up?"
+            draft.message.emailSubject = "Check-up time"
+            draft.message.emailBody = "Hi {firstName},\nTime for a check-up?"
+            guard case let .success(saved) = store.saveCampaignDraft(draft) else {
+                expect(false, "draft: saving succeeds")
+                throw StoreTestError.missingFixture
+            }
+            expect(queued("campaigns", saved.id)?.op == .upsert && queuedCampaign(saved.id)?.message.text == draft.message.text,
+                   "draft: saving enqueues one campaigns upsert")
+            let audience = store.campaignAudience(for: saved)
+            expect(audience.recipients.map(\.customerID) == [dana.id, sam.id], "audience: by name, the opted-out customer left out")
+            expect(audience.exclusions.first { $0.customerID == lee.id }?.reason == .optedOut, "audience: the opt-out is the reason")
+            expect(audience.recipients.last?.channel == .email, "audience: email reaches the email-only customer once the address is set")
+            guard case let .success(frozen) = store.startCampaignSending(id: saved.id, bookingLink: .off) else {
+                expect(false, "send: Start sending freezes the audience")
+                throw StoreTestError.missingFixture
+            }
+            expect(frozen.status == "sending" && frozen.recipients?.map(\.customerId) == [dana.id, sam.id]
+                   && queuedCampaign(saved.id)?.status == "sending" && queuedCampaign(saved.id)?.recipients?.count == 2,
+                   "send: the frozen campaign persists and enqueues")
+            var tampered = frozen
+            tampered.message.text = "Changed"
+            expect(store.updateCampaignDraft(tampered) == .failure(.messageLocked), "send: a started campaign's message cannot change")
+
+            // The queue (spec §7.3): live check, one outcome per write, the lock.
+            guard case .success(.ready(let contact)) = store.prepareCampaignRecipient(campaignID: saved.id, customerID: dana.id) else {
+                expect(false, "send: the live check passes for Dana")
+                throw StoreTestError.missingFixture
+            }
+            expect(contact == "602-555-0101", "send: the composer gets the live phone")
+            let rendered = store.renderCampaignMessage(frozen, kind: .text, customerID: dana.id, fallbackName: "Dana",
+                                                        bookingLink: .off)
+            expect(rendered.body == "Hi Dana, it's Rafa. Time for a check-up?\n\nReply STOP to opt out.",
+                   "send: the rendered text carries the opt-out line")
+            guard case let .success(sentOutcome) = store.recordCampaignOutcome(
+                campaignID: saved.id, customerID: dana.id, outcome: .sent, autoAdvance: true
+            ) else {
+                expect(false, "send: a .sent outcome is recorded")
+                throw StoreTestError.missingFixture
+            }
+            expect(sentOutcome.advances, "send: auto-advance after a send")
+            let afterSend = queuedCampaign(saved.id)
+            expect(afterSend?.recipients?.first?.status == "sent" && afterSend?.recipients?.first?.sentAt != nil
+                   && afterSend?.message.lockedAt != nil, "send: the sent recipient and the lock persist and enqueue")
+            if case .success = store.recordCampaignOutcome(campaignID: saved.id, customerID: sam.id, outcome: .cancelled, autoAdvance: true) {
+                expect(store.campaign(id: saved.id)?.recipients?[1].status == "pending", "send: a cancel keeps the recipient pending")
+            } else { expect(false, "send: a cancel is accepted") }
+
+            // "They asked to stop": the opt-out and the skip in one commit.
+            guard case let .success(stopped) = store.campaignRecipientAskedToStop(campaignID: saved.id, customerID: sam.id) else {
+                expect(false, "send: They asked to stop succeeds")
+                throw StoreTestError.missingFixture
+            }
+            expect(store.canonicalCustomer(id: sam.id)?.isMarketingOptedOut == true
+                   && queuedObject("customers", sam.id)?["marketingOptOutVia"] == .string("asked"),
+                   "stop: the customer is opted out and enqueued")
+            expect(stopped.recipients?[1].skipReason == "opted_out" && stopped.status == "done"
+                   && queuedCampaign(saved.id)?.status == "done", "stop: the recipient is skipped and the campaign is done")
+            expect(store.campaignResults(stopped).sent == 1, "results: one sent")
+
+            // Live re-validation skips an archived customer, persisted.
+            var second = store.makeCampaignDraft(preset: .everyoneServed)
+            second.segment.excludeContactedWithinDays = 0
+            second.message.text = "Hi {firstName}"
+            _ = store.saveCampaignDraft(second)
+            guard case let .success(secondFrozen) = store.startCampaignSending(id: second.id, bookingLink: .off),
+                  secondFrozen.recipients?.map(\.customerId) == [dana.id] else {
+                expect(false, "live: the second campaign freezes with Dana only")
+                throw StoreTestError.missingFixture
+            }
+            store.setCustomerArchived(id: dana.id, archived: true)
+            let archivedCheck = store.prepareCampaignRecipient(campaignID: second.id, customerID: dana.id)
+            expect(archivedCheck == .success(.skip(.archived)), "live: an archived customer is skipped before the composer")
+            expect(queuedCampaign(second.id)?.recipients?.first?.skipReason == "archived", "live: the skip persists and enqueues")
+            store.setCustomerArchived(id: dana.id, archived: false)
+
+            // A .sent that cannot be saved is reported and changes nothing.
+            var third = store.makeCampaignDraft(preset: .everyoneServed)
+            third.segment.excludeContactedWithinDays = 0
+            third.message.text = "Hi {firstName}"
+            _ = store.saveCampaignDraft(third)
+            _ = store.startCampaignSending(id: third.id, bookingLink: .off)
+            try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: backupDir.path)
+            let unsaved = store.recordCampaignOutcome(campaignID: third.id, customerID: dana.id, outcome: .sent, autoAdvance: true)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: backupDir.path)
+            expect(unsaved == .failure(.notSaved), "persist: a .sent that fails to save surfaces .notSaved (the screen's notice)")
+            expect(store.campaign(id: third.id)?.recipients?.first?.status == "pending",
+                   "persist: nothing changes in memory, so the composer never re-presents on its own")
+
+            // AI drafting (spec §6.2): only Settings and the brief reach the provider.
+            store.coachAdvisoryAnthropicKeyOverride = ""
+            store.coachAdvisoryGroqKeyOverride = "gsk-test-key"
+            loader.status = 200
+            loader.responseData = Data(#"{"choices":[{"message":{"content":"BODY: Hi {FirstName}! Our $79 tune-up is back."}}]}"#.utf8)
+            let brief = NativeCampaignDrafting.Brief(goal: .tuneUp, tone: .friendly, kind: .text, details: "$89 furnace tune-up")
+            let drafted = await store.draftCampaignMessage(brief: brief, bookingLinkReady: false)
+            expect(drafted.source == .ai && drafted.draft.body == "Hi {firstName}! Our $79 tune-up is back.",
+                   "draft AI: the parsed reply is used")
+            expect(drafted.warnings == ["The draft mentions $79. Your details said $89. Check it before sending."],
+                   "draft AI: the fact check warns")
+            let sentBody = String(data: loader.lastRequest?.httpBody ?? Data(), encoding: .utf8) ?? ""
+            for value in ["Dana", "Ortiz", "Sam Lee", "Lee Park", "602-555-0101", "480-555-0102", "sam@example.com", "PO Box"] {
+                expect(!sentBody.contains(value), "draft AI: no customer data or address reaches the provider (\(value))")
+            }
+            expect(sentBody.contains("Saguaro Heating") && sentBody.contains("$89 furnace tune-up")
+                   && !sentBody.contains("BUSINESS DATA"), "draft AI: the business name and brief go, the coach data block does not")
+            let request = store.campaignDraftRequest(brief: brief, bookingLinkReady: false)
+            expect(sentBody.contains("Seasonal tune-up") && request.systemPrompt.contains("Saguaro Heating"),
+                   "draft AI: the request is the dedicated campaign prompt")
+            loader.status = 500
+            loader.responseData = Data()
+            let fallback = await store.draftCampaignMessage(brief: brief, bookingLinkReady: false)
+            expect(fallback.source == .template && fallback.notice == NativeCampaignDrafting.fallbackNotice,
+                   "draft AI: a provider failure starts from the template with the notice")
+            store.coachAdvisoryGroqKeyOverride = nil
+            store.coachAdvisoryAnthropicKeyOverride = nil
+
+            // Duplicate, delete and undo; durable across a relaunch.
+            guard case let .success(copy) = store.duplicateCampaign(id: saved.id) else {
+                expect(false, "duplicate: succeeds")
+                throw StoreTestError.missingFixture
+            }
+            expect(copy.status == "draft" && copy.recipients == nil && copy.message.lockedAt == nil && copy.code != saved.code
+                   && queued("campaigns", copy.id)?.op == .upsert, "duplicate: an editable draft copy is enqueued")
+            expect(store.deleteCampaign(id: copy.id) && queued("campaigns", copy.id)?.op == .delete
+                   && store.pendingRecordDeleteUndo?.kind == .campaign, "delete: a campaigns tombstone with the shared undo")
+            store.undoRecordDeletion()
+            expect(store.campaign(id: copy.id) == copy && queued("campaigns", copy.id)?.op == .upsert, "delete: undo restores the copy")
+            let relaunched = AppStore(fileURL: url, seedIfMissing: false, repository: repository,
+                                      subscriptionService: StoreSubscriptionServiceStub(),
+                                      secureSettingsStore: hostTestSecureSettingsStore())
+            expect(relaunched.campaign(id: saved.id) == store.campaign(id: saved.id)
+                   && relaunched.canonicalCustomer(id: dana.id)?.tags == ["VIP"]
+                   && relaunched.canonicalCustomer(id: sam.id)?.isMarketingOptedOut == true,
+                   "durable: campaigns, tags and opt-outs survive a relaunch")
+        }
+
 
         // MARK: - Phase 8 task 8.08 canonical integration (S3, S4, B2-B4, P1, P3)
 
@@ -2214,6 +2961,207 @@ struct StoreIntegrationTests {
             store2.scrubScheduleBookingPendingWork(binding: "bind-recover")
             expect(store2.pendingScheduleBookingWorkStore().load().isEmpty,
                    "8.08 account boundary scrubs owner-bound pending work")
+        }
+
+        // MARK: - Phase 34: referrals through AppStore (spec 2026-10-03-referral-program-design.md §5.2, §5.6, §7)
+        do {
+            func customer34(_ json: String) -> Canonical.Customer {
+                try! JSONDecoder().decode(Canonical.Customer.self, from: Data(json.utf8))
+            }
+            func job34(id: String, status: String, invoiceId: String? = nil) -> Canonical.Job {
+                var json = """
+                {"id":"\(id)","customerId":"c_sam","customerName":"Sam Ortiz","title":"Panel swap",
+                 "description":"d","status":"\(status)","address":"1 Main",
+                 "estimateTotal":500,"laborHours":4,"laborRate":100,"materials":[],
+                 "materialMarkup":0,"overhead":10,"margin":30,"notes":"",
+                 "createdAt":"2026-09-01T00:00:00.000Z"
+                """
+                if let invoiceId { json += ",\"invoiceId\":\"\(invoiceId)\"" }
+                return try! JSONDecoder().decode(Canonical.Job.self, from: Data((json + "}").utf8))
+            }
+            let customers = [
+                customer34(#"{"id":"c_sam","name":"Sam Ortiz","email":"sam@example.test","phone":"602-555-0142","address":"","notes":""}"#),
+                customer34(#"{"id":"c_alex","name":"Alex Kim","email":"","phone":"","address":"","notes":"","leadSource":"referral","referredByCustomerId":"c_sam","referralReward":{"kind":"invoice_credit","amount":25,"recordedOn":"2026-09-10"}}"#),
+                customer34(#"{"id":"c_bea","name":"Bea Ray","email":"","phone":"","address":"","notes":"","leadSource":"referral","referredByCustomerId":"c_sam"}"#),
+            ]
+            var settings = settings08(bookingLink: "{\"token\":\"\(token48A)\",\"enabled\":true}")
+            settings.autoInvoiceOnComplete = true
+            let (store, dir) = try seed08Store(
+                jobs: [job34(id: "j_done", status: "complete"), job34(id: "j_auto", status: "in_progress"),
+                       job34(id: "j_deposit", status: "approved")],
+                customers: customers, settings: settings, tag: "referrals")
+            let storeURL = dir.appendingPathComponent("store.json")
+            func queued(_ table: String, _ id: String) -> [Canonical.MutationItem] {
+                pendingMutations(storeURL).filter { $0.table == table && $0.recordId == id }
+            }
+            func stored(_ id: String) -> Canonical.Customer? {
+                try? snapshot08(storeURL).payload.customers?.first { $0.id == id }
+            }
+
+            // Codes: generated once, persisted and queued; idempotent.
+            var draws = 0
+            let fixedBytes: (Int) -> [UInt8]? = { count in draws += 1; return [UInt8](repeating: 7, count: count) }
+            expect(store.referralCode(customerID: "c_sam") == nil, "34 no code exists before the first share")
+            let code = store.ensureReferralCode(customerID: "c_sam", randomBytes: fixedBytes)
+            expect(code != nil && code == NativeReferrals.encodeCode([UInt8](repeating: 7, count: 10)),
+                   "34 ensureReferralCode generates a code from the injected bytes")
+            expect(stored("c_sam")?.referralCode == code, "34 the code is persisted on the customer")
+            expect(queued("customers", "c_sam").count == 1, "34 the code write is queued once")
+            let again = store.ensureReferralCode(customerID: "c_sam", randomBytes: fixedBytes)
+            expect(again == code && draws == 1, "34 ensureReferralCode is idempotent and draws no new bytes")
+            expect(queued("customers", "c_sam").count == 1, "34 an existing code writes nothing")
+            expect(store.ensureReferralCode(customerID: "c_missing", randomBytes: fixedBytes) == nil, "34 a missing customer has no code")
+            expect(store.ensureReferralCode(customerID: "c_bea", randomBytes: { _ in nil }) == nil
+                   && stored("c_bea")?.referralCode == nil, "34 an RNG failure writes nothing")
+            expect(store.ensureReferralCode(customerID: "c_bea", randomBytes: { count in [UInt8](repeating: 7, count: count) }) == nil,
+                   "34 a colliding code fails closed after three draws (R2)")
+
+            // Reset: a new code, the old one dropped (not aliased).
+            let resetBytes: (Int) -> [UInt8]? = { count in [UInt8](repeating: 9, count: count) }
+            expect(store.resetReferralCode(customerID: "c_sam", randomBytes: resetBytes), "34 resetReferralCode succeeds")
+            let resetCode = stored("c_sam")?.referralCode
+            expect(resetCode != nil && resetCode != code && stored("c_sam")?.referralCodeAliases == nil,
+                   "34 the reset code replaces the old one, which is not kept as an alias")
+            expect(queued("customers", "c_sam").count == 1 && store.referralCode(customerID: "c_sam") == resetCode,
+                   "34 the reset is queued")
+            expect(!store.resetReferralCode(customerID: "c_bea", randomBytes: resetBytes), "34 a customer with no code has nothing to reset")
+
+            // Share link: only after a fresh verified status read.
+            let unverified = await store.referralShareLink(customerID: "c_bea")
+            expect(unverified == .unverified && stored("c_bea")?.referralCode == nil,
+                   "34 signed out: unverified, and no code is created for a customer never shared")
+            let missingLink = await store.referralShareLink(customerID: "c_missing")
+            expect(missingLink == .unavailable, "34 a missing customer is unavailable")
+            seed08Owner(store, binding: "bind-ref")
+            let loader = ScheduleBookingTestLoader()
+            let service = NativeBookingAdministrationService(
+                endpoint: URL(string: "https://example.com/api/booking/admin")!, loader: loader)
+            loader.handler = { _ in (Data("{\"ok\":true,\"enabled\":false,\"revision\":3,\"tokenValid\":true}".utf8), 200) }
+            let off = await store.referralShareLink(customerID: "c_bea", adminService: service)
+            expect(off == .bookingLinkOff && stored("c_bea")?.referralCode == nil,
+                   "34 a disabled booking link is bookingLinkOff, and no code is created")
+            loader.handler = { _ in (Data("oops".utf8), 500) }
+            let failedRead = await store.referralShareLink(customerID: "c_bea", adminService: service)
+            expect(failedRead == .unverified, "34 a failed status read is unverified")
+            loader.handler = { _ in (Data("{\"ok\":true,\"enabled\":true,\"revision\":3,\"tokenValid\":true}".utf8), 200) }
+            let ready = await store.referralShareLink(customerID: "c_bea", adminService: service, randomBytes: { count in
+                [0x00, 0x44, 0x32, 0x14, 0xC7, 0x42, 0x54, 0xB6, 0x35, 0xCF].prefix(count).map { $0 }
+            })
+            expect(ready == .ready(URL(string: "https://gettradereadyapp.com/book.html?b=\(token48A)&r=0123456789abcdef")!),
+                   "34 a verified, enabled link returns the referral URL")
+            expect(stored("c_bea")?.referralCode == "0123456789abcdef", "34 sharing created and stored Bea's code")
+            if case let .ready(url) = ready {
+                expect(NativeBookingAdministrationService.isValidBookingURL(url, token: token48A),
+                       "34 the referral URL is still a valid booking URL")
+            }
+
+            // Rewards: a record on the referred customer, queued.
+            let reward = try NativeReferrals.makeReward(kind: .invoiceCredit, amount: 10, note: "Thanks", recordedOn: "2026-09-20")
+            expect(store.recordReferralReward(referredCustomerID: "c_bea", reward: reward), "34 recordReferralReward saves")
+            expect(stored("c_bea")?.referralReward?.amount == 10 && queued("customers", "c_bea").count == 1,
+                   "34 the reward is persisted and queued")
+            expect(!store.recordReferralReward(referredCustomerID: "c_sam", reward: reward),
+                   "34 a customer without a referrer cannot carry a reward (R3)")
+            expect(store.referralSummary(customerID: "c_sam")?.creditOwed == 35, "34 Sam is owed 25 + 10")
+            expect(store.removeReferralReward(referredCustomerID: "c_bea") && stored("c_bea")?.referralReward == nil,
+                   "34 removeReferralReward clears the record")
+            expect(store.referralSummary(customerID: "c_sam")?.creditOwed == 25, "34 removing the reward re-closes its credit")
+            let summary = store.referralSummary(customerID: "c_sam")
+            expect(Set(summary?.referred.map(\.id) ?? []) == ["c_alex", "c_bea"] && summary?.hasCode == true,
+                   "34 the summary lists everyone Sam referred")
+
+            // Auto-invoice never adds a credit line.
+            guard case let .autoInvoiced(autoID) = store.completeJob(id: "j_auto") else {
+                expect(false, "34 the auto-invoice fixture completes into an invoice")
+                throw StoreTestError.missingFixture
+            }
+            let autoInvoice = try snapshot08(storeURL).payload.invoices?.first { $0.id == autoID }
+            expect(autoInvoice?.amount == 500 && autoInvoice?.lineItems?.contains { $0.category == "referral_credit" } == false,
+                   "34 auto-invoice on complete never applies a referral credit")
+            expect(store.referralCreditOwed(customerId: "c_sam", name: "Sam Ortiz") == 25, "34 the credit is still owed")
+
+            // Invoice-from-job: offered, applied as a negative line, never a payment.
+            guard var draft = store.invoiceFromJobDraft(jobID: "j_done") else {
+                expect(false, "34 the complete job opens an invoice draft")
+                throw StoreTestError.missingFixture
+            }
+            expect(draft.mode == .create && draft.referralCreditAvailable == 25 && draft.amount == 500,
+                   "34 the create draft offers the owed credit")
+            draft.referralCreditToApply = 30
+            draft.amount = 470
+            expect(!store.commitInvoiceFromJob(draft), "34 a credit larger than what is owed is refused")
+            let invoiceCountAfterRefusal = try snapshot08(storeURL).payload.invoices?.count
+            expect(invoiceCountAfterRefusal == 1, "34 …and nothing is written")
+            draft.referralCreditToApply = 25
+            draft.amount = 475
+            expect(store.commitInvoiceFromJob(draft), "34 the invoice with the credit commits")
+            let credited = try snapshot08(storeURL).payload.invoices?.first { $0.jobId == "j_done" }
+            expect(credited?.amount == 475, "34 the credit lowers invoice.amount")
+            let creditLine = credited?.lineItems?.first { $0.category == "referral_credit" }
+            expect(creditLine?.amount == -25 && creditLine?.description == "Referral credit \u{2014} thank you!",
+                   "34 the credit is a negative Referral credit line")
+            expect((credited?.payments ?? []).isEmpty, "34 the credit is never a payment entry")
+            expect(credited.map { queued("invoices", $0.id).count } == 1, "34 the credited invoice is queued")
+            expect(store.referralCreditOwed(customerId: "c_sam", name: "Sam Ortiz") == 0, "34 the applied credit is no longer owed")
+            if let credited {
+                let ledger = NativeCashBasis.ledgerInvoice(credited)
+                expect(PaymentLedger.balanceDue(ledger) == 475, "34 balance due is the lowered amount")
+                let pdf = NativeInvoicePDFDocument(invoice: credited, settings: settings)
+                expect(pdf.total == 475 && pdf.balance == 475
+                       && pdf.lineItems.contains { $0.label == "Referral credit \u{2014} thank you!" && $0.amount == -25 },
+                       "34 the PDF prints the credit line and the lowered total")
+                var paidPayment = Payment()
+                paidPayment.amount = 475
+                paidPayment.method = "Cash"
+                if case let .success(paid) = store.recordPayment(invoiceID: credited.id, payment: paidPayment) {
+                    expect(paid.isPaid, "34 paying the lowered amount settles the invoice")
+                } else {
+                    expect(false, "34 a payment on the credited invoice records")
+                }
+                let paidInvoice = try snapshot08(storeURL).payload.invoices?.first { $0.id == credited.id }
+                let allTime = NativeCashBasis.range(for: "all_time", now: Date())
+                expect(paidInvoice.map { NativeCashBasis.collected(invoices: [$0], start: allTime.start, end: allTime.end) } == 475,
+                       "34 collected cash is what the customer paid, not the pre-credit total")
+            }
+            guard let noCreditDraft = store.invoiceFromJobDraft(jobID: "j_deposit") else {
+                expect(false, "34 the approved job opens a deposit draft")
+                throw StoreTestError.missingFixture
+            }
+            expect(noCreditDraft.mode == .requestDeposit && noCreditDraft.referralCreditAvailable == 0,
+                   "34 a deposit request never offers a credit")
+
+            // Finalize keeps an applied credit through a recompute.
+            expect(store.recordReferralReward(referredCustomerID: "c_bea", reward: reward), "34 Bea's 10 credit is recorded")
+            expect(store.commitInvoiceFromJob(noCreditDraft), "34 the deposit invoice commits")
+            if var depositJob = store.jobs.first(where: { $0.id == "j_deposit" }) {
+                depositJob.status = .complete
+                expect(store.upsert(depositJob), "34 the deposit job is completed")
+            }
+            guard var finalizeDraft = store.invoiceFromJobDraft(jobID: "j_deposit") else {
+                expect(false, "34 the completed deposit job opens a finalize draft")
+                throw StoreTestError.missingFixture
+            }
+            expect(finalizeDraft.mode == .finalize && finalizeDraft.referralCreditAvailable == 10,
+                   "34 finalize offers the newly owed credit")
+            finalizeDraft.referralCreditToApply = 10
+            finalizeDraft.amount -= 10
+            let finalizedAmount = finalizeDraft.amount
+            expect(store.commitInvoiceFromJob(finalizeDraft), "34 finalize with a credit commits")
+            if var reopened = store.jobs.first(where: { $0.id == "j_deposit" }) {
+                reopened.status = .complete
+                expect(store.upsert(reopened), "34 the finalized job is set back to complete")
+            }
+            guard let refinalize = store.invoiceFromJobDraft(jobID: "j_deposit") else {
+                expect(false, "34 a second finalize draft opens")
+                throw StoreTestError.missingFixture
+            }
+            expect(refinalize.referralCreditAvailable == 0 && refinalize.amount == finalizedAmount,
+                   "34 a second finalize offers nothing and keeps the credited amount")
+            expect(store.commitInvoiceFromJob(refinalize), "34 the recompute commits")
+            let refinalized = try snapshot08(storeURL).payload.invoices?.first { $0.jobId == "j_deposit" }
+            expect(refinalized?.lineItems?.filter { $0.category == "referral_credit" }.map(\.amount) == [-10],
+                   "34 the recompute keeps the earlier credit line exactly once")
+            expect(store.referralCreditOwed(customerId: "c_sam", name: "Sam Ortiz") == 0, "34 nothing is owed afterwards")
         }
 
         // P1 portal admin: saved-customer guard, server-first merge, already_exists adoption.
@@ -2835,6 +3783,92 @@ struct StoreIntegrationTests {
             expect(!store.undoImport(batchID: report.batchID), "9.08 undoing an unknown batch reports false")
         } catch { expect(false, "9.08 import block aborted: \(error)") }
 
+        // Phase 27 push-gap fix (spec 2026-10-02-lead-source-design.md §3,
+        // D5): an import that fills a MATCHED customer's blank fields (lead
+        // source, email, phone) publishes that customer too; a matched
+        // customer the import leaves unchanged is still not published.
+        do {
+            let fillURL = phase9Directory.appendingPathComponent("ImportFill/store.json")
+            let blankJSON = """
+            {"id":"c-blank","name":"Ada Electric","email":"","phone":"","address":"","notes":"",
+             "createdAt":"2026-01-01"}
+            """
+            let sourcedJSON = """
+            {"id":"c-sourced","name":"Bob Plumbing","email":"bob@example.com","phone":"","address":"",
+             "notes":"","createdAt":"2026-01-01","leadSource":"referral"}
+            """
+            let seeded = Canonical.Snapshot(payload: .init(customers: [
+                try canonicalRecord(blankJSON), try canonicalRecord(sourcedJSON),
+            ]))
+            try Canonical.SnapshotRepository(primaryURL: fillURL).save(seeded)
+            let store = AppStore(fileURL: fillURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
+            guard let report = succeed(
+                store.commitImport(
+                    entity: .customers,
+                    rows: [
+                        ["Ada Electric", "ada@example.com", "Nextdoor"],
+                        ["Bob Plumbing", "bob@other.com", "Yelp"],
+                        ["New Co", "new@example.com", "Home Show"],
+                    ],
+                    mapping: ["name", "email", "leadSource"], dateFormat: nil, fileHash: "hash-fill"
+                ),
+                "27 a customer import with a lead source column commits"
+            ) else { throw StoreTestError.missingFixture }
+            expect(report.counts.created == 1 && report.counts.matched == 2,
+                   "27 the import matches both seeded customers and creates one")
+            let imported = try snapshot9(fillURL)
+            let filled = imported.payload.customers!.first { $0.id == "c-blank" }!
+            let kept = imported.payload.customers!.first { $0.id == "c-sourced" }!
+            let created = imported.payload.customers!.first { $0.name == "New Co" }!
+            expect(filled.email == "ada@example.com" && filled.leadSource == "nextdoor" && filled.importBatchId == nil,
+                   "27 the matched blank customer is filled (normalized source) without batch provenance")
+            expect(kept.email == "bob@example.com" && kept.leadSource == "referral",
+                   "27 the matched sourced customer keeps its email and first-touch source")
+            expect(created.leadSource == "Home Show", "27 the created customer takes its custom source")
+            let queue = pendingMutations(fillURL).filter { $0.table == "customers" }
+            expect(Set(queue.map(\.recordId)) == [created.id, "c-blank"] && queue.allSatisfy { $0.op == .upsert },
+                   "27 the created and the filled customer are published; the unchanged match is not")
+            guard case let .object(payload)? = queue.first(where: { $0.recordId == "c-blank" })?.payload else {
+                throw StoreTestError.missingFixture
+            }
+            expect(payload["email"] == .string("ada@example.com") && payload["leadSource"] == .string("nextdoor"),
+                   "27 the filled customer's upsert carries the filled fields")
+            expect(store.undoImport(batchID: report.batchID), "27 the fill import can be undone")
+            let undone = try snapshot9(fillURL)
+            expect(undone.payload.customers!.contains { $0.id == "c-blank" && $0.leadSource == "nextdoor" },
+                   "27 undo strips only created records (a matched fill stays, as for email before)")
+
+            // Invoice imports fill a matched customer's blank phone: published too.
+            let invoiceURL = phase9Directory.appendingPathComponent("ImportFillInvoices/store.json")
+            try Canonical.SnapshotRepository(primaryURL: invoiceURL).save(seeded)
+            let invoiceStore = AppStore(fileURL: invoiceURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
+            guard succeed(
+                invoiceStore.commitImport(
+                    entity: .invoices,
+                    rows: [["Ada Electric", "100", "555-0100"], ["Bob Plumbing", "200", ""]],
+                    mapping: ["customer", "amount", "phone"], dateFormat: nil, fileHash: "hash-fill-inv"
+                ),
+                "27 an invoice import that fills a phone commits"
+            ) != nil else { throw StoreTestError.missingFixture }
+            let invoiceQueue = pendingMutations(invoiceURL).filter { $0.table == "customers" }
+            expect(invoiceQueue.map(\.recordId) == ["c-blank"],
+                   "27 an invoice import publishes the customer whose blank phone it filled, and no other")
+
+            // Job imports join by name only, so a match never changes: nothing is published.
+            let jobURL = phase9Directory.appendingPathComponent("ImportFillJobs/store.json")
+            try Canonical.SnapshotRepository(primaryURL: jobURL).save(seeded)
+            let jobStore = AppStore(fileURL: jobURL, seedIfMissing: false, secureSettingsStore: hostTestSecureSettingsStore())
+            guard succeed(
+                jobStore.commitImport(
+                    entity: .jobs, rows: [["Panel swap", "Ada Electric"]],
+                    mapping: ["title", "customerName"], dateFormat: nil, fileHash: "hash-fill-job"
+                ),
+                "27 a job import against a seeded customer commits"
+            ) != nil else { throw StoreTestError.missingFixture }
+            expect(pendingMutations(jobURL).filter { $0.table == "customers" }.isEmpty,
+                   "27 a job import that only joins a customer publishes no customer")
+        } catch { expect(false, "27 import fill block aborted: \(error)") }
+
         // Invoice import joins the current customers; undo is per entity.
         do {
             let editURL = phase9Directory.appendingPathComponent("ImportEdit/store.json")
@@ -3162,7 +4196,7 @@ struct StoreIntegrationTests {
                 description: "Quarterly service", amount: 200, dueDays: 30,
                 cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
                 occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: "2026-10-01",
-                isActive: true, createdAt: "2026-09-01", autoSendEnabled: false)
+                isActive: true, createdAt: "2026-09-01", autoSendEnabled: false, autopayEnabled: nil)
             expect(rinvStore.createRecurringInvoice(rule), "10.08 rinv fixture plan creates")
 
             // Success, but nothing has generated yet: routes to the plain
@@ -3293,7 +4327,7 @@ struct StoreIntegrationTests {
                 description: "Key plan", amount: 150, dueDays: 30,
                 cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
                 occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: "2026-12-01",
-                isActive: true, createdAt: "2026-09-01", autoSendEnabled: false)
+                isActive: true, createdAt: "2026-09-01", autoSendEnabled: false, autopayEnabled: nil)
             expect(keyStore.createRecurringInvoice(rinvRule), "10.08 schedule-key rinv fixture saves")
             let keyAfterRinvCreated = keyStore.estimateFollowUpNotificationScheduleKey
 
@@ -3849,6 +4883,11 @@ struct StoreIntegrationTests {
                    "10.12 low_margin_estimate is dismiss-only, no snooze option")
             expect(NativeInsightsCardPolicy.snoozeDays(for: .expenseAnomaly) == nil,
                    "10.12 expense_anomaly is dismiss-only, no snooze option")
+            // Phase 34: referral_thanks is muteable, dismiss-only, with the gift icon.
+            expect(NativeInsightsCardPolicy.isMuteable(.referralThanks)
+                   && NativeInsightsCardPolicy.snoozeDays(for: .referralThanks) == nil
+                   && NativeInsightsCardPolicy.symbolName(for: .referralThanks) == "gift",
+                   "34 referral_thanks is muteable, dismiss-only, icon gift")
 
             // Fail-closed (brief step 5, decision row 17): mutes == nil (the
             // store was unreadable) renders ONLY the five non-muteable kinds,
@@ -3875,6 +4914,38 @@ struct StoreIntegrationTests {
                    "10.12 gate ordering: zero visible insights suppresses the card even when otherwise eligible")
             expect(NativeInsightsCardPolicy.isVisible(setupComplete: true, hero: nil, insights: five),
                    "10.12 gate ordering: setup complete + no hero + insights present shows the card")
+
+            // Phase 32 (spec 2026-10-03 §6.8): quote_expired is dismiss-only
+            // (its id carries the date, so an extension re-arms it);
+            // quote_expiring resolves on its own and has no mute affordance.
+            expect(NativeInsightsCardPolicy.isMuteable(.quoteExpired) && NativeInsightsCardPolicy.snoozeDays(for: .quoteExpired) == nil,
+                   "Phase 32 quote_expired is dismiss-only")
+            expect(!NativeInsightsCardPolicy.isMuteable(.quoteExpiring), "Phase 32 quote_expiring is not muteable")
+            expect(NativeInsightsCardPolicy.symbolName(for: .quoteExpiring) == "hourglass"
+                   && NativeInsightsCardPolicy.symbolName(for: .quoteExpired) == "hourglass.bottomhalf.filled",
+                   "Phase 32 quote kinds use the hourglass symbols")
+            let expired = insight1012(.quoteExpired, id: "quote_expired:j9:2026-09-01")
+            let expiring = insight1012(.quoteExpiring, id: "quote_expiring:j8:2026-09-25")
+            let dismissed = [NativeInsightMutes.makeMute(id: expired.id, now: now)]
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [expiring, expired], mutes: dismissed, now: now).map(\.id) == [expiring.id],
+                   "Phase 32 a dismissed quote_expired row stays hidden")
+            let reArmed = insight1012(.quoteExpired, id: "quote_expired:j9:2026-09-20")
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [reArmed], mutes: dismissed, now: now).map(\.id) == [reArmed.id],
+                   "Phase 32 an extended-then-expired estimate (new date, new id) shows again")
+            // The dismiss-only aggregate carries its newest date, so
+            // dismissing one batch never hides the next one for good.
+            let batch = insight1012(.quoteExpired, id: "quote_expired:all:2026-09-01")
+            let batchDismissed = [NativeInsightMutes.makeMute(id: batch.id, now: now)]
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [batch], mutes: batchDismissed, now: now).isEmpty,
+                   "Phase 32 a dismissed quote_expired aggregate stays hidden")
+            let nextBatch = insight1012(.quoteExpired, id: "quote_expired:all:2026-09-20")
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [nextBatch], mutes: batchDismissed, now: now).map(\.id) == [nextBatch.id],
+                   "Phase 32 the next quote_expired aggregate shows despite the earlier dismissal")
+            expect(NativeInsightsCardPolicy.visibleInsights(all: [expired, expiring], mutes: nil, now: now).map(\.id) == [expiring.id],
+                   "Phase 32 fail-closed hides quote_expired but keeps the self-resolving quote_expiring")
+            expect(NativeInsightsCardPolicy.muteControlsAvailable(for: .quoteExpired, mutes: [])
+                   && !NativeInsightsCardPolicy.muteControlsAvailable(for: .quoteExpiring, mutes: []),
+                   "Phase 32 only quote_expired offers mute controls")
         }
 
         // --- Every checklist destination (pure `NativeSetupChecklist.route`).
@@ -4317,6 +5388,40 @@ struct StoreIntegrationTests {
                    "10.12 fix1 I7a: the relaunched, re-activated store reads back a real (non-nil) checklist state")
             expect(relaunched.setupChecklistState?.isDone(.rate) == false,
                    "10.12 fix1 I7a: the on-disk setup-checklist store was actually removed by applyCompletedSignOutState, not just the in-memory copy")
+        }
+
+        // --- Phase 20 review fix (2026-10-03): form text a closing screen could
+        // not save is held in memory by form id, taken back once by the screen
+        // that owns it, and scrubbed at an account boundary.
+        do {
+            let (store, _) = try seed08Store(settings: settings08(), tag: "forms-held-text")
+            seed08Owner(store, binding: hexBinding("bind-forms-held"))
+            let heldFormID = "fm1759420800000_held"
+            let answer = NativeJobFormsPresentation.DraftKey(itemID: "fi_12", field: .answer)
+            expect(!store.hasHeldFormText(formID: heldFormID) && store.takeHeldFormDrafts(formID: heldFormID) == nil
+                   && store.takeHeldFormTitle(formID: heldFormID) == nil,
+                   "forms held text: nothing is held at first")
+            store.holdFormDrafts([answer: "Three breakers"], refusals: [answer: .readOnlyCompleted], formID: heldFormID)
+            store.holdFormTitle("Panel check", refusal: .notSaved, formID: heldFormID)
+            expect(store.hasHeldFormText(formID: heldFormID), "forms held text: the form's row can say it has unsaved text")
+            let drafts = store.takeHeldFormDrafts(formID: heldFormID)
+            expect(drafts?.drafts == [answer: "Three breakers"] && drafts?.refusals == [answer: .readOnlyCompleted],
+                   "forms held text: the fill screen takes back its text with the reasons")
+            expect(store.takeHeldFormDrafts(formID: heldFormID) == nil && store.hasHeldFormText(formID: heldFormID),
+                   "forms held text: taken once; the editor's title is still held")
+            let title = store.takeHeldFormTitle(formID: heldFormID)
+            expect(title?.title == "Panel check" && title?.refusal == .notSaved && store.heldFormText.isEmpty,
+                   "forms held text: the editor takes back its title, and nothing is left")
+            store.holdFormDrafts([answer: "x"], refusals: [answer: .notSaved], formID: heldFormID)
+            store.holdFormDrafts([:], refusals: [answer: .notSaved], formID: heldFormID)
+            expect(store.heldFormText.isEmpty, "forms held text: a screen that closes with everything saved releases what was held")
+            store.holdFormTitle(nil, refusal: .notSaved, formID: heldFormID)
+            expect(store.heldFormText.isEmpty, "forms held text: no title, nothing held")
+            store.holdFormDrafts([answer: "Kept"], refusals: [:], formID: heldFormID)
+            store.holdFormTitle("Kept title", refusal: nil, formID: heldFormID)
+            store.testApplyCompletedSignOutState()
+            expect(store.heldFormText.isEmpty && !store.hasHeldFormText(formID: heldFormID),
+                   "forms held text: an account boundary scrubs held text")
         }
 
         // --- I7(b): apply a mute, cross a boundary, relaunch/reactivate, and
@@ -4879,7 +5984,7 @@ struct StoreIntegrationTests {
                 description: "Monthly service", amount: 120, dueDays: 30,
                 cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
                 occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: "2026-12-01",
-                isActive: true, createdAt: "2026-09-01", autoSendEnabled: false)
+                isActive: true, createdAt: "2026-09-01", autoSendEnabled: false, autopayEnabled: nil)
             expect(store.createRecurringInvoice(rule), "m5 fixture plan creates")
             expect(store.scheduleBookingTestLatestGeneratedInvoiceID(ruleID: rule.id) == nil,
                    "m5 sanity: nothing has generated for the rule yet")
@@ -5005,6 +6110,483 @@ struct StoreIntegrationTests {
             }
         }
 
+
+        // MARK: - Phase 26: calendar sync through AppStore (fake EventKit + fake Worker)
+
+        do {
+            let chicago: Calendar = {
+                var cal = Calendar(identifier: .gregorian)
+                cal.timeZone = TimeZone(identifier: "America/Chicago")!
+                return cal
+            }()
+            let iso = ISO8601DateFormatter()
+            func at(_ value: String) -> Date { iso.date(from: value)! }
+            final class Clock { var now: Date; init(_ now: Date) { self.now = now } }
+            let slotsOn = "{\"timeZone\":\"America/Chicago\",\"bookableSlotsEnabled\":true,\"slotWindowDays\":14,\"slotLeadHours\":0}"
+            let slotsOff = "{\"timeZone\":\"America/Chicago\",\"bookableSlotsEnabled\":false,\"slotWindowDays\":14}"
+            // Mon Oct 5 08:00 CDT.
+            let start = at("2026-10-05T13:00:00Z")
+            let dentist = NativeCalendarBusy.Sample(start: at("2026-10-06T15:00:00Z"), end: at("2026-10-06T16:30:00Z"), calendarID: "cal-home")
+
+            func calendarStore(schedule: String, jobs: [Canonical.Job] = [], tag: String)
+                throws -> (store: AppStore, dir: URL, access: CalendarSyncFakeAccess, transport: CalendarSyncFakeTransport,
+                           backing: NativeCalendarSyncMemoryBacking, clock: Clock) {
+                let (store, dir) = try seed08Store(jobs: jobs, settings: settings08(schedule: schedule), tag: "cal26-\(tag)")
+                seed08Owner(store, subject: "user-cal", binding: "bind-cal")
+                let access = CalendarSyncFakeAccess()
+                access.samplesValue = [dentist]
+                let transport = CalendarSyncFakeTransport()
+                let backing = NativeCalendarSyncMemoryBacking()
+                let clock = Clock(start)
+                store.installCalendarSync(access: access, transport: transport, stateBacking: backing,
+                                          now: { clock.now }, deviceCalendar: { chicago })
+                store.calendarSync.mirrorDebounceNanoseconds = 1_000_000
+                store.calendarSync.changeDebounceNanoseconds = 1_000_000
+                return (store, dir, access, transport, backing, clock)
+            }
+
+            // Foreground push, the digest skip, the heartbeat and a changed calendar.
+            do {
+                let (store, _, access, transport, backing, clock) = try calendarStore(schedule: slotsOn, tag: "push")
+                let enabled = await store.calendarSync.enableChecks()
+                expect(enabled == .enabled, "26: enabling checks with full access succeeds")
+                expect(transport.puts.count == 1, "26: enabling pushes once")
+                let body = transport.puts.first?.snapshotJSON ?? ""
+                expect(body.contains("[\"2026-10-06T15:00:00Z\",\"2026-10-06T16:30:00Z\"]")
+                           && body.contains("\"windowStart\":\"2026-10-05T05:00:00Z\"")
+                           && body.contains("\"windowEnd\":\"2026-10-19T05:00:00Z\""),
+                       "26: the push carries the busy instants in the owner's 14-day window")
+                expect(!body.contains("cal-home") && !body.lowercased().contains("dentist"),
+                       "26: no calendar ids or titles leave the device")
+                expect(NativeCalendarSyncTransport.isSourceID(transport.puts.first?.sourceID ?? ""),
+                       "26: the install id is a lowercase UUID")
+                expect(backing.data(forKey: NativeCalendarSyncStateStore.key) != nil, "26: state lives in defaults")
+                await store.calendarSync.run(.foreground)
+                expect(transport.puts.count == 1, "26: an unchanged calendar inside 30 minutes is not pushed again (digest skip)")
+                clock.now = start.addingTimeInterval(31 * 60)
+                await store.calendarSync.run(.foreground)
+                expect(transport.puts.count == 2, "26: the 30-minute heartbeat pushes a quiet calendar")
+                access.samplesValue.append(NativeCalendarBusy.Sample(start: at("2026-10-07T15:00:00Z"), end: at("2026-10-07T16:00:00Z"), calendarID: "cal-work"))
+                await store.calendarSync.run(.background)
+                expect(transport.puts.count == 3, "26: a changed calendar pushes on the next trigger (BG refresh)")
+                if case let .shared(_, days)? = store.calendarSync.statusLine {
+                    expect(days == 14, "26: the status row names the shared horizon")
+                } else {
+                    expect(false, "26: the status row says the booking page was updated")
+                }
+                expect(store.calendarSyncHubSubtitle == "Busy times shared", "26: hub subtitle when shared")
+                expect(store.calendarPersonalBusy().contains(NativeCalendar.PersonalBusyBlock(date: "2026-10-06", startMinutes: 600, endMinutes: 690)),
+                       "26: the in-app overlay shows the personal busy block (10:00–11:30 CDT)")
+                expect(store.calendarChecksStaleMessage == nil, "26: fresh checks show no Today row")
+                // Excluding the calendar removes its block from the next push.
+                await store.calendarSync.setCalendar("cal-home", included: false)
+                expect(transport.puts.count == 4 && !(transport.puts.last?.snapshotJSON ?? "").contains("2026-10-06T15:00:00Z"),
+                       "26: an excluded calendar's events are not shared")
+                expect(access.observing, "26: calendar changes are observed while checks are on")
+                // No readable calendar (protected data unavailable): nothing is shared.
+                let before = transport.puts.count
+                access.calendarsValue = []
+                access.samplesValue = []
+                clock.now = start.addingTimeInterval(3 * 3600)
+                await store.calendarSync.run(.background)
+                expect(transport.puts.count == before, "26: unreadable calendars never push an empty (all-free) snapshot")
+            }
+
+            // Review fix: only this account's parsed mirror marker hides an event;
+            // a loose "tradeready-job:" or another account's marker stays busy.
+            do {
+                let (store, _, access, transport, _, _) = try calendarStore(schedule: slotsOn, tag: "marker")
+                let ours = NativeCalendarMirror.marker(ownerTag: NativeCalendarMirror.ownerTag16(subject: "user-cal"), jobID: "j1")
+                let theirs = NativeCalendarMirror.marker(ownerTag: NativeCalendarMirror.ownerTag16(subject: "user-other"), jobID: "j1")
+                access.samplesValue = [
+                    NativeCalendarBusy.Sample(start: at("2026-10-06T15:00:00Z"), end: at("2026-10-06T16:00:00Z"),
+                                              calendarID: "cal-work", notes: "Agenda: the tradeready-job: export"),
+                    NativeCalendarBusy.Sample(start: at("2026-10-07T15:00:00Z"), end: at("2026-10-07T16:00:00Z"),
+                                              calendarID: "cal-home", notes: "Status: Scheduled\n\(theirs)"),
+                    NativeCalendarBusy.Sample(start: at("2026-10-08T15:00:00Z"), end: at("2026-10-08T16:00:00Z"),
+                                              calendarID: "cal-work", notes: "Status: Scheduled\n\(ours)"),
+                ]
+                _ = await store.calendarSync.enableChecks()
+                let body = transport.puts.first?.snapshotJSON ?? ""
+                expect(body.contains("[\"2026-10-06T15:00:00Z\",\"2026-10-06T16:00:00Z\"]")
+                           && body.contains("[\"2026-10-07T15:00:00Z\",\"2026-10-07T16:00:00Z\"]"),
+                       "26: an invite with a loose tradeready-job: and another account's marker are shared as busy")
+                expect(!body.contains("2026-10-08T15:00:00Z"),
+                       "26: this account's mirrored job (tag of the server user id) is left out, outside the mirror calendar too")
+            }
+
+            // A null snapshot while slots are off; push-before-enable ordering.
+            do {
+                let (store, dir, _, transport, _, _) = try calendarStore(schedule: slotsOff, tag: "null")
+                _ = await store.calendarSync.enableChecks()
+                expect(transport.puts.count == 1 && transport.puts[0].snapshotJSON == nil,
+                       "26: with slots off the device registers with snapshot: null (nothing shared)")
+                await store.calendarSync.run(.foreground)
+                expect(transport.puts.count == 1, "26: the null put is sent once, on the transition")
+                expect(store.calendarSync.statusLine == .notShared, "26: status says busy times are not shared while slots are off")
+                let queuedBefore = queueCount08(dir)
+                var queuedAtPut: Int?
+                transport.onPut = { queuedAtPut = queueCount08(dir) }
+                let baseline = store.scheduleSettingsBaseline()
+                let outcome = await store.commitScheduleSettingsAwaitingCalendar(NativeScheduleBookingPolicy.ScheduleSettingsDraft(
+                    baselineSchedule: baseline, timeZone: .some("America/Chicago"), bookableSlotsEnabled: true))
+                expect(outcome == .saved, "26: the slots-on save commits")
+                expect(transport.puts.count == 2 && transport.puts[1].snapshotJSON != nil,
+                       "26: turning slots on pushes the busy snapshot")
+                expect(queuedAtPut == queuedBefore && queueCount08(dir) == queuedBefore + 1,
+                       "26: the push lands before the settings change is queued")
+            }
+
+            // source_mismatch → stop pushing → "Use this device" takes over.
+            do {
+                let (store, _, _, transport, _, clock) = try calendarStore(schedule: slotsOn, tag: "takeover")
+                transport.putResult = { put in put.takeOver ? .ok(.init(receivedAt: nil, created: false)) : .sourceMismatch(receivedAt: start.addingTimeInterval(-3 * 3600)) }
+                _ = await store.calendarSync.enableChecks()
+                expect(store.calendarSync.otherDeviceActive, "26: a source mismatch marks another device as the source")
+                if case .otherDevice? = store.calendarSync.statusLine {} else { expect(false, "26: status says checks run on another device") }
+                clock.now = start.addingTimeInterval(45 * 60)
+                await store.calendarSync.run(.foreground)
+                expect(transport.puts.count == 1, "26: the device stops pushing while another device is the source")
+                let tookOver = await store.calendarSync.useThisDevice()
+                expect(tookOver, "26: Use this device succeeds")
+                expect(transport.puts.last?.takeOver == true && transport.puts.last?.snapshotJSON != nil,
+                       "26: the takeover put carries takeOver: true and the snapshot")
+                expect(!store.calendarSync.otherDeviceActive, "26: after the takeover this device is the source")
+            }
+
+            // Turning checks off calls disable; 503 shows "not available yet".
+            do {
+                let (store, _, _, transport, backing, _) = try calendarStore(schedule: slotsOn, tag: "disable")
+                _ = await store.calendarSync.enableChecks()
+                let turnedOff = await store.calendarSync.disableChecks()
+                expect(turnedOff, "26: turning checks off succeeds")
+                expect(transport.disables == 1 && !store.calendarSync.checksEnabled, "26: turning checks off deletes the server row")
+                let reloaded = NativeCalendarSyncStateStore(backing: backing).load(binding: "bind-cal")
+                expect(!reloaded.checksEnabled && reloaded.lastPush == nil, "26: the off state is persisted")
+                expect(store.calendarPersonalBusy().isEmpty, "26: no overlay while checks are off")
+                expect(store.calendarSyncHubSubtitle == "Off", "26: hub subtitle when off")
+
+                transport.disableResult = .offline
+                _ = await store.calendarSync.enableChecks()
+                let offlineOff = await store.calendarSync.disableChecks()
+                expect(!offlineOff && store.calendarSync.checksEnabled
+                           && store.calendarSync.errorMessage != nil,
+                       "26: an offline turn-off keeps checks on and explains it")
+                store.calendarSync.clearError()
+            }
+            do {
+                let (store, _, _, transport, _, _) = try calendarStore(schedule: slotsOn, tag: "503")
+                transport.putResult = { _ in .unavailable }
+                _ = await store.calendarSync.enableChecks()
+                expect(store.calendarSync.statusLine == .unavailable, "26: a 503 shows that calendar checks aren't available yet")
+                expect(store.calendarSyncHubSubtitle == "Not available yet", "26: hub subtitle when unavailable")
+            }
+
+            // Checks turned off on another device: the next put recreates the
+            // row (`created`), so this device deletes it and turns itself off.
+            do {
+                let (store, _, _, transport, _, clock) = try calendarStore(schedule: slotsOn, tag: "remote-off")
+                _ = await store.calendarSync.enableChecks()
+                transport.putResult = { _ in .ok(.init(receivedAt: nil, created: true)) }
+                clock.now = start.addingTimeInterval(31 * 60)
+                await store.calendarSync.run(.foreground)
+                expect(!store.calendarSync.checksEnabled && transport.disables == 1
+                           && store.calendarSync.notice == .checksTurnedOffElsewhere,
+                       "26: checks turned off elsewhere are honored here, with a notice")
+            }
+
+            // Denied access: nothing is enabled or pushed.
+            do {
+                let (store, _, access, transport, _, _) = try calendarStore(schedule: slotsOn, tag: "denied")
+                access.authorizationValue = .notDetermined
+                access.grantOnRequest = .denied
+                let deniedOutcome = await store.calendarSync.enableChecks()
+                expect(deniedOutcome == .denied, "26: a denied prompt does not enable checks")
+                expect(transport.puts.isEmpty && !store.calendarSync.checksEnabled, "26: nothing is pushed without access")
+            }
+
+            // Today: stale status with slots on shows the row; slots off hides it.
+            do {
+                let (store, _, _, transport, _, _) = try calendarStore(schedule: slotsOn, tag: "today")
+                transport.statusResult = .ok(.init(enabled: true, thisDevice: false, shared: true, fresh: false,
+                                                   computedAt: at("2026-10-02T12:00:00Z"), receivedAt: at("2026-10-02T12:01:00Z")))
+                await store.calendarSync.run(.foreground)
+                expect(transport.statuses == 1, "26: a signed-in device reads the status on foreground while slots are on")
+                expect(store.calendarChecksStaleMessage == "Online booking is request-only: calendar checks haven't run since Oct 2",
+                       "26: Today shows the request-only row when checks are stale")
+                await store.calendarSync.run(.foreground)
+                expect(transport.statuses == 1, "26: status is read at most once per 30 minutes")
+            }
+
+            // Sign-out and an account switch wipe the device-local keys.
+            do {
+                let (store, _, _, _, backing, _) = try calendarStore(schedule: slotsOn, tag: "signout")
+                _ = await store.calendarSync.enableChecks()
+                expect(backing.data(forKey: NativeCalendarSyncStateStore.key) != nil, "26: sanity: state stored before sign-out")
+                do { try await store.signOut(revokeRemote: false) } catch { expect(false, "26: sign-out threw \(error)") }
+                expect(backing.data(forKey: NativeCalendarSyncStateStore.key) == nil, "26: sign-out wipes the calendar sync keys")
+                expect(!store.calendarSync.checksEnabled && store.calendarPersonalBusy().isEmpty, "26: nothing survives sign-out in memory")
+            }
+            do {
+                let (store, _, _, _, backing, _) = try calendarStore(schedule: slotsOn, tag: "switch")
+                store.scheduleBookingTestSeedIdentityActivator()
+                _ = await store.calendarSync.enableChecks()
+                await store.useAnotherAccount {}
+                expect(backing.data(forKey: NativeCalendarSyncStateStore.key) == nil, "26: an account switch wipes the calendar sync keys")
+            }
+            do {
+                // Another owner on the same defaults reads nothing (owner-tagged).
+                let backing = NativeCalendarSyncMemoryBacking()
+                let stateStore = NativeCalendarSyncStateStore(backing: backing)
+                var state = NativeCalendarSyncLocalState()
+                state.checksEnabled = true
+                stateStore.save(state, binding: "bind-a")
+                expect(stateStore.load(binding: "bind-a").checksEnabled, "26: the owner reads its state")
+                expect(!stateStore.load(binding: "bind-b").checksEnabled, "26: another owner reads defaults")
+                expect(!String(decoding: backing.data(forKey: NativeCalendarSyncStateStore.key) ?? Data(), as: UTF8.self).contains("bind-a"),
+                       "26: the stored document holds a one-way tag, never the binding")
+            }
+
+            // Stage B: the mirror creates events, survives a pass, turns off when its calendar is gone.
+            do {
+                let jobs = [job08(id: "j-mirror", status: "scheduled", date: "2026-10-07", start: "09:00", end: "10:00")]
+                let (store, _, access, _, _, _) = try calendarStore(schedule: slotsOn, jobs: jobs, tag: "mirror")
+                guard case let .enabled(account) = await store.calendarSync.enableMirror() else {
+                    expect(false, "26: the mirror enables")
+                    throw StoreTestError.missingFixture
+                }
+                expect(account == "iCloud" && access.mirrorCalendarID != nil, "26: the TradeReady calendar is created in iCloud")
+                guard case let .create(created)? = access.applied.first?.first else {
+                    expect(false, "26: the first pass creates the job's event")
+                    throw StoreTestError.missingFixture
+                }
+                expect(created.fields.title == "Panel swap — Nora" && created.fields.location == "1 Main"
+                           && created.fields.notes.contains("tradeready-job:\(NativeCalendarMirror.ownerTag16(subject: "user-cal")):j-mirror"),
+                       "26: the event carries the job, customer, address and this account's marker")
+                await store.calendarSync.run(.foreground)
+                expect(access.applied.count == 1, "26: an unchanged mirror writes nothing")
+                access.mirrorCalendarID = nil
+                await store.calendarSync.run(.foreground)
+                expect(!store.calendarSync.mirrorEnabled && store.calendarSync.notice == .mirrorCalendarDeleted,
+                       "26: a calendar deleted outside the app turns the mirror off with a notice")
+                expect(access.created == 1, "26: the deleted calendar is never silently recreated")
+            }
+            do {
+                let jobs = [job08(id: "j-del", status: "scheduled", date: "2026-10-07")]
+                let (store, _, access, _, _, _) = try calendarStore(schedule: slotsOn, jobs: jobs, tag: "mirror-delete")
+                _ = await store.calendarSync.enableMirror()
+                let id = access.mirrorCalendarID
+                do { try await store.testFinishAccountDeletionLocally() } catch { expect(false, "26: the deletion scrub threw \(error)") }
+                expect(id != nil && access.removedCalendars == [id!], "26: account deletion removes the TradeReady calendar when the mirror was on")
+            }
+            do {
+                let (store, _, access, _, _, _) = try calendarStore(schedule: slotsOn, tag: "mirror-off")
+                _ = await store.calendarSync.enableMirror()
+                let kept = await store.calendarSync.disableMirror(removeCalendar: false)
+                expect(kept && access.removedCalendars.isEmpty,
+                       "26: Keep calendar leaves it in place")
+                _ = await store.calendarSync.enableMirror()
+                expect(access.created == 1, "26: turning the mirror back on reuses the kept calendar")
+                let removed = await store.calendarSync.disableMirror(removeCalendar: true)
+                expect(removed && access.removedCalendars.count == 1,
+                       "26: Remove calendar deletes it")
+            }
+
+            // MARK: Review fixes: the mirror never adopts, edits or deletes what it does not own
+
+            typealias World = CalendarMirrorWorldAccess
+            let ownTag = NativeCalendarMirror.ownerTag16(subject: "user-cal")
+            let otherTag = NativeCalendarMirror.ownerTag16(subject: "user-other")
+            func mirrorNotes(_ tag: String, _ job: String) -> String {
+                "Status: Scheduled\n\(NativeCalendarMirror.managedNote)\n\(NativeCalendarMirror.marker(ownerTag: tag, jobID: job))"
+            }
+            func worldStore(deviceZone: String = "America/Chicago", scheduleZone: String = "America/Chicago",
+                            now: String = "2026-10-05T13:00:00Z", jobs: [Canonical.Job] = [],
+                            calendars: [NativeCalendarInfo] = [World.info("cal-work", "Work")], tag: String)
+                throws -> (store: AppStore, access: World) {
+                let schedule = "{\"timeZone\":\"\(scheduleZone)\",\"bookableSlotsEnabled\":false}"
+                let (store, _) = try seed08Store(jobs: jobs, settings: settings08(schedule: schedule), tag: "cal26w-\(tag)")
+                seed08Owner(store, subject: "user-cal", binding: "bind-cal")
+                let access = World(deviceZone: deviceZone, calendars: calendars)
+                let clock = Clock(at(now))
+                let deviceCalendar = access.deviceCalendar
+                store.installCalendarSync(access: access, transport: CalendarSyncFakeTransport(),
+                                          stateBacking: NativeCalendarSyncMemoryBacking(),
+                                          now: { clock.now }, deviceCalendar: { deviceCalendar })
+                store.calendarSync.mirrorDebounceNanoseconds = 1_000_000
+                store.calendarSync.changeDebounceNanoseconds = 1_000_000
+                return (store, access)
+            }
+            let mirrorJob = [job08(id: "j-own", status: "scheduled", date: "2026-10-07", start: "09:00", end: "10:00")]
+
+            // Finding 1: a calendar is never adopted by title; refused for a
+            // same-title calendar of another account, of the owner, and a mixed one.
+            for (label, build) in [
+                ("another account's mirror", { (a: World) in
+                    a.addEvent(calendar: "cal-same", notes: mirrorNotes(otherTag, "j-a1"))
+                    a.addEvent(calendar: "cal-same", notes: mirrorNotes(otherTag, "j-a2")) }),
+                ("the owner's own events", { (a: World) in
+                    a.addEvent(calendar: "cal-same", notes: "Dentist")
+                    a.addEvent(calendar: "cal-same", notes: nil) }),
+                ("a mix of this account's and another's", { (a: World) in
+                    a.addEvent(calendar: "cal-same", notes: mirrorNotes(ownTag, "j-own"))
+                    a.addEvent(calendar: "cal-same", notes: mirrorNotes(otherTag, "j-a1")) }),
+                ("an empty calendar", { (_: World) in }),
+            ] as [(String, (World) -> Void)] {
+                let (store, access) = try worldStore(jobs: mirrorJob, calendars: [World.info("cal-same", "TradeReady"), World.info("cal-work", "Work")],
+                                                      tag: "adopt-\(label.count)")
+                build(access)
+                let before = access.events(in: "cal-same").map(\.id)
+                guard case .enabled = await store.calendarSync.enableMirror() else {
+                    expect(false, "26: the mirror enables beside a same-title calendar (\(label))")
+                    continue
+                }
+                let stored = store.calendarSync.mirrorAccountTitle != nil
+                expect(stored && access.createdTitles == ["TradeReady Jobs"],
+                       "26: a same-title calendar holding \(label) is not adopted; a distinctly titled one is created")
+                expect(access.events(in: "cal-same").map(\.id) == before && access.applied.flatMap { $0 }.allSatisfy {
+                    if case .create = $0 { return true } else { return false } },
+                       "26: nothing is written to the foreign calendar (\(label))")
+                // Remove calendar and account deletion never touch it either.
+                _ = await store.calendarSync.disableMirror(removeCalendar: true)
+                expect(access.hasCalendar("cal-same") && access.events(in: "cal-same").map(\.id) == before
+                           && access.removedCalendars == ["cal-new-1"],
+                       "26: Remove calendar deletes only the calendar this account created, not the same-title one (\(label))")
+                _ = await store.calendarSync.enableMirror()
+                do { try await store.testFinishAccountDeletionLocally() } catch { expect(false, "26: the deletion scrub threw \(error)") }
+                expect(access.hasCalendar("cal-same") && access.events(in: "cal-same").map(\.id) == before,
+                       "26: account deletion leaves the same-title calendar and its events alone (\(label))")
+            }
+
+            // Finding 1: provably this account's mirror (every event carries its tag) is adopted.
+            do {
+                let (store, access) = try worldStore(jobs: mirrorJob, calendars: [World.info("cal-mine", "TradeReady")], tag: "adopt-own")
+                access.addEvent(calendar: "cal-mine", notes: mirrorNotes(ownTag, "j-own"), date: "2026-10-07", minutes: 540)
+                access.addEvent(calendar: "cal-mine", notes: mirrorNotes(ownTag, "j-stale"), date: "2026-10-12")
+                guard case .enabled = await store.calendarSync.enableMirror() else {
+                    expect(false, "26: the mirror enables over this account's own calendar")
+                    throw StoreTestError.missingFixture
+                }
+                expect(access.createdTitles.isEmpty && store.calendarSync.mirrorEnabled,
+                       "26: a calendar whose every event carries this account's tag is adopted, not duplicated")
+                expect(access.events(in: "cal-mine").map(\.id).sorted().count == 1
+                           && access.events(in: "cal-mine").allSatisfy { NativeCalendarMirror.parseMarker($0.notes)?.jobID == "j-own" },
+                       "26: the adopted calendar is reconciled (the stale job's event removed, the wanted job's event kept once)")
+            }
+
+            // Removal and account deletion with foreign events: only this
+            // account's events go, the calendar and the rest stay.
+            for viaDeletion in [false, true] {
+                let (store, access) = try worldStore(jobs: mirrorJob, tag: "remove-mixed-\(viaDeletion)")
+                _ = await store.calendarSync.enableMirror()
+                let id = "cal-new-1"
+                access.addEvent(calendar: id, notes: "Lunch with Sam", date: "2026-10-09")
+                access.addEvent(calendar: id, notes: mirrorNotes(otherTag, "j-a1"), date: "2026-10-10")
+                expect(access.events(in: id).count == 3, "26: the calendar now holds the mirrored job and two foreign events")
+                if viaDeletion {
+                    do { try await store.testFinishAccountDeletionLocally() } catch { expect(false, "26: the deletion scrub threw \(error)") }
+                } else {
+                    let removed = await store.calendarSync.disableMirror(removeCalendar: true)
+                    expect(removed && !store.calendarSync.mirrorEnabled, "26: Remove calendar finishes with foreign events present")
+                    expect(store.calendarSync.errorMessage?.contains("kept") == true,
+                           "26: the owner is told the calendar was kept because it holds other events")
+                }
+                expect(access.removedCalendars.isEmpty && access.hasCalendar(id), "26: the calendar is not deleted when it holds foreign events (deletion: \(viaDeletion))")
+                let left = access.events(in: id).compactMap { $0.notes }
+                expect(left.count == 2 && left.contains("Lunch with Sam") && left.contains(mirrorNotes(otherTag, "j-a1")),
+                       "26: only this account's events are deleted; the others stay (deletion: \(viaDeletion))")
+            }
+            // All own: the whole calendar goes (already covered above for Remove and deletion).
+            // Unreadable calendars remove nothing and keep the mirror on.
+            do {
+                let (store, access) = try worldStore(jobs: mirrorJob, tag: "remove-unreadable")
+                _ = await store.calendarSync.enableMirror()
+                access.readable = false
+                let removed = await store.calendarSync.disableMirror(removeCalendar: true)
+                expect(!removed && store.calendarSync.mirrorEnabled && access.removedCalendars.isEmpty && access.hasCalendar("cal-new-1"),
+                       "26: Remove calendar with calendars unreadable removes nothing and keeps the mirror on")
+                do { try await store.testFinishAccountDeletionLocally() } catch { expect(false, "26: the deletion scrub threw \(error)") }
+                expect(access.removedCalendars.isEmpty && access.hasCalendar("cal-new-1"),
+                       "26: account deletion with calendars unreadable removes nothing")
+            }
+
+            // Finding 2: an edge-date job across zones produces no duplicate on repeated passes.
+            let zoneCases: [(device: String, schedule: String, now: String, date: String, start: String, end: String, label: String)] = [
+                ("America/Phoenix", "America/New_York", "2026-10-05T19:00:00Z", "2026-09-05", "00:30", "01:30", "Phoenix device, New York schedule, past edge"),
+                ("America/Phoenix", "Pacific/Auckland", "2026-10-05T19:00:00Z", "2026-09-05", "00:30", "01:30", "Phoenix device, Auckland schedule, past edge"),
+                ("Pacific/Auckland", "America/Phoenix", "2026-10-05T19:00:00Z", "2026-09-06", "23:00", "23:59", "Auckland device, Phoenix schedule, past edge"),
+                ("Pacific/Auckland", "America/Phoenix", "2026-10-05T19:00:00Z", "2027-04-04", "22:00", "23:30", "Auckland device, Phoenix schedule, future edge"),
+                ("America/Phoenix", "Pacific/Auckland", "2026-10-05T19:00:00Z", "2027-04-03", "23:00", "23:45", "Phoenix device, Auckland schedule, future edge"),
+                ("America/Phoenix", "America/New_York", "2026-10-05T19:00:00Z", "2027-04-03", "23:00", "23:45", "Phoenix device, New York schedule, future edge"),
+            ]
+            for (n, c) in zoneCases.enumerated() {
+                let job = [job08(id: "j-edge", status: "scheduled", date: c.date, start: c.start, end: c.end)]
+                let (store, access) = try worldStore(deviceZone: c.device, scheduleZone: c.schedule, now: c.now, jobs: job, tag: "edge-\(n)")
+                _ = await store.calendarSync.enableMirror()
+                for _ in 0..<4 { await store.calendarSync.run(.foreground) }
+                let mirrored = access.events(in: "cal-new-1").filter { NativeCalendarMirror.parseMarker($0.notes)?.jobID == "j-edge" }
+                expect(mirrored.count == 1, "26: \(c.label): one event after repeated passes, got \(mirrored.count)")
+                expect(access.applied.count == 1, "26: \(c.label): later passes write nothing, got \(access.applied.count) writes")
+            }
+
+            // Finding 3: a transient empty read never disables the mirror; only a
+            // readable store without the stored id does.
+            do {
+                let (store, access) = try worldStore(jobs: mirrorJob, tag: "transient")
+                _ = await store.calendarSync.enableMirror()
+                access.readable = false
+                await store.calendarSync.run(.foreground)
+                await store.calendarSync.run(.background)
+                expect(store.calendarSync.mirrorEnabled && store.calendarSync.notice == nil,
+                       "26: calendars unreadable for a moment: the mirror stays on and no deleted-notice appears")
+                access.readable = true
+                access.items.removeAll()
+                await store.calendarSync.run(.foreground)
+                expect(store.calendarSync.mirrorEnabled && access.events(in: "cal-new-1").count == 1,
+                       "26: when the calendars read again, the mirror carries on and restores the job's event")
+                access.calendarsValue.removeAll { $0.id == "cal-new-1" }
+                access.calendarsValue.append(World.info("cal-work", "Work"))
+                await store.calendarSync.run(.foreground)
+                expect(!store.calendarSync.mirrorEnabled && store.calendarSync.notice == .mirrorCalendarDeleted,
+                       "26: readable calendars without the stored id: the mirror turns off with the notice")
+            }
+            do {
+                let (store, access) = try worldStore(jobs: mirrorJob, tag: "enable-unreadable")
+                access.readable = false
+                let outcome = await store.calendarSync.enableMirror()
+                expect(outcome == .failed && access.createdTitles.isEmpty && !store.calendarSync.mirrorEnabled,
+                       "26: enabling the mirror while calendars are unreadable creates nothing")
+            }
+
+            // Finding 4: the picker hides only this account's mirror calendar.
+            do {
+                let (store, access) = try worldStore(jobs: mirrorJob,
+                                                     calendars: [World.info("cal-foreign", "TradeReady"), World.info("cal-work", "Work")], tag: "picker")
+                access.addEvent(calendar: "cal-foreign", notes: "Dentist")
+                _ = await store.calendarSync.enableMirror()
+                await store.calendarSync.run(.foreground)
+                let ids = store.calendarSync.selectableCalendars.map(\.id)
+                expect(ids.contains("cal-foreign") && ids.contains("cal-work") && !ids.contains("cal-new-1"),
+                       "26: the picker lists a same-title calendar that is not this account's mirror and hides the mirror itself")
+                await store.calendarSync.setCalendar("cal-foreign", included: false)
+                expect(!store.calendarSync.isCalendarIncluded("cal-foreign"), "26: the same-title calendar can be unchecked")
+            }
+
+            // Finding 5: BG refresh replays widget and Siri actions before the calendar step.
+            do {
+                let source = try String(contentsOf: URL(fileURLWithPath: #filePath)
+                    .deletingLastPathComponent().deletingLastPathComponent()
+                    .appendingPathComponent("TradeReadyNative/AppStore.swift"), encoding: .utf8)
+                if let body = source.range(of: "private func runBackgroundRefresh()"),
+                   let replay = source.range(of: "replayVerifiedWidgetActionsIfPossible()", range: body.upperBound..<source.endIndex),
+                   let calendar = source.range(of: "await calendarSync.run(.background)", range: body.upperBound..<source.endIndex) {
+                    expect(replay.lowerBound < calendar.lowerBound, "26: the BG refresh runs the calendar step after the widget/Siri action replay")
+                } else {
+                    expect(false, "26: runBackgroundRefresh holds the replay and the calendar step")
+                }
+            }
+        }
+
         if failures == 0 { print("PASS: canonical AppStore integration tests") }
         else { print("FAILED: \(failures) canonical AppStore integration test(s)"); exit(1) }
     }
@@ -5040,6 +6622,59 @@ private final class ScheduleBookingTestDelta: NativeInitialSyncServing, NativeDe
     }
 }
 
+/// Phase 24 §6.1: an injected Stripe delivery service. It records every mint
+/// and can run a main-actor hook during the await (a payment landing while
+/// the link is minted).
+private final class StoreTestStripeDelivery: NativeInvoiceDelivering, @unchecked Sendable {
+    var mintedAmounts: [Decimal] = []
+    var duringMint: (@MainActor () -> Void)?
+
+    func createPaymentLink(invoice: Canonical.Invoice, amount: Decimal, sessionBytes: Data) async throws -> URL {
+        mintedAmounts.append(amount)
+        if let hook = duringMint { await MainActor.run { hook() } }
+        return URL(string: "https://gettradereadyapp.com/pay.html?t=mint\(mintedAmounts.count)")!
+    }
+
+    func uploadPDF(invoiceID: String, pdf: Data, sessionBytes: Data) async throws {}
+}
+
+/// Phase 24 §6.3: an injected owner-route autopay service. `holdsRemove`
+/// parks a remove until `releaseRemove()`, so a test can act while it is in
+/// flight; `duringStatus` runs on the main actor during a status read.
+private final class StoreTestAutopayService: NativeAutopayServing, @unchecked Sendable {
+    var statusCalls = 0
+    var statusResult: Result<NativeAutopayStatusSnapshot, NativeAutopayServiceError> = .success(.empty)
+    var duringStatus: (@MainActor () -> Void)?
+    var removedIDs: [String] = []
+    var removeError: NativeAutopayServiceError?
+    var holdsRemove = false
+    var removeStarted = false
+    private var parkedRemove: CheckedContinuation<Void, Never>?
+
+    func status(sessionBytes: Data) async throws -> NativeAutopayStatusSnapshot {
+        statusCalls += 1
+        if let hook = duringStatus { await MainActor.run { hook() } }
+        return try statusResult.get()
+    }
+
+    func removeCard(enrollmentID: String, sessionBytes: Data) async throws {
+        removedIDs.append(enrollmentID)
+        if holdsRemove {
+            await withCheckedContinuation { continuation in
+                parkedRemove = continuation
+                removeStarted = true
+            }
+        }
+        if let removeError { throw removeError }
+    }
+
+    func releaseRemove() {
+        holdsRemove = false
+        parkedRemove?.resume()
+        parkedRemove = nil
+    }
+}
+
 /// Records the last request it served and returns a canned (data, status) —
 /// task 10.13's `AppStore.sendCoachMessage` wiring tests inject this in
 /// place of the live `URLSession` loader (same shape as 10.10's
@@ -5066,5 +6701,228 @@ private final class ScheduleBookingTestLoader: NativeBookingResponseHTTPDataLoad
         let (data, status) = handler?(request) ?? (Data(), 500)
         return (data, HTTPURLResponse(url: request.url!, statusCode: status,
                                       httpVersion: nil, headerFields: nil)!)
+    }
+}
+
+// MARK: - Phase 26 calendar sync fakes (no EventKit, no network)
+
+@MainActor
+final class CalendarSyncFakeAccess: NativeCalendarAccess {
+    var authorizationValue: NativeCalendarAuthorization = .fullAccess
+    var grantOnRequest: NativeCalendarAuthorization = .fullAccess
+    var calendarsValue: [NativeCalendarInfo] = [
+        NativeCalendarInfo(id: "cal-home", title: "Home", accountTitle: "iCloud", kind: .standard, allowsModifications: true),
+        NativeCalendarInfo(id: "cal-work", title: "Work", accountTitle: "Gmail", kind: .standard, allowsModifications: true),
+        NativeCalendarInfo(id: "cal-birthdays", title: "Birthdays", accountTitle: "Other", kind: .birthday, allowsModifications: false),
+    ]
+    var samplesValue: [NativeCalendarBusy.Sample] = []
+    var mirrorCalendarID: String?
+    var events: [NativeCalendarMirror.Existing] = []
+    var applied: [[NativeCalendarMirror.Operation]] = []
+    var removedCalendars: [String] = []
+    var created = 0
+    var observing = false
+    private var nextEvent = 0
+
+    var authorization: NativeCalendarAuthorization { authorizationValue }
+
+    func requestFullAccess() async -> NativeCalendarAuthorization {
+        if authorizationValue == .notDetermined { authorizationValue = grantOnRequest }
+        return authorizationValue
+    }
+
+    func calendars() -> [NativeCalendarInfo] { calendarsValue }
+
+    func samples(start: Date, end: Date) -> [NativeCalendarBusy.Sample] {
+        samplesValue.filter { $0.start < end && $0.end > start }
+    }
+
+    func findMirrorCalendar(storedID: String?) -> NativeMirrorCalendarLookup {
+        mirrorCalendarID.map { .found(id: $0, accountTitle: "iCloud") } ?? .missing
+    }
+
+    func createMirrorCalendar() throws -> NativeMirrorCalendarLookup {
+        created += 1
+        mirrorCalendarID = "cal-tradeready-\(created)"
+        return .found(id: mirrorCalendarID!, accountTitle: "iCloud")
+    }
+
+    func mirrorEvents(calendarID: String, start: Date, end: Date) -> [NativeCalendarMirror.Existing] {
+        calendarID == mirrorCalendarID ? events : []
+    }
+
+    func apply(_ operations: [NativeCalendarMirror.Operation], calendarID: String) throws {
+        applied.append(operations)
+        for operation in operations {
+            switch operation {
+            case let .create(desired):
+                nextEvent += 1
+                events.append(.init(eventID: "ev-\(nextEvent)", externalID: "ext-\(nextEvent)", creationDate: nil,
+                                    notes: desired.fields.notes, fields: desired.fields))
+            case let .update(eventID, desired):
+                if let i = events.firstIndex(where: { $0.eventID == eventID }) {
+                    events[i].fields = desired.fields
+                    events[i].notes = desired.fields.notes
+                }
+            case let .delete(eventID):
+                events.removeAll { $0.eventID == eventID }
+            }
+        }
+    }
+
+    func removeMirrorCalendar(calendarID: String) throws {
+        removedCalendars.append(calendarID)
+        if mirrorCalendarID == calendarID { mirrorCalendarID = nil }
+        events = []
+    }
+
+    func startObservingChanges(_ handler: @escaping @MainActor () -> Void) { observing = true }
+    func stopObservingChanges() { observing = false }
+}
+
+/// Review-fix model of the device calendar store: several calendars with
+/// titles and events, real instants (so the fetch window filters like
+/// EventKit's does), id-only lookup, collision-free creation, and the
+/// adapter's marker guard on update and delete. `readable == false` models
+/// protected data being unavailable (no calendars, no events).
+@MainActor
+final class CalendarMirrorWorldAccess: NativeCalendarAccess {
+    struct Item {
+        var id: String
+        var calendarID: String
+        var notes: String?
+        var fields: NativeCalendarMirror.Fields
+    }
+
+    var readable = true
+    var calendarsValue: [NativeCalendarInfo]
+    var items: [Item] = []
+    var deviceCalendar: Calendar
+    var applied: [[NativeCalendarMirror.Operation]] = []
+    var removedCalendars: [String] = []
+    var createdTitles: [String] = []
+    private var next = 0
+
+    init(deviceZone: String, calendars: [NativeCalendarInfo] = [CalendarMirrorWorldAccess.info("cal-work", "Work")]) {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: deviceZone)!
+        deviceCalendar = cal
+        calendarsValue = calendars
+    }
+
+    nonisolated static func info(_ id: String, _ title: String, writable: Bool = true) -> NativeCalendarInfo {
+        NativeCalendarInfo(id: id, title: title, accountTitle: "iCloud", kind: .standard, allowsModifications: writable)
+    }
+
+    func addEvent(calendar: String, notes: String?, date: String = "2026-10-20", minutes: Int = 600, title: String = "Event") {
+        next += 1
+        let fields = NativeCalendarMirror.Fields(
+            title: title, location: nil, notes: notes ?? "", url: "", isAllDay: false,
+            start: .init(date: date, minutes: minutes), end: .init(date: date, minutes: minutes + 60), timeZoneID: nil)
+        items.append(Item(id: "w-\(next)", calendarID: calendar, notes: notes, fields: fields))
+    }
+
+    func events(in calendarID: String) -> [Item] { items.filter { $0.calendarID == calendarID } }
+    func hasCalendar(_ id: String) -> Bool { calendarsValue.contains { $0.id == id } }
+
+    private func instants(_ fields: NativeCalendarMirror.Fields) -> (Date, Date) {
+        var cal = deviceCalendar
+        if !fields.isAllDay, let id = fields.timeZoneID, let zone = TimeZone(identifier: id) { cal.timeZone = zone }
+        func date(_ value: NativeCalendarMirror.NaiveDateTime) -> Date {
+            let (y, m, d) = NativeSchedule.parseDateComponents(value.date)!
+            return cal.date(from: DateComponents(year: y, month: m, day: d, hour: value.minutes / 60, minute: value.minutes % 60))!
+        }
+        return (date(fields.start), date(fields.end))
+    }
+
+    var authorization: NativeCalendarAuthorization { .fullAccess }
+    func requestFullAccess() async -> NativeCalendarAuthorization { .fullAccess }
+    func calendars() -> [NativeCalendarInfo] { readable ? calendarsValue : [] }
+    func samples(start: Date, end: Date) -> [NativeCalendarBusy.Sample] { [] }
+
+    func findMirrorCalendar(storedID: String?) -> NativeMirrorCalendarLookup {
+        guard readable, let storedID, let info = calendarsValue.first(where: { $0.id == storedID }), info.allowsModifications else { return .missing }
+        return .found(id: info.id, accountTitle: info.accountTitle)
+    }
+
+    func createMirrorCalendar() throws -> NativeMirrorCalendarLookup {
+        let title = NativeCalendarMirror.newCalendarTitle(existingTitles: calendarsValue.map(\.title))
+        createdTitles.append(title)
+        let id = "cal-new-\(createdTitles.count)"
+        calendarsValue.append(Self.info(id, title))
+        return .found(id: id, accountTitle: "iCloud")
+    }
+
+    func mirrorEvents(calendarID: String, start: Date, end: Date) -> [NativeCalendarMirror.Existing] {
+        guard readable else { return [] }
+        return items.filter { $0.calendarID == calendarID }.compactMap { item in
+            let (s, e) = instants(item.fields)
+            guard s < end, e > start else { return nil }
+            return NativeCalendarMirror.Existing(eventID: item.id, externalID: nil, creationDate: nil, notes: item.notes, fields: item.fields)
+        }
+    }
+
+    func apply(_ operations: [NativeCalendarMirror.Operation], calendarID: String) throws {
+        applied.append(operations)
+        for operation in operations {
+            switch operation {
+            case let .create(desired):
+                next += 1
+                items.append(Item(id: "w-\(next)", calendarID: calendarID, notes: desired.fields.notes, fields: desired.fields))
+            case let .update(eventID, desired):
+                // The adapter's guard: in this calendar and carrying a marker.
+                guard let i = items.firstIndex(where: { $0.id == eventID && $0.calendarID == calendarID && NativeCalendarMirror.parseMarker($0.notes) != nil }) else { continue }
+                items[i].fields = desired.fields
+                items[i].notes = desired.fields.notes
+            case let .delete(eventID):
+                items.removeAll { $0.id == eventID && $0.calendarID == calendarID && NativeCalendarMirror.parseMarker($0.notes) != nil }
+            }
+        }
+    }
+
+    func removeMirrorCalendar(calendarID: String) throws {
+        removedCalendars.append(calendarID)
+        calendarsValue.removeAll { $0.id == calendarID }
+        items.removeAll { $0.calendarID == calendarID }
+    }
+
+    func startObservingChanges(_ handler: @escaping @MainActor () -> Void) {}
+    func stopObservingChanges() {}
+}
+
+@MainActor
+final class CalendarSyncFakeTransport: NativeCalendarSyncTransporting {
+    struct Put: Equatable {
+        let sourceID: String
+        let snapshotJSON: String?
+        let takeOver: Bool
+    }
+
+    var puts: [Put] = []
+    var disables = 0
+    var statuses = 0
+    var onPut: (() -> Void)?
+    var putResult: (Put) -> NativeCalendarSyncOutcome<NativeCalendarPutResult> = { _ in
+        .ok(.init(receivedAt: nil, created: false))
+    }
+    var statusResult: NativeCalendarSyncOutcome<NativeCalendarBusy.ServerStatus> = .offline
+    var disableResult: NativeCalendarSyncOutcome<Bool> = .ok(true)
+
+    func put(sourceID: String, snapshotJSON: String?, takeOver: Bool,
+             credentials: NativeCalendarSyncCredentials) async -> NativeCalendarSyncOutcome<NativeCalendarPutResult> {
+        let put = Put(sourceID: sourceID, snapshotJSON: snapshotJSON, takeOver: takeOver)
+        puts.append(put)
+        onPut?()
+        return putResult(put)
+    }
+
+    func status(sourceID: String?, credentials: NativeCalendarSyncCredentials) async -> NativeCalendarSyncOutcome<NativeCalendarBusy.ServerStatus> {
+        statuses += 1
+        return statusResult
+    }
+
+    func disable(credentials: NativeCalendarSyncCredentials) async -> NativeCalendarSyncOutcome<Bool> {
+        disables += 1
+        return disableResult
     }
 }

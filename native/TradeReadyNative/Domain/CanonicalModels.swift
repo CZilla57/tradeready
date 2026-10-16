@@ -462,10 +462,15 @@ public extension Canonical {
     }
 
     struct EstimateApprovalSnapshot: Codable {
-        public struct LineItem: Codable {
+        public struct LineItem: Codable, Equatable {
             public var label: String
             public var amount: Decimal
             public var preservation: Preservation
+            public init(label: String, amount: Decimal, preservation: Preservation = .init()) {
+                self.label = label
+                self.amount = amount
+                self.preservation = preservation
+            }
             public init(from decoder: Decoder) throws {
                 var o = try ObjectReader(decoder); label = try o.required("label")
                 amount = try o.required("amount"); preservation = o.finish()
@@ -475,22 +480,265 @@ public extension Canonical {
                 try o.put(amount, for: "amount"); try o.encode(to: encoder)
             }
         }
+
+        /// Phase 25 (good/better/best): one customer-facing tier, frozen with
+        /// today's line derivation run on that tier's own pricing.
+        public struct OptionTier: Codable, Equatable {
+            public var id, name: String
+            public var description: String?
+            public var lineItems: [LineItem]
+            public var total: Decimal
+            public var preservation: Preservation
+            public init(
+                id: String,
+                name: String,
+                description: String? = nil,
+                lineItems: [LineItem],
+                total: Decimal,
+                preservation: Preservation = .init()
+            ) {
+                self.id = id
+                self.name = name
+                self.description = description
+                self.lineItems = lineItems
+                self.total = total
+                self.preservation = preservation
+            }
+            public init(from decoder: Decoder) throws {
+                var o = try ObjectReader(decoder)
+                id = try o.required("id"); name = try o.required("name"); description = try o.optional("description")
+                lineItems = try o.required("lineItems"); total = try o.required("total"); preservation = o.finish()
+            }
+            public func encode(to encoder: Encoder) throws {
+                var o = ObjectWriter(preservation)
+                try o.put(id, for: "id"); try o.put(name, for: "name"); try o.putOptional(description, for: "description")
+                try o.put(lineItems, for: "lineItems"); try o.put(total, for: "total"); try o.encode(to: encoder)
+            }
+        }
+
+        /// Phase 25: one optional add-on as the customer sees it. The owner's
+        /// internal `cost` is never part of the frozen snapshot.
+        public struct OptionAddOn: Codable, Equatable {
+            public var id, label: String
+            public var description: String?
+            public var amount: Decimal
+            public var preservation: Preservation
+            public init(
+                id: String,
+                label: String,
+                description: String? = nil,
+                amount: Decimal,
+                preservation: Preservation = .init()
+            ) {
+                self.id = id
+                self.label = label
+                self.description = description
+                self.amount = amount
+                self.preservation = preservation
+            }
+            public init(from decoder: Decoder) throws {
+                var o = try ObjectReader(decoder)
+                id = try o.required("id"); label = try o.required("label"); description = try o.optional("description")
+                amount = try o.required("amount"); preservation = o.finish()
+            }
+            public func encode(to encoder: Encoder) throws {
+                var o = ObjectWriter(preservation)
+                try o.put(id, for: "id"); try o.put(label, for: "label"); try o.putOptional(description, for: "description")
+                try o.put(amount, for: "amount"); try o.encode(to: encoder)
+            }
+        }
+
+        /// Phase 25: `snapshot.options`. Absent means a single-total estimate.
+        public struct Options: Codable, Equatable {
+            public var tiers: [OptionTier]
+            public var addOns: [OptionAddOn]
+            public var recommendedTierId: String
+            public var preservation: Preservation
+            public init(
+                tiers: [OptionTier],
+                addOns: [OptionAddOn],
+                recommendedTierId: String,
+                preservation: Preservation = .init()
+            ) {
+                self.tiers = tiers
+                self.addOns = addOns
+                self.recommendedTierId = recommendedTierId
+                self.preservation = preservation
+            }
+            public init(from decoder: Decoder) throws {
+                var o = try ObjectReader(decoder)
+                tiers = try o.required("tiers"); addOns = try o.required("addOns")
+                recommendedTierId = try o.required("recommendedTierId"); preservation = o.finish()
+            }
+            public func encode(to encoder: Encoder) throws {
+                var o = ObjectWriter(preservation)
+                try o.put(tiers, for: "tiers"); try o.put(addOns, for: "addOns")
+                try o.put(recommendedTierId, for: "recommendedTierId"); try o.encode(to: encoder)
+            }
+        }
+
+        /// Phase 19 (e-signatures, spec 2026-10-03 §3.4, §11.1 A):
+        /// `snapshot.businessContact`, the disclosure's paper-copy contact.
+        /// Empty members are omitted, never sent as `""`.
+        public struct BusinessContact: Codable, Equatable {
+            public var phone, email: String?
+            public var preservation: Preservation
+            public init(phone: String? = nil, email: String? = nil, preservation: Preservation = .init()) {
+                self.phone = phone
+                self.email = email
+                self.preservation = preservation
+            }
+            public init(from decoder: Decoder) throws {
+                var o = try ObjectReader(decoder)
+                phone = try o.optional("phone"); email = try o.optional("email"); preservation = o.finish()
+            }
+            public func encode(to encoder: Encoder) throws {
+                var o = ObjectWriter(preservation)
+                try o.putOptional(phone, for: "phone"); try o.putOptional(email, for: "email"); try o.encode(to: encoder)
+            }
+        }
+
+        /// Phase 19: `snapshot.signature`. An absent `drawPad` means on.
+        public struct SignatureOptions: Codable, Equatable {
+            public var drawPad: Bool?
+            public var preservation: Preservation
+            public init(drawPad: Bool? = nil, preservation: Preservation = .init()) {
+                self.drawPad = drawPad
+                self.preservation = preservation
+            }
+            public init(from decoder: Decoder) throws {
+                var o = try ObjectReader(decoder); drawPad = try o.optional("drawPad"); preservation = o.finish()
+            }
+            public func encode(to encoder: Encoder) throws {
+                var o = ObjectWriter(preservation); try o.putOptional(drawPad, for: "drawPad"); try o.encode(to: encoder)
+            }
+        }
+
+        /// Phase 19: `snapshot.esign`. Its presence tells the Worker this
+        /// estimate is signed with consent; `timeZone` (IANA) is the owner's
+        /// zone for the signature certificate.
+        public struct ESign: Codable, Equatable {
+            public var version: Int
+            public var timeZone: String?
+            public var preservation: Preservation
+            public init(version: Int, timeZone: String? = nil, preservation: Preservation = .init()) {
+                self.version = version
+                self.timeZone = timeZone
+                self.preservation = preservation
+            }
+            public init(from decoder: Decoder) throws {
+                var o = try ObjectReader(decoder)
+                version = try o.required("version"); timeZone = try o.optional("timeZone"); preservation = o.finish()
+            }
+            public func encode(to encoder: Encoder) throws {
+                var o = ObjectWriter(preservation)
+                try o.put(version, for: "version"); try o.putOptional(timeZone, for: "timeZone"); try o.encode(to: encoder)
+            }
+        }
+
         public var businessName, customerName, jobTitle: String
         public var lineItems: [LineItem]
         public var total: Decimal
         public var currency: String
+        public var options: Options?
+        /// Phase 32: the inclusive `YYYY-MM-DD` the customer is shown, and
+        /// the IANA zone it is evaluated in. Both present or both absent.
+        public var validUntil: DateString?
+        public var validUntilTimeZone: String?
+        /// Phase 19: what the customer reads and signs beyond the prices
+        /// (`scope` is the job's or change order's description, `terms` the
+        /// owner's agreement terms), plus the signing-page settings. All
+        /// additive and digest-covered; built by `NativeESignature`.
+        public var scope, terms: String?
+        public var businessContact: BusinessContact?
+        public var signature: SignatureOptions?
+        public var esign: ESign?
         public var preservation: Preservation
         public init(from decoder: Decoder) throws {
             var o = try ObjectReader(decoder)
             businessName = try o.required("businessName"); customerName = try o.required("customerName")
             jobTitle = try o.required("jobTitle"); lineItems = try o.required("lineItems")
-            total = try o.required("total"); currency = try o.required("currency"); preservation = o.finish()
+            total = try o.required("total"); currency = try o.required("currency")
+            options = try o.optional("options"); validUntil = try o.optional("validUntil")
+            validUntilTimeZone = try o.optional("validUntilTimeZone")
+            scope = try o.optional("scope"); terms = try o.optional("terms")
+            businessContact = try o.optional("businessContact"); signature = try o.optional("signature")
+            esign = try o.optional("esign"); preservation = o.finish()
         }
         public func encode(to encoder: Encoder) throws {
             var o = ObjectWriter(preservation)
             try o.put(businessName, for: "businessName"); try o.put(customerName, for: "customerName")
             try o.put(jobTitle, for: "jobTitle"); try o.put(lineItems, for: "lineItems")
-            try o.put(total, for: "total"); try o.put(currency, for: "currency"); try o.encode(to: encoder)
+            try o.put(total, for: "total"); try o.put(currency, for: "currency")
+            try o.putOptional(options, for: "options"); try o.putOptional(validUntil, for: "validUntil")
+            try o.putOptional(validUntilTimeZone, for: "validUntilTimeZone")
+            try o.putOptional(scope, for: "scope"); try o.putOptional(terms, for: "terms")
+            try o.putOptional(businessContact, for: "businessContact"); try o.putOptional(signature, for: "signature")
+            try o.putOptional(esign, for: "esign"); try o.encode(to: encoder)
+        }
+    }
+
+    /// Phase 25: `approval.selection`, written only by the server's `respond`
+    /// route when a customer approves an options snapshot.
+    struct EstimateSelection: Codable, Equatable {
+        public struct AddOn: Codable, Equatable {
+            public var id, label: String
+            public var amount: Decimal
+            public var preservation: Preservation
+            public init(id: String, label: String, amount: Decimal, preservation: Preservation = .init()) {
+                self.id = id
+                self.label = label
+                self.amount = amount
+                self.preservation = preservation
+            }
+            public init(from decoder: Decoder) throws {
+                var o = try ObjectReader(decoder)
+                id = try o.required("id"); label = try o.required("label")
+                amount = try o.required("amount"); preservation = o.finish()
+            }
+            public func encode(to encoder: Encoder) throws {
+                var o = ObjectWriter(preservation)
+                try o.put(id, for: "id"); try o.put(label, for: "label")
+                try o.put(amount, for: "amount"); try o.encode(to: encoder)
+            }
+        }
+
+        public var tierId, tierName: String
+        /// Ordered by `snapshot.options.addOns`, de-duplicated.
+        public var addOnIds: [String]
+        public var addOns: [AddOn]
+        /// The tier's lines followed by one line per accepted add-on.
+        public var lineItems: [EstimateApprovalSnapshot.LineItem]
+        public var total: Decimal
+        public var preservation: Preservation
+        public init(
+            tierId: String,
+            tierName: String,
+            addOnIds: [String],
+            addOns: [AddOn],
+            lineItems: [EstimateApprovalSnapshot.LineItem],
+            total: Decimal,
+            preservation: Preservation = .init()
+        ) {
+            self.tierId = tierId
+            self.tierName = tierName
+            self.addOnIds = addOnIds
+            self.addOns = addOns
+            self.lineItems = lineItems
+            self.total = total
+            self.preservation = preservation
+        }
+        public init(from decoder: Decoder) throws {
+            var o = try ObjectReader(decoder)
+            tierId = try o.required("tierId"); tierName = try o.required("tierName")
+            addOnIds = try o.required("addOnIds"); addOns = try o.required("addOns")
+            lineItems = try o.required("lineItems"); total = try o.required("total"); preservation = o.finish()
+        }
+        public func encode(to encoder: Encoder) throws {
+            var o = ObjectWriter(preservation)
+            try o.put(tierId, for: "tierId"); try o.put(tierName, for: "tierName")
+            try o.put(addOnIds, for: "addOnIds"); try o.put(addOns, for: "addOns")
+            try o.put(lineItems, for: "lineItems"); try o.put(total, for: "total"); try o.encode(to: encoder)
         }
     }
 
@@ -500,20 +748,204 @@ public extension Canonical {
         public var snapshot: EstimateApprovalSnapshot
         public var decision, signerName, declineReason, ip, userAgent: String?
         public var consentAt: DateString?
+        public var selection: EstimateSelection?
+        /// Phase 19 (spec §3.5, §11.1 B): server-owned keys of an e-signed
+        /// approval — the sealed record's id and SHA-256 fingerprint, and
+        /// `typed` | `typed_drawn`. The device round-trips them and never
+        /// authors them. The opaque `signatureEvidence` stays in
+        /// `preservation`, verbatim.
+        public var signatureRecordId, recordDigest, signatureMethod: String?
         public var preservation: Preservation
         public init(from decoder: Decoder) throws {
             var o = try ObjectReader(decoder)
             token = try o.required("token"); sentAt = try o.required("sentAt"); snapshot = try o.required("snapshot")
             decision = try o.optional("decision"); consentAt = try o.optional("consentAt")
             signerName = try o.optional("signerName"); declineReason = try o.optional("declineReason")
-            ip = try o.optional("ip"); userAgent = try o.optional("userAgent"); preservation = o.finish()
+            ip = try o.optional("ip"); userAgent = try o.optional("userAgent")
+            selection = try o.optional("selection")
+            signatureRecordId = try o.optional("signatureRecordId"); recordDigest = try o.optional("recordDigest")
+            signatureMethod = try o.optional("signatureMethod"); preservation = o.finish()
         }
         public func encode(to encoder: Encoder) throws {
             var o = ObjectWriter(preservation)
             try o.put(token, for: "token"); try o.put(sentAt, for: "sentAt"); try o.put(snapshot, for: "snapshot")
             try o.putOptional(decision, for: "decision"); try o.putOptional(consentAt, for: "consentAt")
             try o.putOptional(signerName, for: "signerName"); try o.putOptional(declineReason, for: "declineReason")
-            try o.putOptional(ip, for: "ip"); try o.putOptional(userAgent, for: "userAgent"); try o.encode(to: encoder)
+            try o.putOptional(ip, for: "ip"); try o.putOptional(userAgent, for: "userAgent")
+            try o.putOptional(selection, for: "selection")
+            try o.putOptional(signatureRecordId, for: "signatureRecordId"); try o.putOptional(recordDigest, for: "recordDigest")
+            try o.putOptional(signatureMethod, for: "signatureMethod"); try o.encode(to: encoder)
+        }
+    }
+
+    /// Phase 25: one good/better/best tier. The calculator-owned fields use
+    /// exactly `Canonical.Job`'s names and types; `estimateTotal` is
+    /// `PricingEngine.calculate(...).total` for this tier.
+    struct QuoteTier: Codable {
+        public var id, name: String
+        public var description: String?
+        public var laborHours: Decimal
+        public var laborBreakdown: LaborTimeBreakdown?
+        public var laborRate: Decimal
+        public var materials: [Material]
+        public var materialMarkup: Decimal
+        public var jobCosts: [JobCost]?
+        public var overhead, margin, estimateTotal: Decimal
+        public var preservation: Preservation
+        public init(
+            id: String,
+            name: String,
+            description: String? = nil,
+            laborHours: Decimal,
+            laborBreakdown: LaborTimeBreakdown? = nil,
+            laborRate: Decimal,
+            materials: [Material],
+            materialMarkup: Decimal,
+            jobCosts: [JobCost]? = nil,
+            overhead: Decimal,
+            margin: Decimal,
+            estimateTotal: Decimal,
+            preservation: Preservation = .init()
+        ) {
+            self.id = id
+            self.name = name
+            self.description = description
+            self.laborHours = laborHours
+            self.laborBreakdown = laborBreakdown
+            self.laborRate = laborRate
+            self.materials = materials
+            self.materialMarkup = materialMarkup
+            self.jobCosts = jobCosts
+            self.overhead = overhead
+            self.margin = margin
+            self.estimateTotal = estimateTotal
+            self.preservation = preservation
+        }
+        public init(from decoder: Decoder) throws {
+            var o = try ObjectReader(decoder)
+            id = try o.required("id"); name = try o.required("name"); description = try o.optional("description")
+            laborHours = try o.required("laborHours"); laborBreakdown = try o.optional("laborBreakdown")
+            laborRate = try o.required("laborRate"); materials = try o.required("materials")
+            materialMarkup = try o.required("materialMarkup"); jobCosts = try o.optional("jobCosts")
+            overhead = try o.required("overhead"); margin = try o.required("margin")
+            estimateTotal = try o.required("estimateTotal"); preservation = o.finish()
+        }
+        public func encode(to encoder: Encoder) throws {
+            var o = ObjectWriter(preservation)
+            try o.put(id, for: "id"); try o.put(name, for: "name"); try o.putOptional(description, for: "description")
+            try o.put(laborHours, for: "laborHours"); try o.putOptional(laborBreakdown, for: "laborBreakdown")
+            try o.put(laborRate, for: "laborRate"); try o.put(materials, for: "materials")
+            try o.put(materialMarkup, for: "materialMarkup"); try o.putOptional(jobCosts, for: "jobCosts")
+            try o.put(overhead, for: "overhead"); try o.put(margin, for: "margin")
+            try o.put(estimateTotal, for: "estimateTotal"); try o.encode(to: encoder)
+        }
+    }
+
+    /// Phase 25: a flat, all-in optional add-on. `cost` is the owner's
+    /// internal cost for profitability and never leaves the device.
+    struct QuoteAddOn: Codable {
+        public var id, label: String
+        public var description: String?
+        public var price: Decimal
+        public var cost: Decimal?
+        public var preservation: Preservation
+        public init(
+            id: String,
+            label: String,
+            description: String? = nil,
+            price: Decimal,
+            cost: Decimal? = nil,
+            preservation: Preservation = .init()
+        ) {
+            self.id = id
+            self.label = label
+            self.description = description
+            self.price = price
+            self.cost = cost
+            self.preservation = preservation
+        }
+        public init(from decoder: Decoder) throws {
+            var o = try ObjectReader(decoder)
+            id = try o.required("id"); label = try o.required("label"); description = try o.optional("description")
+            price = try o.required("price"); cost = try o.optional("cost"); preservation = o.finish()
+        }
+        public func encode(to encoder: Encoder) throws {
+            var o = ObjectWriter(preservation)
+            try o.put(id, for: "id"); try o.put(label, for: "label"); try o.putOptional(description, for: "description")
+            try o.put(price, for: "price"); try o.putOptional(cost, for: "cost"); try o.encode(to: encoder)
+        }
+    }
+
+    /// Phase 25: the applied customer (or owner-recorded) choice. Written once.
+    struct QuoteAcceptance: Codable {
+        public static let sourceLink = "link"
+        public static let sourceOwner = "owner"
+
+        public var tierId: String
+        public var addOnIds: [String]
+        public var total: Decimal
+        public var acceptedAt: DateString
+        /// `"link"` (customer approval link) or `"owner"` (recorded by the owner).
+        public var source: String
+        public var preservation: Preservation
+        public init(
+            tierId: String,
+            addOnIds: [String],
+            total: Decimal,
+            acceptedAt: DateString,
+            source: String,
+            preservation: Preservation = .init()
+        ) {
+            self.tierId = tierId
+            self.addOnIds = addOnIds
+            self.total = total
+            self.acceptedAt = acceptedAt
+            self.source = source
+            self.preservation = preservation
+        }
+        public init(from decoder: Decoder) throws {
+            var o = try ObjectReader(decoder)
+            tierId = try o.required("tierId"); addOnIds = try o.required("addOnIds"); total = try o.required("total")
+            acceptedAt = try o.required("acceptedAt"); source = try o.required("source"); preservation = o.finish()
+        }
+        public func encode(to encoder: Encoder) throws {
+            var o = ObjectWriter(preservation)
+            try o.put(tierId, for: "tierId"); try o.put(addOnIds, for: "addOnIds"); try o.put(total, for: "total")
+            try o.put(acceptedAt, for: "acceptedAt"); try o.put(source, for: "source"); try o.encode(to: encoder)
+        }
+    }
+
+    /// Phase 25: `Job.quoteOptions`. Absent means a single-total estimate.
+    struct QuoteOptions: Codable {
+        public var tiers: [QuoteTier]
+        public var addOns: [QuoteAddOn]
+        public var recommendedTierId: String
+        public var acceptance: QuoteAcceptance?
+        public var preservation: Preservation
+        public init(
+            tiers: [QuoteTier],
+            addOns: [QuoteAddOn],
+            recommendedTierId: String,
+            acceptance: QuoteAcceptance? = nil,
+            preservation: Preservation = .init()
+        ) {
+            self.tiers = tiers
+            self.addOns = addOns
+            self.recommendedTierId = recommendedTierId
+            self.acceptance = acceptance
+            self.preservation = preservation
+        }
+        public init(from decoder: Decoder) throws {
+            var o = try ObjectReader(decoder)
+            tiers = try o.required("tiers"); addOns = try o.required("addOns")
+            recommendedTierId = try o.required("recommendedTierId"); acceptance = try o.optional("acceptance")
+            preservation = o.finish()
+        }
+        public func encode(to encoder: Encoder) throws {
+            var o = ObjectWriter(preservation)
+            try o.put(tiers, for: "tiers"); try o.put(addOns, for: "addOns")
+            try o.put(recommendedTierId, for: "recommendedTierId"); try o.putOptional(acceptance, for: "acceptance")
+            try o.encode(to: encoder)
         }
     }
 
@@ -612,11 +1044,21 @@ public extension Canonical {
         public var recurringJobId: String?
         public var occurrenceNumber: Int?
         public var estimateSentAt: DateString?
+        /// Phase 32: local inclusive `YYYY-MM-DD` validity of the most recent
+        /// send. Meaningful only while `status == "estimate_sent"`.
+        public var estimateValidUntil: DateString?
         public var approval: EstimateApproval?
         public var approvalHistory: [EstimateApproval]?
         public var changeOrders: [ChangeOrder]?
         public var archivedAt: DateString?
         public var importBatchId: String?
+        public var quoteOptions: QuoteOptions?
+        /// Phase 21: the customer property the job is at (spec §2, D3). The
+        /// job's own `address` stays the service address of record; an
+        /// absent or unresolvable id (P3) leaves that address standing alone.
+        public var propertyId: String?
+        /// Phase 33: set only by booking intake from a resolved campaign code.
+        public var campaignId: String?
         public var preservation: Preservation
 
         public init(from decoder: Decoder) throws {
@@ -634,10 +1076,14 @@ public extension Canonical {
             invoiceId = try o.optional("invoiceId"); createdAt = try o.required("createdAt")
             photos = try o.optional("photos"); timeSessions = try o.optional("timeSessions")
             recurringJobId = try o.optional("recurringJobId"); occurrenceNumber = try o.optional("occurrenceNumber")
-            estimateSentAt = try o.optional("estimateSentAt"); approval = try o.optional("approval")
+            estimateSentAt = try o.optional("estimateSentAt"); estimateValidUntil = try o.optional("estimateValidUntil")
+            approval = try o.optional("approval")
             approvalHistory = try o.optional("approvalHistory")
             changeOrders = try o.optional("changeOrders"); archivedAt = try o.optional("archivedAt")
-            importBatchId = try o.optional("importBatchId"); preservation = o.finish()
+            importBatchId = try o.optional("importBatchId"); quoteOptions = try o.optional("quoteOptions")
+            propertyId = try o.optional("propertyId")
+            campaignId = try o.optional("campaignId")
+            preservation = o.finish()
         }
 
         public func encode(to encoder: Encoder) throws {
@@ -655,10 +1101,14 @@ public extension Canonical {
             try o.putOptional(invoiceId, for: "invoiceId"); try o.put(createdAt, for: "createdAt")
             try o.putOptional(photos, for: "photos"); try o.putOptional(timeSessions, for: "timeSessions")
             try o.putOptional(recurringJobId, for: "recurringJobId"); try o.putOptional(occurrenceNumber, for: "occurrenceNumber")
-            try o.putOptional(estimateSentAt, for: "estimateSentAt"); try o.putOptional(approval, for: "approval")
+            try o.putOptional(estimateSentAt, for: "estimateSentAt"); try o.putOptional(estimateValidUntil, for: "estimateValidUntil")
+            try o.putOptional(approval, for: "approval")
             try o.putOptional(approvalHistory, for: "approvalHistory")
             try o.putOptional(changeOrders, for: "changeOrders"); try o.putOptional(archivedAt, for: "archivedAt")
-            try o.putOptional(importBatchId, for: "importBatchId"); try o.encode(to: encoder)
+            try o.putOptional(importBatchId, for: "importBatchId"); try o.putOptional(quoteOptions, for: "quoteOptions")
+            try o.putOptional(propertyId, for: "propertyId")
+            try o.putOptional(campaignId, for: "campaignId")
+            try o.encode(to: encoder)
         }
     }
 
@@ -667,18 +1117,153 @@ public extension Canonical {
         public var uploadedAt: String?
         public var customerVisible: Bool?
         public var width, height: Decimal?
+        /// Phase 20: the form and form item a photo was captured from
+        /// (additive back-references; the item's `photoIds` is the source of
+        /// truth for what the form shows).
+        public var formId, formItemId: String?
         public var preservation: Preservation
         public init(from decoder: Decoder) throws {
             var o = try ObjectReader(decoder)
             id = try o.required("id"); jobId = try o.required("jobId"); createdAt = try o.required("createdAt")
             uploadedAt = try o.optional("uploadedAt"); customerVisible = try o.optional("customerVisible")
-            width = try o.optional("width"); height = try o.optional("height"); preservation = o.finish()
+            width = try o.optional("width"); height = try o.optional("height")
+            formId = try o.optional("formId"); formItemId = try o.optional("formItemId"); preservation = o.finish()
         }
         public func encode(to encoder: Encoder) throws {
             var o = ObjectWriter(preservation)
             try o.put(id, for: "id"); try o.put(jobId, for: "jobId"); try o.put(createdAt, for: "createdAt")
             try o.putOptional(uploadedAt, for: "uploadedAt"); try o.putOptional(customerVisible, for: "customerVisible")
-            try o.putOptional(width, for: "width"); try o.putOptional(height, for: "height"); try o.encode(to: encoder)
+            try o.putOptional(width, for: "width"); try o.putOptional(height, for: "height")
+            try o.putOptional(formId, for: "formId"); try o.putOptional(formItemId, for: "formItemId")
+            try o.encode(to: encoder)
+        }
+    }
+
+    /// Phase 20: one row of a form (spec
+    /// `docs/superpowers/specs/2026-10-02-job-forms-design.md` §2). `kind` and
+    /// `result` stay raw strings so a kind or result written by a newer client
+    /// decodes and round-trips here: a decode failure would fail the whole
+    /// `forms` pull. `NativeJobForms` reads them through typed accessors.
+    struct FormItem: Codable, Equatable {
+        public var id: String
+        /// `section`, `check`, `passFail` or `text`.
+        public var kind: String
+        public var label: String
+        /// Ignored for `section`.
+        public var required, photoRequired: Bool?
+        // Responses (instances only; absent = unanswered).
+        public var checked: Bool?
+        /// `pass`, `fail` or `na`.
+        public var result: String?
+        public var text, note: String?
+        public var photoIds: [String]?
+        public var preservation: Preservation
+        public init(
+            id: String,
+            kind: String,
+            label: String,
+            required: Bool? = nil,
+            photoRequired: Bool? = nil,
+            checked: Bool? = nil,
+            result: String? = nil,
+            text: String? = nil,
+            note: String? = nil,
+            photoIds: [String]? = nil,
+            preservation: Preservation = .init()
+        ) {
+            self.id = id
+            self.kind = kind
+            self.label = label
+            self.required = required
+            self.photoRequired = photoRequired
+            self.checked = checked
+            self.result = result
+            self.text = text
+            self.note = note
+            self.photoIds = photoIds
+            self.preservation = preservation
+        }
+        public init(from decoder: Decoder) throws {
+            var o = try ObjectReader(decoder)
+            id = try o.required("id"); kind = try o.required("kind"); label = try o.required("label")
+            required = try o.optional("required"); photoRequired = try o.optional("photoRequired")
+            checked = try o.optional("checked"); result = try o.optional("result")
+            text = try o.optional("text"); note = try o.optional("note"); photoIds = try o.optional("photoIds")
+            preservation = o.finish()
+        }
+        public func encode(to encoder: Encoder) throws {
+            var o = ObjectWriter(preservation)
+            try o.put(id, for: "id"); try o.put(kind, for: "kind"); try o.put(label, for: "label")
+            try o.putOptional(required, for: "required"); try o.putOptional(photoRequired, for: "photoRequired")
+            try o.putOptional(checked, for: "checked"); try o.putOptional(result, for: "result")
+            try o.putOptional(text, for: "text"); try o.putOptional(note, for: "note")
+            try o.putOptional(photoIds, for: "photoIds"); try o.encode(to: encoder)
+        }
+    }
+
+    /// Phase 20: a row of the synced `forms` collection. One table holds the
+    /// owner's custom templates (`kind: "template"`) and filled job checklists
+    /// (`kind: "instance"`), kept out of the job blob so a checkbox tap never
+    /// races a server-written estimate decision (spec §1).
+    struct Form: Codable, Equatable {
+        public static let kindTemplate = "template"
+        public static let kindInstance = "instance"
+
+        /// `fm<ms>_<base36 random>`: the table's primary key is global across
+        /// accounts, so every id is randomized.
+        public var id: String
+        /// `template` or `instance`.
+        public var kind: String
+        /// Instance only.
+        public var jobId: String?
+        /// Instance only: `builtin:<key>` or a custom template id.
+        public var templateId: String?
+        public var title: String
+        public var items: [FormItem]
+        /// Instance only: absent means in progress.
+        public var completedAt: DateString?
+        public var createdAt: DateString
+        /// Template only: hidden from the picker.
+        public var archivedAt: DateString?
+        public var preservation: Preservation
+        public init(
+            id: String,
+            kind: String,
+            jobId: String? = nil,
+            templateId: String? = nil,
+            title: String,
+            items: [FormItem],
+            completedAt: DateString? = nil,
+            createdAt: DateString,
+            archivedAt: DateString? = nil,
+            preservation: Preservation = .init()
+        ) {
+            self.id = id
+            self.kind = kind
+            self.jobId = jobId
+            self.templateId = templateId
+            self.title = title
+            self.items = items
+            self.completedAt = completedAt
+            self.createdAt = createdAt
+            self.archivedAt = archivedAt
+            self.preservation = preservation
+        }
+        public init(from decoder: Decoder) throws {
+            var o = try ObjectReader(decoder)
+            id = try o.required("id"); kind = try o.required("kind")
+            jobId = try o.optional("jobId"); templateId = try o.optional("templateId")
+            title = try o.required("title"); items = try o.required("items")
+            completedAt = try o.optional("completedAt"); createdAt = try o.required("createdAt")
+            archivedAt = try o.optional("archivedAt"); preservation = o.finish()
+        }
+        public func encode(to encoder: Encoder) throws {
+            var o = ObjectWriter(preservation)
+            try o.put(id, for: "id"); try o.put(kind, for: "kind")
+            try o.putOptional(jobId, for: "jobId"); try o.putOptional(templateId, for: "templateId")
+            try o.put(title, for: "title"); try o.put(items, for: "items")
+            try o.putOptional(completedAt, for: "completedAt"); try o.put(createdAt, for: "createdAt")
+            try o.putOptional(archivedAt, for: "archivedAt"); try o.encode(to: encoder)
         }
     }
 
@@ -801,17 +1386,22 @@ public extension Canonical {
         public var method: PaymentMethod
         public var note, stripeSessionId: String?
         public var voidedAt: DateString?
+        /// Phase 28 (tips spec §5, §6.1): the tip the customer added on the
+        /// pay page, in dollars. Written only by the Stripe webhook; `amount`
+        /// stays the invoice portion, so balances never see it. Absent = no tip.
+        public var tipAmount: Decimal?
         public var preservation: Preservation
         public init(from decoder: Decoder) throws {
             var o = try ObjectReader(decoder); id = try o.required("id"); amount = try o.required("amount")
             date = try o.required("date"); method = try o.required("method"); note = try o.optional("note")
-            stripeSessionId = try o.optional("stripeSessionId"); voidedAt = try o.optional("voidedAt"); preservation = o.finish()
+            stripeSessionId = try o.optional("stripeSessionId"); voidedAt = try o.optional("voidedAt")
+            tipAmount = try o.optional("tipAmount"); preservation = o.finish()
         }
         public func encode(to encoder: Encoder) throws {
             var o = ObjectWriter(preservation); try o.put(id, for: "id"); try o.put(amount, for: "amount")
             try o.put(date, for: "date"); try o.put(method, for: "method"); try o.putOptional(note, for: "note")
             try o.putOptional(stripeSessionId, for: "stripeSessionId"); try o.putOptional(voidedAt, for: "voidedAt")
-            try o.encode(to: encoder)
+            try o.putOptional(tipAmount, for: "tipAmount"); try o.encode(to: encoder)
         }
     }
 
@@ -907,23 +1497,195 @@ public extension Canonical {
                 try o.put(enabled, for: "enabled"); try o.encode(to: encoder)
             }
         }
+        /// Phase 34: the owner's record of thanking the referrer for THIS
+        /// customer's referral (`NativeReferrals`). A record only: nothing is
+        /// ever sent or paid from it.
+        public struct ReferralReward: Codable {
+            /// `thank_you` · `gift_card` · `invoice_credit` · `other`.
+            public var kind: String
+            /// > 0; required for `invoice_credit`, absent for `thank_you`.
+            public var amount: Decimal?
+            public var note: String?
+            /// Local `YYYY-MM-DD`.
+            public var recordedOn: DateString
+            public var preservation: Preservation
+            public init(from decoder: Decoder) throws {
+                var o = try ObjectReader(decoder); kind = try o.required("kind"); amount = try o.optional("amount")
+                note = try o.optional("note"); recordedOn = try o.required("recordedOn"); preservation = o.finish()
+            }
+            public func encode(to encoder: Encoder) throws {
+                var o = ObjectWriter(preservation); try o.put(kind, for: "kind"); try o.putOptional(amount, for: "amount")
+                try o.putOptional(note, for: "note"); try o.put(recordedOn, for: "recordedOn"); try o.encode(to: encoder)
+            }
+        }
         public var id, name, email, phone, address, notes: String
         public var createdAt: DateString?
         public var portal: Portal?
         public var archivedAt: DateString?
         public var importBatchId: String?
+        /// Phase 27: how the customer first found the business (a preset key
+        /// or custom label, `NativeLeadSource`). Absent means Unknown.
+        public var leadSource: String?
+        /// Phase 34 (referrals, spec 2026-10-03-referral-program-design.md §2):
+        /// this customer's own 16-character code, codes inherited from
+        /// merged-away duplicates, who referred them (meaningful only while
+        /// `leadSource` is `referral`, invariant R1) and the reward record.
+        public var referralCode: String?
+        public var referralCodeAliases: [String]?
+        public var referredByCustomerId: String?
+        public var referralReward: ReferralReward?
+        /// Phase 21: the customer's service locations and their equipment
+        /// (spec `docs/superpowers/specs/2026-10-02-properties-equipment-design.md`
+        /// §2). Absent means one implicit primary property with no equipment;
+        /// when present it is non-empty with exactly one primary, whose
+        /// address is always `address` (never stored twice).
+        public var properties: [Property]?
+        /// Phase 33: 1–10 labels normalized by `NativeCustomerTags`, sorted by
+        /// key; absent when none.
+        public var tags: [String]?
+        /// Phase 33: the local `YYYY-MM-DD` the customer asked not to get
+        /// marketing; present means opted out (O1, `isMarketingOptedOut`).
+        public var marketingOptOutOn: String?
+        /// Phase 33: `asked`, `text_stop`, `email_reply` or `imported`.
+        public var marketingOptOutVia: String?
         public var preservation: Preservation
         public init(from decoder: Decoder) throws {
             var o = try ObjectReader(decoder); id = try o.required("id"); name = try o.required("name")
             email = try o.required("email"); phone = try o.required("phone"); address = try o.required("address")
             notes = try o.required("notes"); createdAt = try o.optional("createdAt"); portal = try o.optional("portal")
-            archivedAt = try o.optional("archivedAt"); importBatchId = try o.optional("importBatchId"); preservation = o.finish()
+            archivedAt = try o.optional("archivedAt"); importBatchId = try o.optional("importBatchId")
+            leadSource = try o.optional("leadSource"); referralCode = try o.optional("referralCode")
+            referralCodeAliases = try o.optional("referralCodeAliases"); referredByCustomerId = try o.optional("referredByCustomerId")
+            referralReward = try o.optional("referralReward"); properties = try o.optional("properties")
+            tags = try o.optional("tags")
+            marketingOptOutOn = try o.optional("marketingOptOutOn"); marketingOptOutVia = try o.optional("marketingOptOutVia")
+            preservation = o.finish()
         }
         public func encode(to encoder: Encoder) throws {
             var o = ObjectWriter(preservation); try o.put(id, for: "id"); try o.put(name, for: "name")
             try o.put(email, for: "email"); try o.put(phone, for: "phone"); try o.put(address, for: "address")
             try o.put(notes, for: "notes"); try o.putOptional(createdAt, for: "createdAt"); try o.putOptional(portal, for: "portal")
             try o.putOptional(archivedAt, for: "archivedAt"); try o.putOptional(importBatchId, for: "importBatchId")
+            try o.putOptional(leadSource, for: "leadSource"); try o.putOptional(referralCode, for: "referralCode")
+            try o.putOptional(referralCodeAliases, for: "referralCodeAliases")
+            try o.putOptional(referredByCustomerId, for: "referredByCustomerId")
+            try o.putOptional(referralReward, for: "referralReward"); try o.putOptional(properties, for: "properties")
+            try o.putOptional(tags, for: "tags")
+            try o.putOptional(marketingOptOutOn, for: "marketingOptOutOn"); try o.putOptional(marketingOptOutVia, for: "marketingOptOutVia")
+            try o.encode(to: encoder)
+        }
+    }
+
+    /// Phase 21: one service location of a customer, nested in the customer
+    /// blob (spec §1, D1). `id` is `pr<ms>_<base36>`, random, so it stays
+    /// unique when two customers merge. Invariants (P1, P2) are checked by
+    /// `NativePropertiesEquipment.validate`, never at decode: a blob that
+    /// breaks one still decodes, so a customers pull never fails over it.
+    struct Property: Codable, Equatable {
+        public var id: String
+        /// `true` on exactly one property; absent (never `false`) otherwise.
+        public var primary: Bool?
+        /// 0..40, e.g. "Home", "Rental on Elm".
+        public var label: String?
+        /// Required (1..300) for a non-primary property; never stored on the
+        /// primary, whose address is the customer's.
+        public var address: String?
+        /// 0..1000: gate code, dog, shutoff location.
+        public var notes: String?
+        /// 0..50 items, archived ones included.
+        public var equipment: [Equipment]?
+        /// Non-primary only.
+        public var archivedAt: DateString?
+        public var preservation: Preservation
+        public init(
+            id: String,
+            primary: Bool? = nil,
+            label: String? = nil,
+            address: String? = nil,
+            notes: String? = nil,
+            equipment: [Equipment]? = nil,
+            archivedAt: DateString? = nil,
+            preservation: Preservation = .init()
+        ) {
+            self.id = id
+            self.primary = primary
+            self.label = label
+            self.address = address
+            self.notes = notes
+            self.equipment = equipment
+            self.archivedAt = archivedAt
+            self.preservation = preservation
+        }
+        public init(from decoder: Decoder) throws {
+            var o = try ObjectReader(decoder)
+            id = try o.required("id"); primary = try o.optional("primary"); label = try o.optional("label")
+            address = try o.optional("address"); notes = try o.optional("notes")
+            equipment = try o.optional("equipment"); archivedAt = try o.optional("archivedAt")
+            preservation = o.finish()
+        }
+        public func encode(to encoder: Encoder) throws {
+            var o = ObjectWriter(preservation)
+            try o.put(id, for: "id"); try o.putOptional(primary, for: "primary"); try o.putOptional(label, for: "label")
+            try o.putOptional(address, for: "address"); try o.putOptional(notes, for: "notes")
+            try o.putOptional(equipment, for: "equipment"); try o.putOptional(archivedAt, for: "archivedAt")
+            try o.encode(to: encoder)
+        }
+    }
+
+    /// Phase 21: one piece of equipment at a property. `type` stays a raw
+    /// string (a preset key or a custom label, `NativePropertiesEquipment`)
+    /// so a type added by a newer client decodes and round-trips. Removed or
+    /// replaced equipment is archived, never dropped: it is the history.
+    struct Equipment: Codable, Equatable {
+        /// `eq<ms>_<base36>`.
+        public var id: String
+        /// A preset key or a custom label, 1..40.
+        public var type: String
+        /// 0..80 each.
+        public var make, model, serial: String?
+        /// `YYYY-MM-DD` local calendar dates.
+        public var installDate, warrantyExpires: DateString?
+        /// 0..500.
+        public var notes: String?
+        public var archivedAt: DateString?
+        public var preservation: Preservation
+        public init(
+            id: String,
+            type: String,
+            make: String? = nil,
+            model: String? = nil,
+            serial: String? = nil,
+            installDate: DateString? = nil,
+            warrantyExpires: DateString? = nil,
+            notes: String? = nil,
+            archivedAt: DateString? = nil,
+            preservation: Preservation = .init()
+        ) {
+            self.id = id
+            self.type = type
+            self.make = make
+            self.model = model
+            self.serial = serial
+            self.installDate = installDate
+            self.warrantyExpires = warrantyExpires
+            self.notes = notes
+            self.archivedAt = archivedAt
+            self.preservation = preservation
+        }
+        public init(from decoder: Decoder) throws {
+            var o = try ObjectReader(decoder)
+            id = try o.required("id"); type = try o.required("type")
+            make = try o.optional("make"); model = try o.optional("model"); serial = try o.optional("serial")
+            installDate = try o.optional("installDate"); warrantyExpires = try o.optional("warrantyExpires")
+            notes = try o.optional("notes"); archivedAt = try o.optional("archivedAt")
+            preservation = o.finish()
+        }
+        public func encode(to encoder: Encoder) throws {
+            var o = ObjectWriter(preservation)
+            try o.put(id, for: "id"); try o.put(type, for: "type")
+            try o.putOptional(make, for: "make"); try o.putOptional(model, for: "model"); try o.putOptional(serial, for: "serial")
+            try o.putOptional(installDate, for: "installDate"); try o.putOptional(warrantyExpires, for: "warrantyExpires")
+            try o.putOptional(notes, for: "notes"); try o.putOptional(archivedAt, for: "archivedAt")
             try o.encode(to: encoder)
         }
     }
@@ -1044,6 +1806,16 @@ public extension Canonical {
         public var manageToken: String?
         public var history: [BookingHistoryEntry]?
         public var source, sourceCustomerId, jobRef, portalKind, handledAt: String?
+        /// Phase 27: the booking link's `?src=` marketing tag, cleaned by the
+        /// Worker validator (never empty, at most 40 characters).
+        public var leadSource: String?
+        /// Phase 34: the booking link's `?r=` referral code, format-checked
+        /// and lowercased by the Worker (absent when unusable). The device
+        /// re-normalizes it at intake (`NativeReferrals.normalizeCode`).
+        public var referralCode: String?
+        /// Phase 33: the booking link's `?c=` campaign code (16 lowercase
+        /// Crockford base32 characters once the Worker format-checks it).
+        public var campaignCode: String?
         public var preservation: Preservation
         public init(from decoder: Decoder) throws {
             var o = try ObjectReader(decoder); id = try o.required("id"); status = try o.required("status")
@@ -1054,7 +1826,8 @@ public extension Canonical {
             kind = try o.optional("kind"); slot = try o.optional("slot"); manageToken = try o.optional("manageToken")
             history = try o.optional("history"); source = try o.optional("source"); sourceCustomerId = try o.optional("sourceCustomerId")
             jobRef = try o.optional("jobRef"); portalKind = try o.optional("portalKind"); handledAt = try o.optional("handledAt")
-            preservation = o.finish()
+            leadSource = try o.optional("leadSource"); referralCode = try o.optional("referralCode")
+            campaignCode = try o.optional("campaignCode"); preservation = o.finish()
         }
         public func encode(to encoder: Encoder) throws {
             var o = ObjectWriter(preservation); try o.put(id, for: "id"); try o.put(status, for: "status")
@@ -1066,8 +1839,270 @@ public extension Canonical {
             try o.putOptional(history, for: "history"); try o.putOptional(source, for: "source")
             try o.putOptional(sourceCustomerId, for: "sourceCustomerId"); try o.putOptional(jobRef, for: "jobRef")
             try o.putOptional(portalKind, for: "portalKind"); try o.putOptional(handledAt, for: "handledAt")
+            try o.putOptional(leadSource, for: "leadSource"); try o.putOptional(referralCode, for: "referralCode")
+            try o.putOptional(campaignCode, for: "campaignCode")
             try o.encode(to: encoder)
         }
+    }
+}
+
+// MARK: - Phase 33: past-customer campaigns
+//
+// Spec `docs/superpowers/specs/2026-10-03-campaigns-tags-design.md` §2. A row
+// of the synced `campaigns` collection. Enum-like values (`status`,
+// `channelPlan`, `service`, `channel`, …) stay raw strings so a value written
+// by a newer client decodes and round-trips here: a decode failure would fail
+// the whole `campaigns` pull. `NativeCampaignSegments` reads them through
+// typed accessors.
+public extension Canonical {
+    struct Campaign: Codable, Equatable {
+        /// Who the campaign is for (spec §5.1). Every list holds normalized
+        /// keys: tag keys (`NativeCustomerTags.key`), lead-source bucket keys.
+        public struct Segment: Codable, Equatable {
+            /// `any`, `served` or `neverServed`.
+            public var service: String
+            /// Inclusive whole local calendar months since the last service.
+            public var minMonthsSinceService, maxMonthsSinceService: Int?
+            public var jobKeywords, tagsAny, tagsNone, leadSources: [String]
+            /// `any`, `cameFromReferral` or `hasReferred`.
+            public var referral: String
+            public var excludeOpenWork, excludeMaintenancePlans: Bool
+            /// 0 turns the guard off.
+            public var excludeContactedWithinDays: Int
+            public var preservation: Preservation
+            public init(
+                service: String = "served",
+                minMonthsSinceService: Int? = nil,
+                maxMonthsSinceService: Int? = nil,
+                jobKeywords: [String] = [],
+                tagsAny: [String] = [],
+                tagsNone: [String] = [],
+                leadSources: [String] = [],
+                referral: String = "any",
+                excludeOpenWork: Bool = true,
+                excludeMaintenancePlans: Bool = true,
+                excludeContactedWithinDays: Int = 30,
+                preservation: Preservation = .init()
+            ) {
+                self.service = service
+                self.minMonthsSinceService = minMonthsSinceService
+                self.maxMonthsSinceService = maxMonthsSinceService
+                self.jobKeywords = jobKeywords
+                self.tagsAny = tagsAny
+                self.tagsNone = tagsNone
+                self.leadSources = leadSources
+                self.referral = referral
+                self.excludeOpenWork = excludeOpenWork
+                self.excludeMaintenancePlans = excludeMaintenancePlans
+                self.excludeContactedWithinDays = excludeContactedWithinDays
+                self.preservation = preservation
+            }
+            public init(from decoder: Decoder) throws {
+                var o = try ObjectReader(decoder)
+                service = try o.defaulted("service", to: "served")
+                minMonthsSinceService = try o.optional("minMonthsSinceService")
+                maxMonthsSinceService = try o.optional("maxMonthsSinceService")
+                jobKeywords = try o.defaulted("jobKeywords", to: []); tagsAny = try o.defaulted("tagsAny", to: [])
+                tagsNone = try o.defaulted("tagsNone", to: []); leadSources = try o.defaulted("leadSources", to: [])
+                referral = try o.defaulted("referral", to: "any")
+                excludeOpenWork = try o.defaulted("excludeOpenWork", to: true)
+                excludeMaintenancePlans = try o.defaulted("excludeMaintenancePlans", to: true)
+                excludeContactedWithinDays = try o.defaulted("excludeContactedWithinDays", to: 30)
+                preservation = o.finish()
+            }
+            public func encode(to encoder: Encoder) throws {
+                var o = ObjectWriter(preservation)
+                try o.putDefaulted(service, for: "service")
+                try o.putOptional(minMonthsSinceService, for: "minMonthsSinceService")
+                try o.putOptional(maxMonthsSinceService, for: "maxMonthsSinceService")
+                try o.putDefaulted(jobKeywords, for: "jobKeywords"); try o.putDefaulted(tagsAny, for: "tagsAny")
+                try o.putDefaulted(tagsNone, for: "tagsNone"); try o.putDefaulted(leadSources, for: "leadSources")
+                try o.putDefaulted(referral, for: "referral")
+                try o.putDefaulted(excludeOpenWork, for: "excludeOpenWork")
+                try o.putDefaulted(excludeMaintenancePlans, for: "excludeMaintenancePlans")
+                try o.putDefaulted(excludeContactedWithinDays, for: "excludeContactedWithinDays")
+                try o.encode(to: encoder)
+            }
+        }
+
+        /// The message templates (spec §6). Editable until `lockedAt` (C3).
+        public struct Message: Codable, Equatable {
+            /// `tune_up`, `check_in`, `offer`, `seasonal` or `custom`.
+            public var goal: String?
+            /// ≤ 500 characters: the only free text ever sent to the AI.
+            public var brief: String?
+            /// Text template with merge fields.
+            public var text: String?
+            public var emailSubject, emailBody: String?
+            public var aiDrafted: Bool?
+            /// ISO instant of the first sent recipient.
+            public var lockedAt: String?
+            public var preservation: Preservation
+            public init(
+                goal: String? = nil,
+                brief: String? = nil,
+                text: String? = nil,
+                emailSubject: String? = nil,
+                emailBody: String? = nil,
+                aiDrafted: Bool? = nil,
+                lockedAt: String? = nil,
+                preservation: Preservation = .init()
+            ) {
+                self.goal = goal
+                self.brief = brief
+                self.text = text
+                self.emailSubject = emailSubject
+                self.emailBody = emailBody
+                self.aiDrafted = aiDrafted
+                self.lockedAt = lockedAt
+                self.preservation = preservation
+            }
+            public init(from decoder: Decoder) throws {
+                var o = try ObjectReader(decoder)
+                goal = try o.optional("goal"); brief = try o.optional("brief"); text = try o.optional("text")
+                emailSubject = try o.optional("emailSubject"); emailBody = try o.optional("emailBody")
+                aiDrafted = try o.optional("aiDrafted"); lockedAt = try o.optional("lockedAt"); preservation = o.finish()
+            }
+            public func encode(to encoder: Encoder) throws {
+                var o = ObjectWriter(preservation)
+                try o.putOptional(goal, for: "goal"); try o.putOptional(brief, for: "brief"); try o.putOptional(text, for: "text")
+                try o.putOptional(emailSubject, for: "emailSubject"); try o.putOptional(emailBody, for: "emailBody")
+                try o.putOptional(aiDrafted, for: "aiDrafted"); try o.putOptional(lockedAt, for: "lockedAt")
+                try o.encode(to: encoder)
+            }
+        }
+
+        /// One frozen audience member. `name` is a display snapshot only; the
+        /// composer always uses the live customer's contact (spec §7.3).
+        public struct Recipient: Codable, Equatable {
+            public var customerId, name: String
+            /// `text` or `email`.
+            public var channel: String
+            /// `pending`, `sent`, `skipped` or `failed`.
+            public var status: String
+            /// `opted_out`, `archived`, `no_contact`, `deleted`, `owner` or `ended`.
+            public var skipReason: String?
+            public var sentAt: String?
+            /// Marked sent by hand (copy or URL-scheme fallback).
+            public var manual: Bool?
+            /// Local `YYYY-MM-DD`, owner-marked.
+            public var repliedOn: String?
+            public var preservation: Preservation
+            public init(
+                customerId: String,
+                name: String,
+                channel: String,
+                status: String = "pending",
+                skipReason: String? = nil,
+                sentAt: String? = nil,
+                manual: Bool? = nil,
+                repliedOn: String? = nil,
+                preservation: Preservation = .init()
+            ) {
+                self.customerId = customerId
+                self.name = name
+                self.channel = channel
+                self.status = status
+                self.skipReason = skipReason
+                self.sentAt = sentAt
+                self.manual = manual
+                self.repliedOn = repliedOn
+                self.preservation = preservation
+            }
+            public init(from decoder: Decoder) throws {
+                var o = try ObjectReader(decoder)
+                customerId = try o.required("customerId"); name = try o.defaulted("name", to: "")
+                channel = try o.required("channel"); status = try o.required("status")
+                skipReason = try o.optional("skipReason"); sentAt = try o.optional("sentAt")
+                manual = try o.optional("manual"); repliedOn = try o.optional("repliedOn"); preservation = o.finish()
+            }
+            public func encode(to encoder: Encoder) throws {
+                var o = ObjectWriter(preservation)
+                try o.put(customerId, for: "customerId"); try o.putDefaulted(name, for: "name")
+                try o.put(channel, for: "channel"); try o.put(status, for: "status")
+                try o.putOptional(skipReason, for: "skipReason"); try o.putOptional(sentAt, for: "sentAt")
+                try o.putOptional(manual, for: "manual"); try o.putOptional(repliedOn, for: "repliedOn")
+                try o.encode(to: encoder)
+            }
+        }
+
+        /// `cmp_` + lowercase UUID v4: the table's primary key is global
+        /// across accounts.
+        public var id: String
+        public var name: String
+        /// 16 lowercase Crockford base32 characters, for the booking link's `?c=`.
+        public var code: String
+        /// ISO instant.
+        public var createdAt: String
+        /// `draft`, `sending` or `done`.
+        public var status: String
+        public var segment: Segment
+        /// `text_first`, `email_first`, `text_only` or `email_only`.
+        public var channelPlan: String
+        public var message: Message
+        /// Local `YYYY-MM-DD` the audience was frozen.
+        public var frozenOn: String?
+        public var recipients: [Recipient]?
+        /// Customer ids the owner unticked in the preview.
+        public var manualExclusions: [String]?
+        public var endedAt: String?
+        public var preservation: Preservation
+        public init(
+            id: String,
+            name: String,
+            code: String,
+            createdAt: String,
+            status: String = "draft",
+            segment: Segment = .init(),
+            channelPlan: String = "text_first",
+            message: Message = .init(),
+            frozenOn: String? = nil,
+            recipients: [Recipient]? = nil,
+            manualExclusions: [String]? = nil,
+            endedAt: String? = nil,
+            preservation: Preservation = .init()
+        ) {
+            self.id = id
+            self.name = name
+            self.code = code
+            self.createdAt = createdAt
+            self.status = status
+            self.segment = segment
+            self.channelPlan = channelPlan
+            self.message = message
+            self.frozenOn = frozenOn
+            self.recipients = recipients
+            self.manualExclusions = manualExclusions
+            self.endedAt = endedAt
+            self.preservation = preservation
+        }
+        public init(from decoder: Decoder) throws {
+            var o = try ObjectReader(decoder)
+            id = try o.required("id"); name = try o.required("name"); code = try o.required("code")
+            createdAt = try o.required("createdAt"); status = try o.required("status")
+            segment = try o.defaulted("segment", to: Segment()); channelPlan = try o.defaulted("channelPlan", to: "text_first")
+            message = try o.defaulted("message", to: Message()); frozenOn = try o.optional("frozenOn")
+            recipients = try o.optional("recipients"); manualExclusions = try o.optional("manualExclusions")
+            endedAt = try o.optional("endedAt"); preservation = o.finish()
+        }
+        public func encode(to encoder: Encoder) throws {
+            var o = ObjectWriter(preservation)
+            try o.put(id, for: "id"); try o.put(name, for: "name"); try o.put(code, for: "code")
+            try o.put(createdAt, for: "createdAt"); try o.put(status, for: "status")
+            try o.putDefaulted(segment, for: "segment"); try o.putDefaulted(channelPlan, for: "channelPlan")
+            try o.putDefaulted(message, for: "message"); try o.putOptional(frozenOn, for: "frozenOn")
+            try o.putOptional(recipients, for: "recipients"); try o.putOptional(manualExclusions, for: "manualExclusions")
+            try o.putOptional(endedAt, for: "endedAt"); try o.encode(to: encoder)
+        }
+    }
+}
+
+public extension Canonical.Customer {
+    /// Phase 33 (O1): opted out of marketing exactly when `marketingOptOutOn`
+    /// is non-blank. Every campaign segment, the live pre-send check and the
+    /// `maintenance_due` insight honor it.
+    var isMarketingOptedOut: Bool {
+        !(marketingOptOutOn ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
 
@@ -1124,6 +2159,9 @@ public extension Canonical {
         public var nextDueDate: DateString
         public var isActive: Bool
         public var createdAt: DateString
+        /// Phase 21: the property every occurrence is at (copied onto each
+        /// generated job, spec §3).
+        public var propertyId: String?
         public var preservation: Preservation
         public init(from decoder: Decoder) throws {
             var o = try ObjectReader(decoder); id = try o.required("id"); customerId = try o.required("customerId")
@@ -1135,7 +2173,7 @@ public extension Canonical {
             endCondition = try o.required("endCondition"); endCount = try o.optional("endCount"); endDate = try o.optional("endDate")
             occurrenceCount = try o.required("occurrenceCount"); lastGeneratedDate = try o.optional("lastGeneratedDate")
             nextDueDate = try o.required("nextDueDate"); isActive = try o.required("isActive"); createdAt = try o.required("createdAt")
-            preservation = o.finish()
+            propertyId = try o.optional("propertyId"); preservation = o.finish()
         }
         public func encode(to encoder: Encoder) throws {
             var o = ObjectWriter(preservation); try o.put(id, for: "id"); try o.put(customerId, for: "customerId")
@@ -1147,7 +2185,7 @@ public extension Canonical {
             try o.put(endCondition, for: "endCondition"); try o.putOptional(endCount, for: "endCount"); try o.putOptional(endDate, for: "endDate")
             try o.put(occurrenceCount, for: "occurrenceCount"); try o.putOptional(lastGeneratedDate, for: "lastGeneratedDate")
             try o.put(nextDueDate, for: "nextDueDate"); try o.put(isActive, for: "isActive"); try o.put(createdAt, for: "createdAt")
-            try o.encode(to: encoder)
+            try o.putOptional(propertyId, for: "propertyId"); try o.encode(to: encoder)
         }
     }
 
@@ -1165,6 +2203,9 @@ public extension Canonical {
         public var isActive: Bool
         public var createdAt: DateString
         public var autoSendEnabled: Bool?
+        /// Phase 24 §3.2: the owner's per-plan "Offer autopay". Absent means
+        /// off. The Worker reads it at pay-view and charge time.
+        public var autopayEnabled: Bool?
         public var preservation: Preservation
         public init(from decoder: Decoder) throws {
             var o = try ObjectReader(decoder); id = try o.required("id"); customerId = try o.required("customerId")
@@ -1173,7 +2214,8 @@ public extension Canonical {
             endCount = try o.optional("endCount"); endDate = try o.optional("endDate"); occurrenceCount = try o.required("occurrenceCount")
             lastGeneratedDate = try o.optional("lastGeneratedDate"); nextDueDate = try o.required("nextDueDate")
             isActive = try o.required("isActive"); createdAt = try o.required("createdAt")
-            autoSendEnabled = try o.optional("autoSendEnabled"); preservation = o.finish()
+            autoSendEnabled = try o.optional("autoSendEnabled"); autopayEnabled = try o.optional("autopayEnabled")
+            preservation = o.finish()
         }
         public func encode(to encoder: Encoder) throws {
             var o = ObjectWriter(preservation); try o.put(id, for: "id"); try o.put(customerId, for: "customerId")
@@ -1182,7 +2224,8 @@ public extension Canonical {
             try o.putOptional(endCount, for: "endCount"); try o.putOptional(endDate, for: "endDate"); try o.put(occurrenceCount, for: "occurrenceCount")
             try o.putOptional(lastGeneratedDate, for: "lastGeneratedDate"); try o.put(nextDueDate, for: "nextDueDate")
             try o.put(isActive, for: "isActive"); try o.put(createdAt, for: "createdAt")
-            try o.putOptional(autoSendEnabled, for: "autoSendEnabled"); try o.encode(to: encoder)
+            try o.putOptional(autoSendEnabled, for: "autoSendEnabled"); try o.putOptional(autopayEnabled, for: "autopayEnabled")
+            try o.encode(to: encoder)
         }
     }
 
@@ -1286,6 +2329,16 @@ public extension Canonical {
         public var reviewRequestEnabled: Bool
         public var reviewRequestTemplate, googleReviewLink: String
         public var reviewRequestDelayHours: Int
+        /// Phase 32: integer 0…365. Absent = 30; 0 = estimates don't expire.
+        public var estimateValidityDays: Int?
+        /// Phase 28 (tips spec §2): "Let customers add a tip". Absent or false
+        /// = off. The Worker reads it at pay-view and checkout time.
+        public var tipsEnabled: Bool?
+        /// Phase 19 (spec §3.4, §3.7): the owner's own agreement terms
+        /// (≤ 4,000 characters; absent = none) and whether the signing page
+        /// offers the optional drawn signature (absent = on).
+        public var estimateTerms: String?
+        public var signatureDrawPad: Bool?
         public var preservation: Preservation
 
         public init(from decoder: Decoder) throws {
@@ -1317,6 +2370,9 @@ public extension Canonical {
             reviewRequestTemplate = try o.defaulted("reviewRequestTemplate", to: "")
             googleReviewLink = try o.defaulted("googleReviewLink", to: "")
             reviewRequestDelayHours = try o.defaulted("reviewRequestDelayHours", to: 3)
+            estimateValidityDays = try o.optional("estimateValidityDays")
+            tipsEnabled = try o.optional("tipsEnabled")
+            estimateTerms = try o.optional("estimateTerms"); signatureDrawPad = try o.optional("signatureDrawPad")
             preservation = o.finish()
         }
 
@@ -1345,6 +2401,9 @@ public extension Canonical {
             try o.putDefaulted(anthropicKey, for: "anthropicKey"); try o.putDefaulted(groqKey, for: "groqKey")
             try o.putDefaulted(reviewRequestEnabled, for: "reviewRequestEnabled"); try o.putDefaulted(reviewRequestTemplate, for: "reviewRequestTemplate")
             try o.putDefaulted(googleReviewLink, for: "googleReviewLink"); try o.putDefaulted(reviewRequestDelayHours, for: "reviewRequestDelayHours")
+            try o.putOptional(estimateValidityDays, for: "estimateValidityDays")
+            try o.putOptional(tipsEnabled, for: "tipsEnabled")
+            try o.putOptional(estimateTerms, for: "estimateTerms"); try o.putOptional(signatureDrawPad, for: "signatureDrawPad")
             try o.encode(to: encoder)
         }
     }
@@ -1461,5 +2520,77 @@ public extension Canonical {
             try o.put(estimateTotal, for: "estimateTotal"); try o.put(hasMaterials, for: "hasMaterials")
             try o.encode(to: encoder)
         }
+    }
+}
+
+// MARK: - Phase 25 quote-option accessors
+//
+// Dependency-free helpers only (field copies and lookups). Money arithmetic
+// lives in `UIModelAdapters.swift` and `NativeQuoteOptions.swift`, so the many
+// runners that compile this file alone never need anything else.
+
+public extension Canonical.QuoteOptions {
+    func tier(id: String) -> Canonical.QuoteTier? {
+        tiers.first { $0.id == id }
+    }
+
+    func addOn(id: String) -> Canonical.QuoteAddOn? {
+        addOns.first { $0.id == id }
+    }
+
+    /// The tier the job's top-level pricing mirrors: the accepted tier after
+    /// acceptance (invariant M2), the recommended tier before it (M1).
+    var mirroredTierId: String {
+        acceptance?.tierId ?? recommendedTierId
+    }
+
+    /// The accepted add-ons that still exist on the job, in `addOns` order.
+    /// Empty before acceptance.
+    var acceptedAddOns: [Canonical.QuoteAddOn] {
+        guard let acceptance else { return [] }
+        let accepted = Set(acceptance.addOnIds)
+        return addOns.filter { accepted.contains($0.id) }
+    }
+
+    /// Σ the owner's internal `cost` over the accepted add-ons that carry one.
+    var acceptedAddOnCost: Decimal {
+        acceptedAddOns.reduce(Decimal.zero) { $0 + ($1.cost ?? 0) }
+    }
+}
+
+public extension Canonical.QuoteTier {
+    /// A tier carrying `job`'s calculator-owned pricing and stored total.
+    /// Nested materials, costs and labor breakdown keep their own
+    /// preservation metadata; the tier itself starts clean.
+    init(id: String, name: String, description: String? = nil, pricingOf job: Canonical.Job) {
+        self.init(
+            id: id,
+            name: name,
+            description: description,
+            laborHours: job.laborHours,
+            laborBreakdown: job.laborBreakdown,
+            laborRate: job.laborRate,
+            materials: job.materials,
+            materialMarkup: job.materialMarkup,
+            jobCosts: job.jobCosts,
+            overhead: job.overhead,
+            margin: job.margin,
+            estimateTotal: job.estimateTotal
+        )
+    }
+}
+
+public extension Canonical.Job {
+    /// Copies the tier's calculator-owned fields onto the job. The job's
+    /// `estimateTotal` is left to the caller (M1 vs M2 differ).
+    mutating func applyCalculatorPricing(of tier: Canonical.QuoteTier) {
+        laborHours = tier.laborHours
+        laborBreakdown = tier.laborBreakdown
+        laborRate = tier.laborRate
+        materials = tier.materials
+        materialMarkup = tier.materialMarkup
+        jobCosts = tier.jobCosts
+        overhead = tier.overhead
+        margin = tier.margin
     }
 }

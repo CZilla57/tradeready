@@ -13,6 +13,8 @@
     "pricebook": [],
     "bookingRequests": [],
     "jobPhotos": [],
+    "forms": [],
+    "campaigns": [],
     "futurePayload": [1, null, "retained"]
   },
   "createdBy": "fixture",

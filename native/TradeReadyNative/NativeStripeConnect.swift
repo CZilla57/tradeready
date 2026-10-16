@@ -25,6 +25,12 @@ struct NativeStripeConnectStatus: Equatable {
     /// charges/payouts capability model; UI copy must not claim more.
     var detailsSubmitted: Bool
     var displayName: String?
+    /// Phase 18 (additive; `nil` from a Worker that predates the fields). Tap
+    /// to Pay needs card payments live on the account, so an unknown value is
+    /// never treated as enabled.
+    var chargesEnabled: Bool? = nil
+    /// Stripe's `account.capabilities.card_payments` (`active`, `pending`, ...).
+    var cardPaymentsCapability: String? = nil
 }
 
 protocol NativeStripeConnectHTTPDataLoading: Sendable {
@@ -41,10 +47,14 @@ struct NativeStripeConnectService: Sendable {
         var connected: Bool?
         var detailsSubmitted: Bool?
         var displayName: String?
+        var chargesEnabled: Bool?
+        var cardPaymentsCapability: String?
         enum CodingKeys: String, CodingKey {
             case connected
             case detailsSubmitted = "details_submitted"
             case displayName = "display_name"
+            case chargesEnabled = "charges_enabled"
+            case cardPaymentsCapability = "card_payments_capability"
         }
     }
     private struct OnboardingBody: Decodable {
@@ -85,7 +95,9 @@ struct NativeStripeConnectService: Sendable {
         return NativeStripeConnectStatus(
             connected: true,
             detailsSubmitted: body.detailsSubmitted ?? false,
-            displayName: body.displayName.flatMap { $0.isEmpty ? nil : $0 })
+            displayName: body.displayName.flatMap { $0.isEmpty ? nil : $0 },
+            chargesEnabled: body.chargesEnabled,
+            cardPaymentsCapability: body.cardPaymentsCapability.flatMap { $0.isEmpty ? nil : $0 })
     }
 
     /// Starts (or resumes) onboarding; the returned URL must be opened in the

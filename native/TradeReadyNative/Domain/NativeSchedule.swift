@@ -231,16 +231,23 @@ public enum NativeSchedule {
     /// Largest free gap inside [dayStart, dayEnd) on `date`. Advisory only:
     /// no buffer/blackout/workday filtering, nil on empty days, earlier equal
     /// gap wins. Label it a gap suggestion, never a guaranteed reservable slot.
-    public static func largestFreeGap<Job: ScheduleJobLike>(jobs: [Job], date: String, dayStart: String = "08:00", dayEnd: String = "17:00") -> FreeGap? {
+    /// Phase 26: `extraBusy` ([start, end) minutes on `date`, e.g. personal
+    /// calendar busy time) counts as occupied and makes the day non-empty;
+    /// the default (empty) keeps every existing result unchanged.
+    public static func largestFreeGap<Job: ScheduleJobLike>(jobs: [Job], date: String, dayStart: String = "08:00", dayEnd: String = "17:00", extraBusy: [(Int, Int)] = []) -> FreeGap? {
         guard let startMin = toMinutes(dayStart), let endMin = toMinutes(dayEnd) else { return nil }
         let dayJobs = jobs.filter {
             $0.scheduledDate == date && ($0.scheduledStartTime?.isEmpty == false) && !terminalStatuses.contains($0.status)
         }
-        if dayJobs.isEmpty { return nil }
+        if dayJobs.isEmpty && extraBusy.isEmpty { return nil }
         var busy: [(Int, Int)] = []
         for job in dayJobs {
             guard let jobStart = job.scheduledStartTime,
                   let (s, e) = blockWindow(start: jobStart, end: job.scheduledEndTime, laborHours: job.scheduleLaborHours) else { continue }
+            let clipped = (max(s, startMin), min(e, endMin))
+            if clipped.0 < clipped.1 { busy.append(clipped) }
+        }
+        for (s, e) in extraBusy {
             let clipped = (max(s, startMin), min(e, endMin))
             if clipped.0 < clipped.1 { busy.append(clipped) }
         }

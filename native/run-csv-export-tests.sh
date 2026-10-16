@@ -8,6 +8,7 @@ MODULE_CACHE="${TMPDIR:-/tmp}/tradeready-csv-export-module-cache"
 swiftc \
   -module-cache-path "$MODULE_CACHE" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/CanonicalModels.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeLeadSource.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/FinancialDomain.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeCashBasis.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/NativeCSVExport.swift" \

@@ -196,10 +196,19 @@ enum JobLifecycleRules {
         estimateTotal > 0 && (status == .lead || status == .estimateSent)
     }
 
+    /// The job status a customer's estimate decision moves it to. Forward
+    /// only: a lead or sent estimate goes to approved or declined, and a
+    /// declined estimate the customer then approves on the same link (the
+    /// Worker allows declined → approved; approved is terminal) goes to
+    /// approved. Every other status is left alone.
+    ///
+    /// Native-only (Phase 25 review, 2026-10-03): RN's `applyEstimateDecision`
+    /// leaves a declined job declined; native is the shipping client.
     static func statusAfterEstimateDecision(
         _ status: JobLifecycleStatus,
         decision: EstimateDecision
     ) -> JobLifecycleStatus {
+        if status == .declined, decision == .approved { return .estimateSent.next ?? status }
         guard status == .lead || status == .estimateSent else { return status }
         return decision == .approved ? (.estimateSent.next ?? status) : .declined
     }

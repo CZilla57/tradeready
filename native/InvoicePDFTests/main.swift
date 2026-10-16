@@ -58,5 +58,16 @@ let grouped = NativeInvoicePDFDocument(invoice: decodeInvoice("""
 expect(grouped.primaryLineItems.map(\.label) == ["Labor"], "labor grouping")
 expect(grouped.additionalLineItems.map(\.label) == ["Parts", "Trip"], "additional-charges grouping")
 
+// Phase 34 (spec 2026-10-03-referral-program-design.md §5.6): a referral
+// credit is a negative "Referral credit" line under Additional Charges, and
+// the total, paid-to-date and balance follow the lowered invoice amount.
+let credited = NativeInvoicePDFDocument(invoice: decodeInvoice("""
+{"id":"inv1756000000000","customer":"Sam","number":"INV-2","amount":975,"due":"2026-09-01","email":"","phone":"","desc":"","paid":false,"payments":[{"id":"p1","amount":475,"date":"2026-08-20","method":"cash"}],"lineItems":[{"description":"Labor","amount":1000,"category":"labor"},{"description":"Referral credit \u{2014} thank you!","amount":-25,"category":"referral_credit"}]}
+"""), settings: settings, now: renderNow)
+expect(credited.additionalLineItems.map(\.label) == ["Referral credit \u{2014} thank you!"]
+       && credited.additionalLineItems.first?.amount == -25, "a referral credit prints as a negative additional line")
+expect(credited.total == 975 && credited.paidToDate == 475 && credited.balance == 500 && credited.status == .partlyPaid,
+       "the credit lowers the total; payments and balance follow the lowered amount")
+
 print(failures == 0 ? "PASS: native invoice pdf tests" : "FAILED: \(failures) native invoice pdf test(s)")
 if failures != 0 { exit(1) }

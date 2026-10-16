@@ -307,6 +307,72 @@ private func testSnapshotStampsAndTaxPresence() {
     expectEqual(withoutTax.revenueThisMonth, 0, "the rest of the snapshot still renders")
 }
 
+// MARK: - Lead sources (Phase 27)
+
+private func testLeadSourceBlock() {
+    let invoices = [
+        invoice(#"{"id":"i1","customerId":"c1","customer":"Ada","amount":500,"payments":[{"id":"p1","amount":500,"date":"2026-02-10","method":"cash"}]}"#),
+        invoice(#"{"id":"i2","customerId":"c2","customer":"Bo","amount":300,"payments":[{"id":"p2","amount":300,"date":"2026-07-01","method":"cash"}]}"#),
+        // Last year: outside year to date.
+        invoice(#"{"id":"i3","customerId":"c1","customer":"Ada","amount":900,"payments":[{"id":"p3","amount":900,"date":"2025-12-30","method":"cash"}]}"#),
+        // Unattributable: Unknown, included because it collected money.
+        invoice(#"{"id":"i4","customer":"Walk-in","amount":40,"payments":[{"id":"p4","amount":40,"date":"2026-03-03","method":"cash"}]}"#),
+    ]
+    let jobs = [
+        job(#"{"id":"j1","customerId":"c1","status":"approved","estimateSentAt":"2026-01-20"}"#),
+        job(#"{"id":"j2","customerId":"c1","status":"declined","estimateSentAt":"2026-01-21"}"#),
+    ]
+    func make(_ customers: [Canonical.Customer]) -> NativeBusinessSnapshot {
+        NativeBusinessSnapshotEngine.make(
+            invoices: invoices, jobs: jobs, customers: customers, expenses: [], trips: [],
+            values: NativeTaxSettingsValues(), mileageRate: decimal("0.7"), now: july6
+        )
+    }
+
+    let unsourced = make([customer(#"{"id":"c1","name":"Ada"}"#), customer(#"{"id":"c2","name":"Bo"}"#)])
+    expectEqual(unsourced.leadSources, nil, "no customer has a source: the block is ABSENT, never zeroed")
+    expect(unsourced.tax != nil, "the tax block is unaffected")
+
+    let sourced = make([
+        customer(#"{"id":"c1","name":"Ada","leadSource":"google"}"#),
+        customer(#"{"id":"c2","name":"Bo","leadSource":"Word of mouth"}"#),
+    ])
+    expectEqual(sourced.leadSources, NativeLeadSourceSnapshotBlock(rows: [
+        NativeLeadSourceSnapshotRow(name: "Google", collected: 500, won: 1, sent: 2, closeRate: decimal("0.5")),
+        NativeLeadSourceSnapshotRow(name: "Referral / word of mouth", collected: 300, won: 0, sent: 0, closeRate: nil),
+        NativeLeadSourceSnapshotRow(name: "Unknown", collected: 40, won: 0, sent: 0, closeRate: nil),
+    ]), "year-to-date rows by collected, Unknown last; last year's payment excluded")
+    expectEqual(sourced.revenueThisMonth, unsourced.revenueThisMonth, "the aggregate is unchanged by sources")
+}
+
+// MARK: - Referrals (Phase 34)
+
+private func testReferralBlock() {
+    let invoices = [
+        invoice(#"{"id":"i1","customerId":"c_alex","customer":"Alex","amount":1800,"payments":[{"id":"p1","amount":1800,"date":"2026-03-10","method":"cash"}]}"#),
+        // Last year: outside year to date.
+        invoice(#"{"id":"i2","customerId":"c_alex","customer":"Alex","amount":700,"payments":[{"id":"p2","amount":700,"date":"2025-11-10","method":"cash"}]}"#),
+    ]
+    func make(_ customers: [Canonical.Customer]) -> NativeBusinessSnapshot {
+        NativeBusinessSnapshotEngine.make(
+            invoices: invoices, jobs: [], customers: customers, expenses: [], trips: [],
+            values: NativeTaxSettingsValues(), mileageRate: decimal("0.7"), now: july6
+        )
+    }
+    let noReferrer = make([customer(#"{"id":"c_alex","name":"Alex","leadSource":"referral"}"#)])
+    expectEqual(noReferrer.referrals, nil, "no customer has a referrer: the referral block is ABSENT, never zeroed")
+    let referred = make([
+        customer(#"{"id":"c_sam","name":"Sam Ortiz"}"#),
+        customer(#"{"id":"c_alex","name":"Alex","leadSource":"referral","referredByCustomerId":"c_sam","createdAt":"2026-02-01","referralReward":{"kind":"invoice_credit","amount":25,"recordedOn":"2026-04-01"}}"#),
+    ])
+    expectEqual(referred.referrals, NativeReferralSnapshotBlock(
+        newReferred: 1, collected: 1800,
+        topReferrers: [NativeReferralSnapshotRow(name: "Sam Ortiz", referred: 1, collected: 1800)],
+        rewardsRecorded: 1, rewardsAmount: 25
+    ), "year-to-date referral block; last year's payment excluded")
+    expectEqual(referred.leadSources?.rows.first?.collected, 1800, "the referral collected matches the lead-source referral row")
+}
+
 // MARK: - Runner
 
 testRevenueBuckets()
@@ -316,6 +382,8 @@ testTopCustomers()
 testEmptyInputs()
 testTaxBlock()
 testSnapshotStampsAndTaxPresence()
+testLeadSourceBlock()
+testReferralBlock()
 
 if failures == 0 {
     print("BusinessSnapshotTests: all checks passed")

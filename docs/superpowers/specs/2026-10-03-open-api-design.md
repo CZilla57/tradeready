@@ -1,0 +1,663 @@
+# Read-Only Open API (Roadmap Phase 23) — Design Spec
+
+**Date:** 2026-10-03
+**Status:** BUILT 2026-10-03; verified, reviewed and committed 2026-10-12 on local `feat/open-api`, stacked on `feat/calendar-sync`. Gate green on its own branch tip against the master baseline (accessibility-audit and layout-metrics fail on master too); Worker `npm test`, doc reference check and the Release compile pass. Fable reviews over seven rounds; the auth guard and HMAC self-verifying keys (`fix/open-api-guard`, final `0d173a8`) re-checked SOUND, residuals in §14.4a and §14.9. Owner must `wrangler secret put API_KEY_TAG_SECRET` before deploy. Nothing pushed, deployed or applied. Build record: §14.
+**Origin:** `docs/post-launch-feature-roadmap.md` Phase 23, build order #11
+**Builds on:** portal completion (`2026-08-07-portal-completion-design.md`: server-owned token table, allowlist assembly, access log), accountant package (`2026-08-07-accountant-package-design.md`: field mappings and the "no secrets, no paths" rule), the `updated_at` server-clock migration, the portal-admin RPC pattern
+**Build target:** the Worker, the native SwiftUI app, and one docs page in `CZilla57/tradeready-legal`. **No React Native changes. One migration file, which the owner applies. No deploys.**
+
+## 0. Preconditions verified against the repo
+
+`N/` means `native/TradeReadyNative/`.
+
+**Worker**
+- Routing is Hono with no global middleware. Each route owns its CORS, auth and rate limit (`backend-workers/src/index.js:16-18`). Routes use `app.all` with in-handler method checks (`:5-8`, `:61-104`). Anything unmatched is a JSON 404 (`:107`).
+- The only owner credential any route accepts is a Supabase session JWT, checked per route against `/auth/v1/user` (`backend-workers/src/routes/estimate/portalManage.js:20-34`, `backend-workers/src/routes/booking/mint.js:24-31`). Nothing accepts a long-lived owner credential, and nothing under `/v1/` exists.
+- Rate limiting is an in-memory sliding window per isolate (`backend-workers/lib/guards.js:4-14,19-40`). Durable caps exist only for AI usage and portal requests (`countTodayRequests`, `backend-workers/lib/estimate/portalRequestStore.js:74-85`).
+- **IP keying is spoofable.** `clientIp` takes the first `x-forwarded-for` entry before `cf-connecting-ip` (`backend-workers/src/appCors.js:33-37`). Cloudflare appends to an incoming `X-Forwarded-For` rather than replacing it, and `CF-Connecting-IP` is the single edge-observed client address ([Cloudflare HTTP headers](https://developers.cloudflare.com/fundamentals/reference/http-headers/)). A caller can therefore choose the first XFF entry. The API never keys a limit on IP and logs `cf-connecting-ip` only. Fixing the existing routes is out of scope here (§12).
+- **Capability-token precedent.** `portal_tokens` stores SHA-256 hashes only, and the raw token appears exactly once (`supabase/migrations/20260807_portal_tokens.sql:1-25`, `backend-workers/lib/estimate/portalTokenStore.js:1-14,26-28`). A known but revoked hash is a hard stop (`portalTokenStore.js:137-146`), and revocation is one-way (`:61-73`). Admin operations are one transactional RPC with an advisory lock and operation replay (`supabase/migrations/20260922_portal_token_admin.sql:9-21,34-56`).
+- **Security-log precedent.** `portal_access_log` stores an 8-character token prefix, never a token (`supabase/migrations/20260807_portal_access_log.sql:1-24`), written best-effort (`portalRequestStore.js:62-72`, `backend-workers/src/routes/estimate/portalView.js:72-73`).
+- **Allowlist precedent.** The portal builds explicit whitelisted objects, never a cleaned copy (`portalView.js:4-9`). `buildInvoices` (`backend-workers/lib/estimate/portalAssemble.js:144-178`) shows a payment link only when it is current and on an allowlisted host (`:149-160`, `backend-workers/lib/reminderEmail.js:27-37`). `__tests__/portalAssembleWorkers.test.js:86-98` pins exact keys.
+
+**Data**
+- Business data is blob rows `{id text primary key, user_id, data jsonb, updated_at, deleted}` (template `supabase/migrations/20260803_local_collections_sync.sql:18-24`). The dashboard-created core tables (jobs, invoices, customers, expenses, settings) are RLS owner-scoped (`supabase/migrations/verify/rls-policies-snapshot-2026-08.txt`). Mileage is the `trips` table (`20260803_local_collections_sync.sql:52-58`).
+- `updated_at` is stamped by the database clock on every insert and update of every sync table (`supabase/migrations/20260831_updated_at_server_authority.sql:55-68,85-90`). It is a valid keyset and change watermark.
+- Device deletes are soft `deleted = true` updates (`N/NativeSupabasePush.swift:458`), so tombstones exist for consumers.
+- Field inventory (`N/Domain/CanonicalModels.swift`): Job `:943-973`, Invoice `:1208-1226`, Payment `:1154-1161`, Customer `:1253-1275`, Expense `:1292-1302`, Trip `:1343-1352`, EstimateApproval `:672-679`, Settings `:1626-1655`. Fields that must never leave:
+  - Job: `notes`, `laborRate`, `laborHours`, `laborBreakdown`, `materials`, `materialMarkup`, `jobCosts`, `overhead`, `margin`, `timeSessions`, `photos` (local paths), `quoteOptions` (carries add-on `cost`, `:767`), and `approval.token` / `ip` / `userAgent`.
+  - Customer: `notes`, `portal.token`, `importBatchId`.
+  - Invoice: `autoEmailRequestedAt`, `importBatchId`, `paymentLinkAmount`.
+  - Expense: `notes`, `receiptUri` (a local path).
+  - Settings: everything except `businessName`. The blob carries `anthropicKey`, `groqKey`, `providerKey(s)`, `bookingLink.token` and `pushToken` (`:1635-1649`).
+- Later phases add more secrets to the same blobs, for example referral codes on the customer (`2026-10-03-referral-program-design.md` §2). Sanitizing a copy would leak each new one until someone remembered to strip it. An allowlist excludes them by default.
+- Payment `method` is a free string. RN's union is `stripe|cash|check|card|other` (`types/models.ts:436`). Native writes display strings and `bank_transfer` (`N/Models.swift:249-256`, `N/Domain/FinancialDomain.swift:342-344`). The accountant package derives the source from the id prefix (`N/Domain/NativeAccountingPackage.swift:70-74`).
+- PostgREST runs every GET and HEAD in a READ ONLY transaction ([PostgREST transactions](https://docs.postgrest.org/en/stable/references/transactions.html), "Access Mode"). Reads issued as PostgREST GETs cannot write, whatever key they carry.
+
+**Native**
+- Settings destinations are an enum plus grouped rows (`N/SettingsView.swift:4-8,43-63`).
+- `NativePortalAdministrationService` is the client pattern for a JWT-authed, server-owned capability manager, including operation ids and the refresh retry (`N/NativePortalAdministration.swift:115-186`).
+
+## 1. Recommendation
+
+Build it, as a small and boring v1:
+
+1. **Owner-issued API keys**, hashed at rest, scoped, expirable, and revocable on the next request. This mirrors `portal_tokens`. **No OAuth in v1**: there is no third-party app ecosystem to delegate to yet, and OAuth needs a consent screen, client registration and refresh tokens for no present user.
+2. **Seven read resources** (customers, jobs, estimates, invoices, payments, expenses, mileage) plus `/v1/account`. Each is an explicit allowlist built by one pure mapper per resource. The mappers are shared with Phase 17 if it is ever revived.
+3. **Incremental sync is the main use case.** Every list is keyset-paginated on the DB-clock `updated_at`, accepts `updated_since`, and returns tombstones for deleted records. That is exactly what Zapier-style polling and an accountant's sync job need.
+4. **Freshness honesty.** Every response carries `dataAsOf`, the newest server `updated_at` the owner has. The docs say plainly that the API shows the cloud copy as of the owning device's last sync.
+5. **Read-only as an invariant, enforced three ways:** GET-only routes, a data module that can only issue PostgREST GETs (READ ONLY transactions), and a test that fails on any non-GET to a business table.
+
+Key management lives in the app (Settings → API access). Documentation is a static page plus an OpenAPI document generated from the same field lists the mappers use.
+
+## 2. Auth and key lifecycle
+
+**Key format** (self-verifying since 2026-10-12, §14.4a #5): `trk_` + 107 base64url characters over 80 bytes, in this order:
+
+| Bytes | Content |
+|---|---|
+| 0–15 | The key's own `api_keys.id` (a UUID v4 the Worker draws from its CSPRNG at mint) |
+| 16–31 | The owner's auth user id |
+| 32–63 | 32 random bytes from the Worker's CSPRNG (256 bits) |
+| 64–79 | Tag: HMAC-SHA256 keyed with the Worker secret `API_KEY_TAG_SECRET`, over the domain string `tradeready-api-key-v1\0` followed by bytes 0–63, truncated to 128 bits |
+
+The Worker checks the tag (WebCrypto, constant-time compare, exactly one base64url spelling accepted) before it spends any rate budget or calls the database, so a forged, random or untagged key costs nothing. Without `API_KEY_TAG_SECRET` (or with one shorter than 44 characters, which is 32 bytes in base64; round 6) the API fails closed; there is no untagged key format. Whoever holds a key can read its key id and owner id from it; neither grants anything without the random part and a valid tag. The fixed prefix makes keys recognizable in logs and secret scanners. Display form is the first 12 characters (they come from the key id), for example `trk_Ab3dE9fQ…`. Changing `API_KEY_TAG_SECRET` invalidates every key.
+
+**At rest:** `key_hash = sha256(raw key)` hex, the `portal_tokens` choice. A key with a 256-bit random part cannot be brute-forced from its hash, so a slow KDF adds cost and no safety. The tag secret never reaches the database, and nothing is stored beyond the hash, the display prefix and the row id the key embeds. The raw key exists once, in the create or rotate response. It is **never** stored server-side (no replay table holds it, unlike `portal_operations`) and never stored on the device.
+
+**Presentation:** `Authorization: Bearer trk_…` only. Query-string keys are refused (`400 key_in_query`), because URLs land in logs and browser history.
+
+**Scopes:** `customers:read`, `jobs:read` (jobs and estimates), `invoices:read` (invoices and payments), `expenses:read`, `mileage:read`. `/v1/account` needs any scope. The UI offers presets: **Everything** (all five) and **Bookkeeping** (invoices, expenses, mileage, customers), plus custom toggles.
+
+**Lifecycle**
+| Action | Effect |
+|---|---|
+| Create | Name (≤ 40 characters), scopes, expiry (none / 90 days / 1 year; default 1 year). At most **5 live keys** per owner |
+| Rotate | One transaction: mint a replacement with the same name and scopes, and set the old key's `expires_at` to now + 24 hours (or now, if the owner picks "immediately"). The UI shows the grace window. A grace key behind the rotated key ends immediately, and at most 5 grace keys work at once (so at most 10 working keys in all) |
+| Revoke | Sets `revoked_at` (one-way, never cleared). Effective on the next request |
+| Expiry | Checked on every request. An expired key is a hard 401 |
+| Account deletion | `on delete cascade` from `auth.users`, so every key and log row goes with the account |
+
+**Resolution** (no I/O, then one round trip, §4 RPC): check the tag, then hash the presented key and look it up.
+- Bad, absent or non-canonical tag → 401 `invalid_key` from the Worker, with no RPC, no rate-budget token and no cache entry (§14.4a #5).
+- Unknown hash → 401 `invalid_key`. Nothing is logged against an owner, because there is none.
+- Known but revoked or expired → 401 `key_revoked` / `key_expired`, logged as `denied` against that key. The owner can then see that something is still calling with an old key.
+- Live → owner id, key id and scopes, with the rate-limit counters incremented in the same transaction.
+
+**Management endpoint:** `POST /api/api-keys/manage` with actions `list | create | rotate | revoke | activity`. It is JWT-authed with `appCors`, copying `portalManage.js`, and the per-user in-memory limit is 10/min. `create` and `rotate` take an `operationId` (UUID). A retried id returns the key's id and prefix with `409 already_completed` and **no** raw key, and the app tells the owner to revoke and recreate. That is the price of never storing the raw key, and it should be rare.
+
+**Threat model**
+| Threat | Control |
+|---|---|
+| Key leaked from a third-party tool | Scopes, expiry, instant revoke, "last used" and activity in-app, read-only blast radius |
+| Database dump | Hashes only. 256-bit keys are not reversible, and the tag secret is not in the database, so a dump cannot mint keys |
+| Tag secret leak | Forged keys become tag-valid and reach the authorize RPC again, bounded by the §14.4a token buckets. They still read nothing: the hash must match a stored row. Rotating `API_KEY_TAG_SECRET` invalidates every key |
+| Key in a browser page | No CORS headers on `/v1/*`, so browsers cannot read responses cross-origin. The docs say keys are server-to-server only |
+| Cross-tenant read | Every query goes through one builder that always adds `user_id=eq.<resolved owner>`. Route tests assert it on every fetch URL. Service-role reads are the same trust model the portal already uses |
+| Secret field exposure | Allowlist mappers with exact-key tests. New blob fields are invisible until added deliberately |
+| Writes through the API | GET-only router, GET-only data module (READ ONLY transactions), a test against non-GET business fetches, no write path in the code |
+| Credential stuffing | 256-bit keys behind a 128-bit HMAC tag that is checked before any database call (§14.4a #5), plus a per-isolate junk counter per client. These are load guards, not a security boundary |
+| Log leakage | Logs store the key id, never the key. Route templates are logged, never query values |
+
+## 3. Resources and public schemas
+
+Common rules:
+- Money is a JSON number rounded to cents, matching the portal (`portalAssemble.js:161-168`). The currency is always `"USD"` on `/v1/account`.
+- Business dates are the stored local `YYYY-MM-DD` strings, never shifted.
+- Server timestamps (`updatedAt`) are ISO-8601 UTC.
+- Ids are the stored text ids.
+- Absent optional values are `null`, never omitted, so every object has a fixed key set.
+- Archived records are included with `archivedAt` set. Deleted records appear only as tombstones (§5).
+
+| Resource | Source | Public fields (exact) |
+|---|---|---|
+| `GET /v1/account` | `settings.data.businessName` | `businessName, currency, dataAsOf, apiVersion, key: {id, name, prefix, scopes, expiresAt}` |
+| `customers` | `customers` | `id, name, email, phone, address, leadSource, createdAt, archivedAt, updatedAt` |
+| `jobs` | `jobs` | `id, customerId, customerName, title, description, status, scheduledDate, scheduledStartTime, scheduledEndTime, address, price, invoiceId, recurringJobId, estimateSentAt, createdAt, archivedAt, updatedAt` |
+| `estimates` | `jobs` with `approval` or `estimateSentAt` | `id` (the job id), `jobId, customerId, customerName, title, status, sentAt, validUntil, total, lineItems[{label, amount}], options: {tiers[{id, name, total}], addOns[{id, label, amount}], recommendedTierId} \| null, decision, decidedAt, signerName, selection: {tierId, tierName, addOnIds, total} \| null, updatedAt` |
+| `invoices` | `invoices` | `id, number, customerId, customerName, jobId, recurringInvoiceId, description, amount, amountPaid, balanceDue, status, issueDate, due, paid, paidAt, depositRequest: {amount, percent, requestedAt} \| null, lineItems[{description, category, amount}], payments[…payment fields…], paymentLinkUrl, updatedAt` |
+| `payments` | flattened from `invoices.data.payments` | `id, invoiceId, invoiceNumber, customerId, amount, date, method, source, voided, voidedAt, processorReference, updatedAt` |
+| `expenses` | `expenses` | `id, date, description, amount, category, categoryLabel, jobId, hasReceipt, createdAt, updatedAt` |
+| `mileage` | `trips` | `id, date, miles, odometerStart, odometerEnd, fromLabel, toLabel, fromJobId, toJobId, purpose, createdAt, updatedAt` |
+
+Derivations, all reusing existing math rather than re-deriving it:
+- **jobs.`price`** is `estimateTotal`, the customer-facing price. Labor, materials, markup, overhead and margin are never exposed.
+- **estimates** read only the frozen, customer-facing `approval.snapshot` and `approval.selection`, never `quoteOptions`, which carries internal costs.
+  - `status` is `draft | sent | approved | declined | expired`, using `NativeQuoteExpiry` semantics ported from the Worker's `snapshotExpiry` (`backend-workers/lib/estimate/estimateExpiry.js`).
+  - `decidedAt` is `approval.consentAt`. A manual owner decision has no `decidedAt`.
+  - `ip`, `userAgent`, `declineReason` and `token` are excluded. The decline reason is the customer's free text to the owner, so it stays out by default (§13 D7).
+- **invoices**
+  - `amountPaid`, `balanceDue` and `status` (`paid | partly_paid | unpaid`) come from `backend-workers/lib/paymentMath.js`, the byte-twin of the device ledger math, including the legacy fallback.
+  - `issueDate` uses the accountant package's id-timestamp rule, else `null`.
+  - `customerName` is `data.customer`.
+  - `email` and `phone` are **not** repeated on invoices. They live on `customers` under its own scope.
+  - `paymentLinkUrl` is shown only under the portal's current-balance and allowed-host gate (`portalAssemble.js:149-160`), else `null`.
+- **payments.`method`** is normalized to `stripe | cash | check | card | bank_transfer | other`, using the native display-string map. `source` is `device | stripe | legacy` (accountant-package rule). `processorReference` is `stripeSessionId` (or the Phase 18 payment intent id), else `null`. The payment `note` is excluded as an internal note (§13 D7).
+- **expenses.`categoryLabel`** comes from the shared category table, with an unknown id shown as "Other". `hasReceipt` means `receiptUri` is present; the path itself is never returned.
+
+The mapper lives in `backend-workers/lib/api/resources.js`. It exports `FIELDS[resource]` (ordered key lists) and `toPublic[resource](row)`. Tests assert `Object.keys(toPublic.x(row))` deep-equals `FIELDS.x` for fixture rows that carry **every** known blob field plus unknown junk.
+
+## 4. Storage (migration file `supabase/migrations/20261003_api_keys.sql`; the owner applies it)
+
+```sql
+create table public.api_keys (
+  id           uuid primary key default gen_random_uuid(),
+  user_id      uuid not null references auth.users(id) on delete cascade,
+  key_hash     text not null unique,          -- sha256 hex of the raw key
+  key_prefix   text not null,                 -- first 12 chars, display only
+  name         text not null check (char_length(name) between 1 and 40),
+  scopes       text[] not null,               -- subset of the five scopes
+  created_at   timestamptz not null default now(),
+  expires_at   timestamptz,
+  revoked_at   timestamptz,                   -- one-way
+  last_used_at timestamptz,
+  replaced_by  uuid references public.api_keys(id)
+);
+create index api_keys_owner_live on public.api_keys (user_id) where revoked_at is null;
+
+create table public.api_access_log (
+  id         bigint generated always as identity primary key,
+  user_id    uuid not null references auth.users(id) on delete cascade,
+  key_id     uuid not null references public.api_keys(id) on delete cascade,
+  event      text not null,     -- 'ok' | 'denied' | 'rate_limited' | 'error'
+  route      text not null,     -- template, e.g. '/v1/invoices/:id' — never query values
+  status     int  not null,
+  ip         text,              -- cf-connecting-ip only
+  created_at timestamptz not null default now()
+);
+create index api_access_log_owner_time on public.api_access_log (user_id, created_at desc);
+
+create table public.api_usage_counters (   -- durable per-key windows
+  key_id       uuid not null references public.api_keys(id) on delete cascade,
+  window_kind  text not null,              -- 'minute' | 'day'
+  window_start timestamptz not null,
+  hits         int not null default 0,
+  primary key (key_id, window_kind, window_start)
+);
+```
+
+- **RLS:**
+  - `api_keys`: an owner-read policy, which lets a future client read metadata. `key_hash` is a column-level `revoke` from `authenticated`.
+  - `api_access_log`: owner read.
+  - `api_usage_counters`: no client policy (deny-all, the `ai_usage_log` precedent).
+  - All writes are service-role only.
+- **RPC `api_key_authorize(p_key_hash, p_route, p_ip)`**, `security definer`, executable by `service_role` only. It does the following in one transaction:
+  - Look the key up.
+  - Refuse a revoked or expired key, logging `denied`.
+  - Upsert-increment the minute and day counters and refuse over-limit requests (`rate_limited`, with the reset time).
+  - Bump `last_used_at` at most once a minute.
+  - Return `{ok, userId, keyId, scopes, name, prefix, expiresAt}` or `{ok:false, error, retryAfter}`.
+  - Like the portal RPCs, a transport 404 means "not deployed", and the routes answer `503 unavailable` (fail closed).
+- **RPC `api_key_admin(p_user, p_action, …)`** does create, rotate and revoke under a per-owner advisory lock, enforcing the 5-live-key cap and the rotate-and-expire pairing. Row ownership is checked inside the function. Create and rotate insert the new row under `p_new_key_id`, the id the Worker embedded and tagged in the raw key (§2; added 2026-10-12, migration amended in place, still unapplied). It also refuses a create or rotate past 20 keys minted per owner in a rolling 24 hours (`mint_limit`, answered `429 rate_limited`; §14.4a #6).
+- **Retention:** the existing daily cron gains a delete of `api_access_log` rows older than 90 days and counter rows older than 2 days.
+- A verify script `supabase/migrations/verify/20261003_api_keys_verify.sql` follows the 2026-08 RLS snapshot pattern.
+
+## 5. Request contract
+
+- **Base:** `https://tradeready-backend.tradeready.workers.dev/v1/…` on the existing Worker, under a new `/v1/*` route group in `backend-workers/src/index.js`. A branded host such as `api.gettradereadyapp.com` is a later DNS change (§13 Q4). The docs name one base URL constant so a move is a docs edit.
+- **Methods:** `GET` only. Any other method returns `405 method_not_allowed` with `Allow: GET`. No `OPTIONS` and no CORS headers.
+- **Lists:** `GET /v1/{resource}?limit=&cursor=&updated_since=`.
+  - `limit` is 1–100 (default 50).
+  - Order is `(updated_at, id)` ascending, so the order is stable and append-friendly.
+  - `cursor` is an opaque base64url of `{u: updated_at, i: id, r: resource}`, HMAC-tagged with `API_CURSOR_SECRET`. A tampered or cross-resource cursor gets `400 invalid_cursor`.
+  - The PostgREST query is `or=(updated_at.gt.U,and(updated_at.eq.U,id.gt.I))&order=updated_at.asc,id.asc&limit=limit+1`.
+- **Response:** `{ data: [...], nextCursor: string|null, dataAsOf: string|null, nextUpdatedSince: string|null }`.
+  - `dataAsOf` is the newest `updated_at` across the owner's rows in that table, from one indexed `order=updated_at.desc&limit=1` read.
+  - `nextUpdatedSince` is the last row's `updated_at` minus 5 seconds. It is a safety overlap for transactions that commit out of clock order. Consumers upsert by `id`, so overlap duplicates are harmless, and the docs say so.
+- **Tombstones:** without `updated_since`, deleted rows are excluded. With it, rows deleted since then appear as `{id, deleted: true, updatedAt}`, so a syncing consumer learns about deletions.
+- **Single record:** `GET /v1/{resource}/{id}` returns `{data: {...}, dataAsOf}`. A deleted, missing or other-owner id is `404 not_found`, and the three are indistinguishable.
+- **Payments list:** pagination walks invoices by `(updated_at, id)`. One page holds the payments of up to `limit` invoices (so 0..n payments), and `nextCursor` continues. `updatedAt` on a payment is its invoice's. This is documented rather than hidden. `/v1/invoices` also embeds `payments`.
+- **Estimates list:** walks jobs with the PostgREST filter `or=(data->approval.not.is.null,data->>estimateSentAt.not.is.null)`. Same keyset.
+- **Unknown query parameters** get `400 invalid_parameter` naming the parameter, so a typo never silently returns everything.
+- **Errors** are `{ error: { code, message } }` with stable codes: `invalid_key`, `key_revoked`, `key_expired`, `key_in_query`, `insufficient_scope` (403), `not_found`, `invalid_parameter`, `invalid_cursor`, `method_not_allowed`, `rate_limited` (429 with `Retry-After`), `unavailable` (503), `not_configured` (503, `API_KEY_TAG_SECRET` unset; added 2026-10-12), `server_error` (500, no internals).
+- **Headers on every response:** `TradeReady-Api-Version: 2026-10-03`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, `Cache-Control: no-store`.
+
+## 6. Rate limits and cost
+
+| Layer | Limit | Mechanism |
+|---|---|---|
+| Per key, burst | 60 requests per minute | `api_key_authorize` minute counter (durable). A Cloudflare `[[ratelimits]]` binding (`period = 60`) can be added in front as a cheap first layer. It is per-location and eventually consistent by design ([Workers rate limiting](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/)), so it is never the only layer |
+| Per key, daily | 5,000 requests per day (UTC) | Day counter in the same RPC |
+| Per owner, daily | 10,000 across all keys | The RPC sums the owner's day counters |
+| Forged, random or untagged keys | 0 RPCs, 0 tokens | HMAC tag checked before the guard (§14.4a #5) |
+| Junk requests per client | 20 per minute per isolate | In-memory counter per client (IPv4 address or IPv6 /64 from `cf-connecting-ip`). 429s only requests without a tag-valid key: missing, malformed or forged (§14.4a #1, #5) |
+| Authorize RPCs for tag-valid keys not seen recently | 10 per minute per client, 10 per minute per owner (from the key's tag), and per isolate 60 shared plus a 240 reserve that only an owner holding no token may draw on (300 hard), taken before the RPC; refunded only for live keys | In-memory token buckets; at most 4 RPCs in flight per key hash; a key that authorized on the isolate in the last hour bypasses the buckets but not the in-flight cap (§14.4a #1, #5) |
+| Denied / over-limit key hash | Unknown, revoked and expired hashes answered from memory for the key's life (at most 100 per owner, 10,000 in all); over-limit until reset | In-memory, keyed on sha256 of the presented key (§14.4a #1, #2, #5, #6) |
+| Keys minted | 20 per owner per rolling 24 hours (create + rotate) | Durable, `api_key_admin` (§14.4a #6) |
+
+Each request costs one RPC plus one or two PostgREST GETs. A key polling every 15 minutes across seven resources is under 700 requests a day. List responses select only `id,updated_at,deleted,data` and are capped at 100 rows.
+
+## 7. Versioning
+
+- **The path is the major version.** Within `/v1`, changes are additive only: new resources, new fields and new enum values. Docs warn consumers to tolerate unknown enum values.
+- **Breaking changes** ship as `/v2` with at least 6 months of overlap. `/v1` responses then carry `Deprecation` and `Sunset` headers.
+- **The `TradeReady-Api-Version` header** carries the date of the last additive change, for consumers who log it.
+- **Field lists are frozen by tests.** Adding a field means editing `FIELDS`, the OpenAPI document and the docs changelog in the same change.
+- **Planned additive follow-ups** (not v1): Phase 28 `tipAmount` on payments, Phase 21 `properties` and equipment as their own resource, Phase 20 forms. Each needs its own allowlist entry. None leaks before then.
+
+## 8. Docs
+
+- `tradeready-legal/developers.html` covers getting a key (Settings → API access), auth, scopes, the base URL, pagination and incremental sync (with a worked `updated_since` loop), tombstones, freshness (`dataAsOf`, last-sync caveat), rate limits, errors, versioning, a per-resource field table, curl examples and a changelog. Keys are server-to-server only, and every example uses a placeholder key.
+- `GET /v1/openapi.json` (no auth, cacheable) is an OpenAPI 3.1 document built at module load from `FIELDS` and the route table, so it cannot drift from the mappers. A test asserts every route and every field is documented.
+- Zapier: the docs show the generic "API request" or webhooks-style polling setup. A listed Zapier app is a partner registration, out of scope (§12).
+
+## 9. Native (Settings → API access)
+
+- New `SettingsDestination.apiAccess` and a row in the "APP" group ("API access", "Connect other tools to read your data").
+- `N/NativeAPIKeyAdministration.swift` copies the `NativePortalAdministrationService` shape: endpoint allowlist, JWT bearer, refresh-and-retry once, operation ids, and typed errors. It holds no state; the server is the authority.
+- **`NativeAPIAccessView`**
+  - Lists keys: name, prefix, scopes, created date, "Last used …" (or "Never"), and expiry or "Revoked".
+  - "Create key" sheet: name, preset or custom scopes, expiry.
+  - Show-once sheet: the key in monospace, a Copy button that writes to `UIPasteboard` with `localOnly` and a 2-minute expiration, "I've saved it", and the line "TradeReady can't show this key again."
+  - Rotate (with grace choice) and Revoke (destructive confirmation). Recent activity shows the last 50 log rows (time, route, status).
+  - The freshness note reads: "Other tools see your data as of your phone's last sync."
+  - A link opens `developers.html`.
+- Offline or signed-out: the page shows the cloud-required empty state used by booking settings. Nothing is cached or synced, and the settings blob gains no field.
+- Analytics: `api_key_created` and `api_key_revoked` with scope count only. This needs the catalog entry, mirroring `NativeAnalyticsEvents`.
+
+## 10. Testing
+
+- **Worker unit tests** (`node --test`, new `backend-workers/tests/apiResources.test.cjs` and `apiAuth.test.cjs`):
+  - Mapper exact keys for every resource, using fixtures that carry every canonical field plus `referralCode`, `anthropicKey`, `portal`, `approval.token`, `ip`, `userAgent` and junk keys. None of these appear in output.
+  - Money rounding, ledger math parity with `paymentMath.js` (legacy fallback, voids, overpaid), the payment-link gate, method normalization, the estimate status table including expiry in the owner's zone, and tombstone shape.
+  - Cursor round-trip, tamper rejection, cross-resource rejection, `limit + 1` page detection, and the `nextUpdatedSince` overlap.
+  - Key parsing: prefix, length, query-string refusal; tag minting and verification (§14.4a #5).
+- **Route tests** (root Jest under `TZ=America/Phoenix`, `__tests__/openApiWorkers.test.js`, stubbed fetch):
+  - Every Supabase URL carries `user_id=eq.<owner>`.
+  - **No non-GET reaches `jobs|invoices|customers|expenses|trips|settings`**. The only POSTs allowed are the authorize RPC and the log insert.
+  - `405` for POST, PUT, PATCH and DELETE on every `/v1` path.
+  - Scope 403s. Revoked and expired keys give 401 and a `denied` log. 429 with headers. RPC 404 gives 503 (fail closed).
+  - Unknown parameters give 400. Responses carry no CORS headers.
+  - A key never appears in any `console.*` call or log body (spy assertion).
+- **Manage route:** create, rotate, revoke and list, the 5-key cap, operation replay with no raw key, JWT failure, and a rotate that expires the old key after the grace window.
+- **SQL verify script:** RLS on all three tables, no client policy on counters, function `EXECUTE` revoked from `anon` and `authenticated`, and counter increments under concurrent calls (deferred to a staging database like the portal-admin proof).
+- **Native** (`run-api-access-tests.sh`, registered in `run-all-domain-tests.sh`): service request shaping, endpoint allowlist, error mapping, operation-id reuse on retry, and the show-once view model clearing the key on dismiss.
+- **OpenAPI:** every route and field is present, and the document parses.
+- **Gates:** `sh native/run-all-domain-tests.sh`, the Release compile, `cd backend-workers && npm test`, the targeted root Jest files under `TZ=America/Phoenix`, and `sh native/run-doc-reference-check.sh`.
+
+## 11. Rollout order and stages
+
+| Stage | Contents | Gate |
+|---|---|---|
+| A — buildable now | Mappers, cursor, route group, auth module (against the RPC contract, fake in tests), manage route, all tests | Green gates. Nothing deployed |
+| B — migration | `20261003_api_keys.sql` plus its verify script, written in the repo | **Owner applies** it (staging first if one exists) |
+| C — native | Settings → API access, behind `apiAccessEnabled`, which defaults to off until the Worker is deployed | Green gates, simulator smoke against staging |
+| D — docs | `developers.html` and the privacy and terms wording (§13 Q2, Q3), on a `tradeready-legal` branch | **Owner approves** the wording before publishing |
+| E — ship | Owner deploys the Worker, publishes the page, ships the native build | Device smoke: create, call, rotate, revoke |
+
+Rollback: unroute `/v1/*`, or revoke every key with one `update`. The tables can stay.
+
+## 12. Accepted residuals
+
+- The API is only as fresh as the owner's last device sync. Mitigated by `dataAsOf` and the docs, not solved.
+- Service-role reads put tenant isolation in Worker code (one query builder plus tests), the same model as the portal. A defense-in-depth option is to run reads as the owner through RLS with a minted short-lived JWT. That needs the Supabase JWT signing secret as a new Worker secret, so it is deferred.
+- `nextUpdatedSince` uses a 5-second overlap. A transaction open longer than that between its `now()` and its commit could still be missed by a watermark consumer. That is very unlikely for sync upserts, and it is documented.
+- The existing `clientIp` XFF-first spoofability affects every IP-keyed limit and the estimate consent record (see the Phase 19 spec §0). It is flagged here and not fixed. Phase 19 fixes the consent path.
+- No write API, webhooks or listed Zapier app.
+- There is no sub-account or "accountant" identity. Whoever holds a key reads with that key's scopes.
+
+## 13. Decisions
+
+**Decided (recommendations; owner may override)**
+| # | Decision | Choice |
+|---|---|---|
+| D1 | Auth | Owner API keys (`trk_`, 256-bit random part, HMAC-tagged so they self-verify, §14.4a #5), SHA-256 at rest, shown once. No OAuth in v1 |
+| D2 | Scopes | Five read scopes plus Everything and Bookkeeping presets |
+| D3 | Key limits | 5 live keys per owner. Expiry none, 90 days or 1 year (default 1 year). Rotate keeps a 24-hour grace by default |
+| D4 | Lost create response | No raw-key replay. Revoke and recreate |
+| D5 | Read-only enforcement | GET-only routes, a GET-only data module (PostgREST READ ONLY), and a non-GET test |
+| D6 | Pagination | Keyset on DB-clock `updated_at, id`; `updated_since`; tombstones; HMAC-tagged cursor |
+| D7 | Excluded by default | All internal notes (job, customer, expense, payment `note`), decline reasons, consent IP and user agent, every cost or margin input, local paths, tokens and codes |
+| D8 | Money format | JSON numbers rounded to cents (portal parity) |
+| D9 | Browser use | No CORS. Server-to-server only |
+| D10 | Rate limits | 60/min and 5,000/day per key, 10,000/day per owner, durable via RPC |
+| D11 | Audit log | `api_access_log` (key id, route template, status, `cf-connecting-ip`), owner-readable in the app, 90-day retention |
+| D12 | Versioning | `/v1` additive-only, `/v2` with at least 6 months of overlap, a version-date header |
+| D13 | Docs | `developers.html` plus a generated `/v1/openapi.json` |
+| D14 | Settings blob | Unchanged. Keys are server-authority only |
+
+**NEEDS OWNER APPROVAL**
+| # | Item | Question | Recommendation |
+|---|---|---|---|
+| Q1 | Migration `20261003_api_keys.sql` | May we write this migration (three tables and two `security definer` RPCs) for you to apply before the Worker deploy? | **Yes.** It is additive only, with no change to existing tables, and the routes fail closed (503) until it is applied |
+| Q2 | Privacy policy | Add to `privacy.html` §1/§5: "If you create an API key, services you give it to can read the data types you chose. We log each API request (time, key, endpoint, IP address) for 90 days for security." Approve this wording? | **Yes**, before the docs page is published |
+| Q3 | Terms | Add a short "API access" section to `terms.html`: read-only, the owner is responsible for where keys go, limits may change, access may be suspended for abuse, no uptime warranty. Approve this wording? | **Yes**, a short paragraph next to §7 "Your Data" |
+| Q4 | Base URL | Ship v1 on the existing `*.workers.dev` host, or add a Cloudflare custom domain `api.gettradereadyapp.com` first (a DNS change)? | **workers.dev for v1.** Add the branded host later as an alias; the docs use one base-URL constant |
+| Q5 | Privacy label | Confirm no App Store privacy-label change. The app collects no new data types; API access logs are server-side security logs of owner-initiated third-party requests | **No label change.** Re-check if the log ever feeds analytics |
+| Q6 | Subscription gating | Should keys stop working when the subscription lapses? Server-side entitlement enforcement is a deferred decision today (`backend-workers/lib/guards.js:12-14`) | **Not in v1.** Revisit with the general entitlement-enforcement decision |
+| Q7 | Optional Cloudflare `[[ratelimits]]` binding | Add it to `wrangler.toml` as a first-layer burst limiter (config only, no new service)? | **Optional.** The durable RPC counters are sufficient alone. Add it only if request volume ever makes the RPC the bottleneck |
+
+## 14. Build record (2026-10-03)
+
+### Worker and pages
+
+#### 14.1 App-facing contract (settled; the native Settings → API access screen builds against this)
+
+`POST /api/api-keys/manage` on the existing Worker (`BuildEnvironment.endpoint("api/api-keys/manage", sendsUserData: true)`).
+
+- Headers: `Authorization: Bearer <Supabase access token>`, `Content-Type: application/json`. CORS is `appCors` (`POST, OPTIONS`); `OPTIONS` answers 200 with an empty body.
+- Every error body is `{"error": "<code>"}`, sometimes with extra keys listed below. Codes are stable.
+
+| Status | `error` | When |
+|---|---|---|
+| 405 | `method_not_allowed` | Any method other than POST/OPTIONS |
+| 401 | `unauthorized` | Missing bearer, or `/auth/v1/user` rejects it. Refresh the session once and retry (portal-admin convention) |
+| 429 | `rate_limited` | More than 10 calls per minute for this user (per isolate), or (`create`/`rotate`) more than 20 keys minted for this owner in the last 24 hours (durable, in `api_key_admin`; round 6, §14.4a #6) |
+| 400 | `invalid_request` | Unknown action, malformed field, bad UUID, bad name/scopes/expiry/grace |
+| 404 | `not_found` | `keyId` unknown, another owner's, or (rotate only) revoked, expired or already rotated |
+| 409 | `key_limit` | `create` when 5 live keys exist. Extra: `"maxLiveKeys": 5` |
+| 409 | `already_completed` | `create`/`rotate` replayed with an `operationId` that already committed. Extra: `"key": {"id": "<uuid>", "prefix": "trk_XXXXXXXX"}`. **No secret.** The app tells the owner to revoke that key and create a new one |
+| 409 | `operation_conflict` | Same `operationId` sent with a different request |
+| 503 | `unavailable` | The migration is not applied yet (RPC transport 404), or (`create`/`rotate` only) `API_KEY_TAG_SECRET` is unset, so no key can be minted (2026-10-12). Fail closed |
+| 500 | `server_error` | Anything else. No internals in the body |
+
+`KeySummary` (every action that returns a key uses this exact object; all keys always present):
+
+```json
+{
+  "id": "6f1c…uuid",
+  "name": "QuickBooks sync",
+  "prefix": "trk_Ab3dE9fQ",
+  "scopes": ["customers:read", "invoices:read"],
+  "createdAt": "2026-10-03T17:00:00.000Z",
+  "expiresAt": "2027-10-03T17:00:00.000Z",
+  "revokedAt": null,
+  "lastUsedAt": null,
+  "replacedBy": null,
+  "status": "active"
+}
+```
+
+- Timestamps are ISO-8601 UTC strings or `null`. `expiresAt: null` means "never expires".
+- `status` is computed by the server at response time: `revoked` (revokedAt set) → `expired` (expiresAt ≤ now) → `expiring` (replacedBy set: the old key in a rotation grace window, still working until `expiresAt`) → `active`.
+- `scopes` are always in canonical order: `customers:read`, `jobs:read`, `invoices:read`, `expenses:read`, `mileage:read`. Presets: **Everything** = all five; **Bookkeeping** = `customers:read`, `invoices:read`, `expenses:read`, `mileage:read`.
+
+Actions (request → 200 response):
+
+| Action | Request body | 200 body |
+|---|---|---|
+| `list` | `{"action":"list"}` | `{"ok":true,"keys":[KeySummary…],"liveCount":2,"maxLiveKeys":5}`. Newest first: every non-revoked unexpired key plus the 50 most recent keys overall. `liveCount` counts `active` keys (the cap; `expiring` keys don't count) |
+| `create` | `{"action":"create","operationId":"<UUID v4>","name":"QuickBooks sync","scopes":["invoices:read"],"expiry":"1y"}` | `{"ok":true,"key":KeySummary,"secret":"trk_<107 chars>"}` |
+| `rotate` | `{"action":"rotate","operationId":"<UUID v4>","keyId":"<uuid>","grace":"24h"}` | `{"ok":true,"key":KeySummary,"secret":"trk_<107 chars>","previous":KeySummary}` |
+| `revoke` | `{"action":"revoke","keyId":"<uuid>"}` | `{"ok":true,"key":KeySummary}`. Idempotent: revoking a revoked key returns it unchanged |
+| `activity` | `{"action":"activity"}` or `{"action":"activity","keyId":"<uuid>"}` | `{"ok":true,"events":[{"at":"…Z","keyId":"<uuid>","event":"ok","route":"/v1/invoices","status":200,"ip":"203.0.113.9"}]}`. Newest first, at most 50. `event` is `ok`, `denied`, `rate_limited` or `error`; `route` is a template such as `/v1/invoices/:id`, never query values |
+
+Field rules:
+- `operationId`: required for `create` and `rotate`, a UUID v4 (any case). Reuse the same id when retrying the same request after a lost response.
+- `name`: string, trimmed by the server, 1–40 characters, no control characters.
+- `scopes`: non-empty array of the five scope strings. Duplicates are collapsed.
+- `expiry`: `"1y"` (default when absent), `"90d"` or `"none"`. The server computes `expiresAt` from its own clock.
+- `grace`: `"24h"` (default when absent) or `"immediate"`. The new key gets the old key's name and scopes and a fresh expiry from the old key's expiry choice (none stays none; otherwise the old key's original lifetime, 90 days or 1 year, from now). The old key's `expiresAt` becomes now + 24 h (or now) and its `replacedBy` is the new key's id.
+- `secret` appears only in a `create` or `rotate` 200 body, exactly once. It is never stored server-side and the app must never persist it. Its shape is `trk_` + 107 base64url characters (§2; 43 before 2026-10-12); the app checks the shape only, never the tag.
+- Live-key cap: 5 keys with status `active`. `expiring` keys (rotation grace) don't count, so a rotate never fails on the cap.
+
+The public `/v1` contract is §5 as built, plus the decisions in 14.4. The app never calls `/v1`.
+
+#### 14.2 What was built, by file
+
+Worker (`backend-workers/`):
+- `lib/api/keys.js`: key format (`trk_` + 107 base64url chars: key id, owner id, 32 CSPRNG bytes and a 128-bit HMAC tag; §2, §14.4a #5), tag minting and verification (WebCrypto, per-isolate CryptoKey cache), `tagSecretFrom`, sha256 hashing, 12-character display prefix, Bearer parsing, key-in-query detection, the five scopes and two presets, resource→scope map, name/scope normalization, limits (5 live keys, expiry `1y`/`90d`/`none`, grace `24h`/`immediate`).
+- `lib/api/resources.js`: `SCHEMA` (OpenAPI 3.1 JSON Schema per resource), `FIELDS` (derived from `SCHEMA`), and one allowlist mapper per resource built key by key (`toPublic.*`), the estimate status table, ledger math via `lib/paymentMath.js`, the portal's payment-link gate and estimate total (both parity-tested against `lib/estimate/portalAssemble.js`), method/source normalization, the accountant issue-date rule, expense category labels, tombstones and the resource registry.
+- `lib/api/cursor.js`: HMAC-SHA256-tagged keyset cursor `{u, i, r}` with tamper and cross-resource rejection.
+- `lib/api/store.js`: the GET-only data module. One builder (`ownerQuery`) always adds `user_id=eq.<owner>` and refuses a non-UUID owner; one `fetch` call hard-wired to `GET`.
+- `lib/api/auth.js`: `authorizeKey` (the `api_key_authorize` RPC; 404 → unavailable), `logApiRequest` (best-effort `api_access_log` insert), the in-memory request guard `createApiGuard` and its `GUARD_LIMITS` (§14.4a).
+- `lib/api/v1.js`: `handleV1`, the whole request contract (routing, GET-only, key-in-query, auth, scopes, parameters, keyset pages, tombstones, `dataAsOf`, `nextUpdatedSince`, headers, error vocabulary) and the route table.
+- `lib/api/openapi.js`: the OpenAPI 3.1 document, built once from `SCHEMA`/`FIELDS`/`ROUTES`; `API_BASE_URL` is the single base-URL constant.
+- `lib/api/keyAdmin.js`: `apiKeysManageCore` for list/create/rotate/revoke/activity against the `api_key_admin` RPC and owner-scoped REST reads.
+- `lib/api/retention.js`: `pruneApiLogs` (log rows > 90 days, counter rows > 2 days).
+- `src/routes/api/v1.js`: Hono shell for `/v1` and `/v1/*` (no CORS; caller IP from `cf-connecting-ip` only).
+- `src/routes/api/keysManage.js`: Hono shell for `POST /api/api-keys/manage` (appCors, Supabase JWT, 10/min per user, CSPRNG bytes).
+- `src/index.js`: routes `/v1`, `/v1/*` and `/api/api-keys/manage`; the daily 15:00 UTC cron branch also runs `pruneApiLogs`.
+- `wrangler.toml` (comment only) and `.dev.vars.example`: the new `API_CURSOR_SECRET`.
+
+Database (written, not applied):
+- `supabase/migrations/20261003_api_keys.sql`: `api_keys`, `api_access_log`, `api_usage_counters`, RLS and grants, `api_key_authorize`, `api_key_admin`, and the `api_key_public` projection.
+- `supabase/migrations/verify/20261003_api_keys_verify.sql`: read-only, self-checking hosted-project verification (RLS-snapshot pattern).
+- `supabase/verify/local/api_keys.sh`: throwaway-local-PostgreSQL proof (same harness as `supabase/verify/local/run.sh`), including the concurrent counter check.
+
+Tests: `backend-workers/tests/apiResources.test.cjs`, `backend-workers/tests/apiAuth.test.cjs`, `backend-workers/tests/apiKeysManage.test.cjs`, `__tests__/openApiWorkers.test.js`; `docs/native-fixture-manifest.json` regenerated for the new oracle.
+
+No `backend/` (Vercel) twin: the open API is Workers-only, like the portal's Phase 12 additions. No `native/` or React Native changes.
+
+#### 14.3 Preconditions re-checked against the tree (2026-10-03)
+
+- §0 said `clientIp` prefers `x-forwarded-for`. It no longer does: commit `dd4c9b7` made `backend-workers/src/appCors.js` prefer `cf-connecting-ip`. The API still never calls `clientIp`: it reads `cf-connecting-ip` directly and never falls back to `x-forwarded-for`, so the §12 residual no longer applies to this phase.
+- Phase 32 is committed on this base (`aa1bbbf`); `estimateExpiry.js` and `quoteOptions.js` are reused unchanged.
+- This branch does not contain Phases 20, 21, 24, 26, 28, 33 or 34. Their future blob fields (for example referral codes, tips) are excluded by the allowlist without any code here; the fixtures carry `referralCode`, vendor keys, `portal` and junk keys to prove it. Adding `tipAmount` (Phase 28) and the Phase 21/20 resources later is an additive `SCHEMA` edit (§7).
+- Everything else in §0 holds as written.
+
+#### 14.4 Decisions where the spec was silent
+
+Storage and RPCs:
+1. `api_keys` gains three columns beyond §4: `expiry_days` (90 | 365 | null, so rotate keeps the owner's lifetime choice), `operation_id` (unique when set) and `request_hash` (replay detection without storing the raw key). Plus check constraints on hash shape, prefix length, scopes and log `event`, and `replaced_by … on delete set null`.
+2. "Live" means not revoked, not expired and not replaced. The 5-key cap counts live keys, so rotate (which swaps one live key for another) never fails on it. Keys in a rotation grace window are bounded separately (corrected 2026-10-04, see the fix note at the end of this section): rotating a key ends its own grace predecessor now, and after every rotate at most 5 grace keys keep working, so an owner never holds more than 5 live + 5 grace = 10 working keys. (Originally grace keys were uncounted and repeated rotation could leave an unbounded number of working keys.)
+3. Rotate inherits name, scopes and lifetime. The old key's `expires_at` becomes the earlier of its current expiry and now + grace. Only a live, not-yet-rotated key rotates; anything else is `not_found`.
+4. Revoke is idempotent: a second revoke answers 200 with the key unchanged (`revoked_at` never moves).
+5. Rate limits are check-then-increment under a per-owner advisory lock, so concurrent requests never over-admit and **refused requests consume no quota**. The `X-RateLimit-*` headers describe the per-key minute window. Daily windows are UTC.
+6. `denied` and `rate_limited` rows are written by the RPC at most once per key per minute, so a client hammering with a dead or limited key cannot grow the log without bound. Unknown hashes are never logged (there is no owner).
+7. Both RPCs refuse a client JWT that reaches them anyway (the `booking_is_client_caller` logic, inlined to avoid a dependency on the booking migrations).
+
+Request contract:
+8. Check order: GET-only → key in query → route → `API_KEY_TAG_SECRET` present (§14.4a #5) → Bearer parse and tag check (a missing, malformed or forged key meets the junk counter; a tag-valid key skips it) → per-hash memory guards → admission (in-flight slot, plus tokens outside the positive cache, §14.4a #1, #5) → RPC (row must match the tag) → scope → parameters → reads. `HEAD` and `OPTIONS` are 405 like every non-GET.
+9. Key-in-query means a credential-like parameter name (`api_key`, `apikey`, `key`, `access_token`, `token`, `authorization`, `bearer`) or any value starting with `trk_`. It is refused before routing and counts toward the junk counter.
+10. *(Superseded by §14.4a #1; kept for the record.)* Failed-auth guard: the 20th failure per minute from one `cf-connecting-ip` blocks that address for a minute, answered `429 rate_limited` before any RPC call. It applies only to requests with no well-formed key (missing or malformed `Authorization`); a request carrying a well-formed `trk_` key is never rejected by it and goes to the authorize RPC (corrected 2026-10-04: it originally rejected every request from the address, valid keys included). Well-formed keys are shed per key hash instead: 5 "unknown key" answers for the same hash in a minute make that hash a `401 invalid_key` from memory until the minute ends, and a `rate_limited` answer makes that hash a `429` from memory (same `Retry-After` and `X-RateLimit-*`) until the reset. Per isolate, capped at 2,000 entries per map (expired swept, then oldest evicted), keyed by sha256 only.
+11. Worker-written log rows (requests that resolved a key): 2xx → `ok`, 403 → `denied`, 429 → `rate_limited`, anything else (400, 404, 500, 503) → `error`. Requests that never resolved an owner (405, malformed bearer, key in query, unknown path) are not logged.
+12. Headers: `TradeReady-Api-Version` and `Cache-Control: no-store` on every `/v1` response; `X-RateLimit-Limit/Remaining/Reset` (Reset in Unix seconds) on every response that resolved a key, including 429. Pre-auth responses have no key to describe, so they omit the rate headers. `/v1/openapi.json` is `Cache-Control: public, max-age=3600`. 401s carry `WWW-Authenticate: Bearer realm="TradeReady API"`.
+13. Failure mapping: authorize RPC not deployed, undecodable or erroring → `503 unavailable` (fail closed); a data read failing after auth → `500 server_error`; `API_CURSOR_SECRET` unset → list endpoints `503 unavailable` (single records and `/v1/account` still work; cursors are never minted unsigned). `API_KEY_TAG_SECRET` unset or shorter than 44 characters → every authenticated route `503 not_configured` before any key is read (2026-10-12; `/v1/openapi.json` still works).
+14. `updated_since` must carry a time zone (`Z` or `±hh:mm`) and is applied as `updated_at >= value`. `nextCursor` and `nextUpdatedSince` follow the last raw row scanned (a payments page can hold zero payments; an estimates page skips non-estimate jobs). `nextUpdatedSince` is `null` when the page is empty.
+15. `GET /v1/account` returns `{data: {...}}` with `dataAsOf` inside the account object (it is in the §3 field list). Its `dataAsOf` is the newest change across the tables the key can read. `businessName` is read with `select=businessName:data->>businessName`, so the settings blob (vendor keys, tokens) never reaches the Worker.
+16. Paths: one trailing slash is tolerated; ids longer than 200 characters or with broken percent-encoding are 404; `/v1` itself is 404.
+
+Resources:
+17. Estimate status table: (1) a decision on the approval link wins; (2) otherwise a job status the owner moved by hand: `declined`, or any of `approved/scheduled/in_progress/complete/invoiced/paid` → `approved` (with `decidedAt`, `signerName` and `selection` null); (3) otherwise no link and job status `lead` → `draft`; (4) otherwise `sent`, or `expired` after `validUntil` in the snapshot's zone (`snapshotExpiry`). An estimate sent without a link (only `estimateSentAt`) uses `estimateValidUntil` with anywhere-on-Earth, `total` = `estimateTotal`, `lineItems` `[]`, `options` null.
+18. Estimate `total` is the portal's: the accepted selection total, else the lowest option for an undecided options estimate, else the snapshot total.
+19. Payments: the legacy synthesized `legacy_<invoiceId>` entry is included (so a key's payments always sum to `amountPaid`) and is reachable at `/v1/payments/legacy_<invoiceId>`. `processorReference` is `stripeSessionId`, else the id after `stripe_` (covers Phase 18's `stripe_<payment_intent_id>` without reading a new field). The method map adds `stripe`. A single payment is found with `data->payments=cs.[{"id":…}]`.
+20. Invoice `paid` is the stored flag; `status` is derived from the ledger. Money is rounded half away from zero to cents after `toPrecision(15)` (so 12.345 → 12.35).
+21. Manage `activity` returns `ip` too: it is the owner's own security log, and the privacy wording (Q2) discloses it.
+
+#### 14.4a Security-review fixes (2026-10-04, branch `fix/open-api-guard`)
+
+Four review findings, fixed and tested. Items 1 and 2 were reworked three times; the guard below (second review, same branch) replaces the earlier failed-auth threshold and blocked-IP budget, and corrects §14.4 #10. Item 5 (round 5, 2026-10-12) makes keys self-verifying and amends item 1 where marked.
+
+1. **Request guard: admission is decided before the RPC, per client and per isolate** (`lib/api/auth.js` `createApiGuard`, `lib/api/v1.js`, `src/routes/api/v1.js`). Every window and limit is one frozen constant table, `GUARD_LIMITS` in `auth.js`:
+
+   | Constant | Value | Meaning |
+   |---|---|---|
+   | `WINDOW_MS` | 60 s | Window of the token buckets and the junk counter |
+   | `CLIENT_TOKENS` | 10 | RPCs per client per window for hashes outside the positive cache |
+   | `OWNER_TOKENS` | 10 | The same, per owner (from the key's tag) across all clients (#5) |
+   | `GLOBAL_TOKENS` | 60 | The same, per isolate across all clients |
+   | `KNOWN_IN_FLIGHT` | 4 | Concurrent RPCs per key hash; since #5 for every tag-valid hash, not only positively cached ones |
+   | `KNOWN_TTL_MS` | 60 min | Positive-cache lifetime, refreshed by each success |
+   | `DENIED_TTL_MS` | — | Removed in #6: every denial of a tag-valid key is kept for the key's life (until evicted). It was 60 s for every denial before #5, and for unknown keys in #5 |
+   | `GLOBAL_RESERVE` | 240 | #6: isolate tokens per window that only an owner holding no token may take, once the shared 60 are gone; closed for the rest of a window once an RPC in it fails |
+   | `JUNK_LIMIT` | 20 | Keyless, malformed, forged (#5) or query-string-key requests per client per window |
+   | `MAX_CLIENTS`, `MAX_OWNERS`, `MAX_JUNK_CLIENTS`, `MAX_DENIED_KEYS`, `MAX_LIMITED_KEYS` | 2,000 each | Map caps |
+   | `MAX_KNOWN_KEYS`, `MAX_IN_FLIGHT_KEYS` | 1,000 each | Map caps (the in-flight cap refuses rather than evicts). #6: `MAX_KNOWN_KEYS` is 10,000, LRU on hit, at most `MAX_KNOWN_PER_OWNER` 10 per owner; `MAX_OWNERS` and `MAX_DENIED_KEYS` are 10,000; `MAX_DENIED_PER_OWNER` is 100 |
+
+   - **Client key.** The IPv4 address from `cf-connecting-ip`, or the IPv6 /64 prefix (any spelling of an address in one /64 is one client; an IPv4-mapped address is its IPv4 client). Requests without the header share one bucket; accepted, since Cloudflare always sets it. The raw address still goes to the RPC and the access log.
+   - **Positive cache.** A sha256 hash that authorized (or was rate limited, which only a live key can be) on this isolate in the last 60 minutes. It never skips the RPC: revocation, expiry and the durable rate limits are enforced by the RPC on every admitted request. It only lets the hash bypass the token buckets, with at most 4 of its RPCs in flight; excess gets 429 from memory (`Retry-After: 1`). The slot is taken before the RPC and released in a `finally`.
+   - **Token buckets.** Any other well-formed key must take, synchronously before the RPC is awaited, one token from its client's bucket and one from the isolate bucket (both or neither). If either is empty: 429 from memory, `Retry-After` to that window's end. Both tokens are refunded only when the RPC answers `ok` or `rate_limited`, and only to the window that issued them (a window is replaced, never reset, when it ends, so a late refund to an ended window is a no-op). Denied, `unavailable` and transport failures keep the tokens. So, per isolate and window, hashes outside the positive cache cause at most 10 RPCs per client and 60 in all, whatever the RPC answers (outages included) and however many requests are in flight. This replaces the 20-failure threshold and the blocked-IP budget for keyed requests.
+   - **Negative cache.** The first unknown, revoked or expired answer for a hash is remembered and answered from memory with the same 401 code (no token, no RPC): unknown for 60 s, revoked or expired for the key's life (#5; 60 s before). A denial also removes the hash from the positive cache.
+   - **Junk counter.** Missing or malformed keys and keys in the query string count per client; past 20 in a window, missing or malformed keys get 429 until the window ends (a query-string key is always 400). It never affects a request that carries a well-formed key.
+   - **Maps.** Each structure is its own capped `Map` that sweeps its own expired entries and then evicts its own oldest, so churn in one never evicts another. Evicting a client bucket is harmless because the isolate bucket still applies. An in-flight entry exists only while its RPCs run, so that map never evicts: at its cap a new hash gets 429 (`Retry-After: 1`); a slot always releases the entry it took. Only sha256 hex enters the per-hash maps; no raw key is stored or logged.
+
+   **Hard bound, per isolate and 60 s window** (what an attacker without a valid key can cause): at most 10 authorize RPCs per client and 60 + refunded admissions in all, whatever the RPC answers and however many requests are in flight. A refunded admission is one whose RPC called the key live (`ok` or `rate_limited`) and gave its tokens back, so the token path admits one more request for each; only an attacker who holds live keys gets refunds, and each such key then enters the positive cache (corrected 2026-10-12; this read "60 in all"). Since #5 only tag-valid keys reach this path at all. A key that authorized on the isolate in the last 60 minutes adds RPCs bounded by concurrency, not by count: at most 4 in flight per hash and at most `MAX_IN_FLIGHT_KEYS` × 4 = 4,000 in flight in all (a new hash is refused at the cap, never evicting a busy one); the durable per-key limits in the RPC then shed it from memory once it is over its limit.
+
+   Measured with a fake RPC and a fake clock (route tests in `__tests__/openApiWorkers.test.js`, exact assertions). One isolate; "Before" is the second review's measurement at a750759:
+
+   | Case | Before | After |
+   |---|---|---|
+   | RPC outage (throws, or 404), 1,000 random keys from one client in 10 s | 1,000 RPCs | 10 (10 × 503, 990 × 429); the next window from 5,000 clients, 60 |
+   | 3 concurrent bursts of 1,000 random keys from one client, 61 s apart | 3,000 | 30 (10 per burst); with 1,000 more from 100 clients in each burst, 60 per window, at most 10 per client |
+   | 5,000 random keys, each from a new address in one IPv6 /64 | 5,000 | 10 (one client); the next /64 is a new client |
+   | 5,000 random keys, each from a new IPv4 address, two windows | — ¹ | 60 per window |
+   | 5 rounds of 19 random keys from one IP, 2,500 junk-only IPs between rounds | — ¹ | 10 |
+   | 2,000 concurrent requests with one known-good key | 2,000 | 4 (peak 4 in flight, 1,996 × 429 `Retry-After: 1`) |
+   | 50 concurrent requests across 5 known-good keys, `MAX_IN_FLIGHT_KEYS` set to 3 | — ¹ | 12 (3 hashes × 4) |
+   | 2,000 concurrent with a just-revoked key still in the positive cache, then 3,000 sequential over 3 min | — ¹ | 4, then 2 (one per negative-cache expiry) |
+   | A window spent (10), then 5 late refunds from the previous window, then 50 more random keys | — ¹ | 0 more; refunds to an ended window are ignored |
+
+   ¹ Not among the review's recorded measurements.
+
+   **Residuals, stated plainly.**
+   - Bounds are per isolate, so total database load scales with the number of isolates Cloudflare runs.
+   - *(Closed by #5 for random and forged keys.)* A valid key on a shared IP during a flood can be refused: a flood of random keys from the same address (or /64) spends that client's 10 tokens, and a distributed attacker, or one rotating through /64s, can hold the isolate bucket empty. While that lasts, a valid key that this isolate has not seen in the last 60 minutes gets 429 until the window ends. Keys in the positive cache are unaffected. The reviewer measured it: 60 random-key requests a minute from 6 IPv4 addresses (or 6 IPv6 /64s, one /48) keep the isolate bucket empty indefinitely.
+   - Requests without `cf-connecting-ip` share one client bucket (Cloudflare always sets the header on public traffic, so only non-public paths could hit this).
+   - Known-good keys are bounded by concurrency, not by count: during an RPC outage a known key's own traffic still reaches the (failing) RPC, at most 4 at a time.
+   - Closing that needs a store shared across isolates, or self-verifying keys (an HMAC tag inside the key, checked before any RPC). The owner chose self-verifying keys on 2026-10-12; built as #5.
+2. **Rate-limited keys are shed before the database** (same files). A `rate_limited` RPC answer makes that hash a 429 from memory until the reported reset (`retryAfter`, 60 s if none), with the same `Retry-After` and `X-RateLimit-*` headers.
+3. **Show-once key can no longer be copied around the clipboard policy** (`NativeAPIAccessView.swift`). `.textSelection(.enabled)` is removed from the secret, so the Copy button (local-only, 2-minute expiry, §9) is the only copy path. `native/APIAccessTests/main.swift` now fails if the view source contains `textSelection`.
+4. **Working keys are bounded including grace keys** (`20261003_api_keys.sql`, edited in place; still unapplied). Rotation ends the rotated key's own grace predecessor immediately, and after each rotate only the 5 latest-expiring grace keys keep working (the rest end now). This holds even when a replacement is revoked (which leaves its predecessor in grace with no live successor). With the live cap of 5 this gives at most 10 working keys, and rotate still never fails on the cap. Corrects #2. The verify SQL pins the grace cap in the RPC source, and `supabase/verify/local/api_keys.sh` covers lineage rotation, create/rotate/revoke churn and rotate at the live cap.
+
+5. **Self-verifying keys: forged keys cost nothing** (round 5, 2026-10-12, owner approved 2026-10-12; `lib/api/keys.js`, `lib/api/v1.js`, `lib/api/auth.js`, `lib/api/keyAdmin.js`, `src/routes/api/keysManage.js`, `20261003_api_keys.sql` and its verify SQL, `N/Domain/NativeAPIAccess.swift`). A Fable reviewer measured the item 1 guard as sound for its RPC bound, but junk keys and never-seen valid keys could not be told apart before the RPC, so random keys could hold the isolate bucket empty (item 1 residuals).
+   - **Key format** is §2: key id, owner id, 32 random bytes and a 128-bit HMAC-SHA256 tag under the Worker secret `API_KEY_TAG_SECRET`. WebCrypto (`crypto.subtle`), the imported `CryptoKey` cached per isolate, constant-time compare, and exactly one base64url spelling accepted (80 bytes leave 2 spare bits in the last character; a second spelling would hash differently). No new dependency.
+   - **Order.** After routing: the secret must be set (else `503 not_configured` for every authenticated route; a value under 32 characters counts as unset, 44 since #6; there is no untagged fallback) → Bearer parse → tag. A missing, malformed, untagged or forged key goes to the per-client junk counter (401 `invalid_key`, or 429 past 20 in a window from one client) and to nothing else: no client, owner or isolate token, no positive or negative cache entry, no RPC. Only tag-valid keys meet the item 1 guard.
+   - **Owner bucket.** A tag-valid key outside the positive cache takes one client, one owner and one isolate token, all or none, refunded together only on a live answer, each only to its issuing window. The owner is the one the tag names.
+   - **Per-hash in flight.** At most 4 RPCs in flight per hash for every tag-valid key, not only positively cached ones; excess is 429 `Retry-After: 1`.
+   - **Dead keys.** A `key_revoked` or `key_expired` answer is remembered for the key's life (both are one-way), in the same 2,000-entry negative cache (oldest evicted at the cap). `invalid_key` stays 60 s. *(#6: `invalid_key` is now kept for life too, and the cache is per-owner capped.)*
+   - **Row check.** The RPC's `keyId` and `userId` must equal the tag's; otherwise 503 `unavailable` and the tokens are kept (fail closed).
+   - **Minting.** The Worker draws the key id (UUID v4) and the random part from its CSPRNG and tags them with the owner id; `api_key_admin` gains `p_new_key_id` and inserts the row under it (migration amended in place, still unapplied; it drops the 11-argument overload, and the verify SQL fails on it). Stored columns are unchanged: `key_hash` and the 12-character `key_prefix`, now drawn from the key id bytes. The full key stays unrecoverable. If the committed row's id is not the minted id, the Worker returns 500 and never the secret. Without the secret, `create` and `rotate` answer 503 `unavailable` before any database contact; `list`, `revoke` and `activity` still work.
+   - **Native.** `NativeAPIKeySecret` checks `trk_` + 107 base64url characters (shape only); the old 43-character shape is refused.
+
+   **Bounds, per isolate and 60 s window, after #5:**
+
+   | Key presented | Authorize RPCs | Tokens | Cache entries |
+   |---|---|---|---|
+   | Missing, malformed, untagged or forged | 0 | 0 | 0 (junk counter only) |
+   | Tag-valid, outside the positive cache | At most 10 per client, 10 per owner and 60 in all, plus one per refunded admission; at most 4 in flight per hash | 1 client + 1 owner + 1 isolate, refunded on a live answer | Positive on `ok`/`rate_limited`, negative on a denial |
+   | Tag-valid, revoked or expired, after its first denial on the isolate | 0 for the key's life (until evicted from the 2,000-entry negative cache) | 0 | — |
+   | Tag-valid, positively cached | Bounded by concurrency: 4 in flight per hash, at most 1,000 × 4 in all (item 1) | 0 | — |
+
+   Measured with a fake RPC and a fake clock (`__tests__/openApiWorkers.test.js`, "self-verifying keys", exact assertions). "Before" is this branch at 3a65522:
+
+   | Case | Before | After |
+   |---|---|---|
+   | 10,000 keys from 5,000 clients in one window, five kinds (80 random bytes; a real key's id and owner with a made-up body and tag; a real key with one tag bit flipped; tagged with another secret; the untagged 43-character format) | — ¹ (random keys: 60 per window, the isolate bucket emptied) | 0 RPCs, 0 tokens, 0 cache entries, 10,000 × 401. In the same window a fresh valid key from a new client authorizes, and 60 unseen tag-valid keys from 60 new clients still all reach the RPC |
+   | The reviewer's drain: 60 random keys a minute from 6 addresses for 5 minutes, one never-seen valid key from another address each minute | The valid key 429 (reviewer) | 5 RPCs in all (the valid keys), each valid key 200 |
+   | 230 forgeries of one real key (all 128 single-bit tag flips, 100 made-up bodies and tags under its id and owner, another secret, the second base64url spelling of its own bytes) | — ¹ | 0 RPCs. From 230 addresses: 230 × 401. From one address: 20 × 401, then 210 × 429 (junk counter). The real key still 200 from that address |
+   | One revoked key replayed from 3,000 clients over a year (and the same for an expired key) | One RPC per 60 s negative-cache expiry | 1 RPC each |
+   | A never-seen revoked key, 2,000 concurrent requests from 200 clients, then 100 more over 100 days | — ¹ | 4 RPCs (per-hash in flight; 4 × 401, 1,996 × 429), then 0 |
+   | A just-revoked key still in the positive cache: 2,000 concurrent, then 3,000 sequential over 3 minutes | 4, then 2 | 4, then 0 |
+   | 1,000 distinct revoked keys of one owner per window from 1,000 clients, 3 windows; then 1,000 concurrent unseen keys of that owner; then 2,000 replays of the first two windows' keys | — ¹ | 10, 10, 10; then 10; then 10 (only keys never admitted before; the 20 admitted ones are 0). Another owner's never-seen valid key from a new client is 200 |
+   | The RPC answers `ok` with another key's id, or another owner | — ¹ | 503 `unavailable`, tokens kept, nothing read |
+   | `API_KEY_TAG_SECRET` unset, empty or 31 characters; keyed, keyless and forged requests | — ¹ | 503 `not_configured`, 0 fetches, 0 guard entries; `/v1/openapi.json` 200 |
+
+   ¹ Not measured before #5.
+
+   **Residuals, stated plainly** (the first two were measured as a P2 in round 6 and are closed by #6).
+   - Bounds are still per isolate.
+   - Tag-valid keys the RPC denies can still spend the buckets. Each comes from a real mint: an owner's own revoked or expired keys, or a deleted account's keys (`invalid_key`, 60 s). One owner causes at most 10 such RPCs per window per isolate, and each revoked or expired key at most once per isolate when replayed in sequence, or 4 times in a concurrent burst (until evicted from the 2,000-entry negative cache). Holding the isolate bucket (60) empty therefore needs at least 6 owners' worth of fresh dead keys every minute. Minting is 10 manage calls per user per minute per isolate. While the bucket is empty, a never-seen valid key gets 429 until the window ends. Keys in the positive cache are unaffected.
+   - Someone holding at least 10 fresh dead keys of one owner per window can hold that owner's bucket empty, and that owner's never-seen valid keys wait for the window. They need that owner's keys, so in practice only the owner can do it.
+   - A leaked `API_KEY_TAG_SECRET` makes forgeries tag-valid. They reach the RPC again, bounded by 10 per client and 60 per isolate. The owner bucket does not bind them, because a forger picks the owner id. They still read nothing, because the hash must match a stored row. The fix is a new secret, which invalidates every key. Key-secret rotation with a grace period is not built, because there are no current users.
+   - A cold key (not positively cached on the isolate) gets at most 4 concurrent RPCs; a client firing more parallel requests with it gets 429 `Retry-After: 1` for the excess. The same limit already applied to warm keys.
+   - Whoever holds a key can read its key id and owner id from it.
+   - Requests without `cf-connecting-ip` still share one client bucket.
+
+6. **Dead tag-valid keys cannot lock other owners out** (round 6, 2026-10-12; `lib/api/auth.js`, `lib/api/v1.js`, `lib/api/keys.js`, `lib/api/keyAdmin.js`, `20261003_api_keys.sql` and its verify SQL, `supabase/verify/local/api_keys.sh`). A Fable review of #5 found the crypto, minting and auth sound and the random-key lockout closed, and confirmed one P2 in the same class. Denied tag-valid keys still spent the isolate's 60 tokens, and the 2,000-entry negative cache evicted oldest-first. The reviewer measured three attacks: (a) 6 accounts cycling 2,004 revoked keys at 60/min from 6 IPs, (b) 6 deleted accounts whose 60 keys answer `invalid_key`, cached only 60 s, and (c) 200 accounts × 5 live keys evicting the 1,000-entry positive cache. In (a) and (b), a never-seen valid key of another owner got 429 in 120/120 windows. In (c), a warm victim key also got 429 after eviction.
+   - **Every denial is final.** For a tag-valid key, `invalid_key` joins `key_revoked` and `key_expired` as one-way. The key id comes from the Worker CSPRNG at mint, so a missing row was deleted with its account or never committed, and that secret was never handed out. All three are kept for the key's life.
+   - **Shared pool and reserve.** An unseen key's isolate token comes from the shared pool (60). Once that is empty, an owner that holds no token in the window may take one from the reserve (240), at most one unrefunded reserve take per owner per *global* window (round 7 fix: owner windows start at the owner's first take and can straddle a global window, so with the check on the owner window alone a live key that opened the owner window early, then refunded, let one owner take the reserve twice in one global window). Owners who spend the shared pool on dead keys therefore cannot lock another owner out. The reserve gives one cold admission per owner at a time, and a live answer returns the token to the pool that issued it. Hard bound: at most 300 unseen-key RPCs per isolate per window, plus refunded admissions, whatever the RPC answers. **Outage:** the first `unavailable` or transport failure in a window closes the reserve for the rest of that window. Requests in sequence during an outage therefore stay at 60 per window, and 300 is the worst case only when reserve tokens were already taken before the first failure returned. Denials still keep their client, owner and pool tokens.
+   - **Churn-resistant caches.** The negative cache holds 10,000 entries, at most 100 per owner (that owner's oldest goes first). One owner's churn therefore evicts only that owner's own entries, and an evicted dead key that comes back is an unseen key again, charged to its owner's 10-a-window bucket. The positive cache holds 10,000 entries, is LRU on hit (a hit moves the entry to the back without extending its TTL), and keeps at most 10 per owner (an owner's 10 working keys). The owner-bucket map holds 10,000 entries.
+   - **Durable mint limit.** `api_key_admin` refuses a create or rotate once the owner has 20 `api_keys` rows created in the last 24 hours. Revoked and expired rows count, and rows are never deleted except with the account. The refusal is `mint_limit`, which the Worker answers `429 rate_limited`, so the app contract is unchanged. A replayed commit still answers `already_completed`. **Why 20:** an owner's ceiling is 5 live keys, and creating all five plus rotating all five is 10 mints. 20 leaves room for mistakes and caps how fast one account can produce dead keys. The verify SQL pins it, and the local harness proves it: the 20th mint commits, a 21st create or rotate is refused, a replay still completes, another owner is unaffected, and minting works again after 24 hours.
+   - **P3s.** The tag-secret minimum is 44 characters (32 bytes in base64), raised from 32. The Worker can check only the length, so the randomness is the owner's to supply (§14.8 step 2a). The junk counter is now read before the HMAC. A missing or malformed key never reaches the HMAC, and a forgery from a client already over its junk limit is answered 429 without counting again. The HMAC still runs for every well-formed key, even from a junk-blocked client. Skipping it would let junk from a shared address lock out a valid key, which the round-2 guarantee and its tests forbid. It costs one SHA-256 HMAC over 86 bytes.
+
+   **Bounds, per isolate and 60 s window, after #6:**
+
+   | Key presented | Authorize RPCs | Notes |
+   |---|---|---|
+   | Missing, malformed, untagged or forged | 0 | junk counter only |
+   | Tag-valid, outside the positive cache | ≤ 10 per client, ≤ 10 per owner, ≤ 300 in all (60 shared + 240 reserve), plus refunded admissions; ≤ 4 in flight per hash | after a failure in the window: ≤ 60 in all from then on |
+   | Tag-valid, denied once on the isolate (unknown, revoked or expired) | 0 for the key's life, until evicted (≤ 100 per owner, 10,000 in all) | an evicted key that returns is charged to its owner |
+   | Tag-valid, positively cached | concurrency-bound: 4 in flight per hash | LRU, ≤ 10 per owner |
+
+   Measured with a fake RPC and a fake clock (`__tests__/openApiWorkers.test.js`, "round 6", exact assertions):
+
+   | Case | Before (0a61dc7, reviewer) | After |
+   |---|---|---|
+   | (a) 6 accounts cycle 2,004 revoked keys (334 each), 60 requests a minute from 6 IPs, 120 windows; one never-seen valid key of another owner per window | the valid key 429 in 120/120 windows | the valid key **200 in 120/120** windows. The attack still costs 60 RPCs every window, because each pool (334) is larger than the per-owner negative cap (100) |
+   | (a′) the same with 100 keys per account | — | 60 RPCs a window for 10 windows, then 0 (each dead key once) |
+   | (b) 6 deleted accounts, 60 keys answering `invalid_key`, 60 requests a minute, 120 windows | 429 in 120/120 windows | 60 RPCs in window 1, then 0 for 119 windows; the valid key **200 in 120/120** |
+   | (c) 200 accounts × 5 live keys (answering `rate_limited`, so refunded) every window for 60 windows; the victim's warm key used once a window | the victim key 429 after eviction | the victim key **cached in 60/60** windows and **200 in 60/60** |
+   | (c′) 11,000 cache entries from 1,100 owners between two uses of the victim key | — | the victim key is evicted (cold) and still 200 (a cold live key's tokens come back) |
+   | 5,000 unseen keys of 5,000 owners in one window: RPC healthy / RPC throwing | 60 / 60 | 300 / 60 (the reserve closes at the first failure) |
+   | Round 7 skew: 6 drain owners at T0, 120 owners whose window was opened by a live key at T0 − 30 s, each sending dead keys at T0 + 2 s and T0 + 31 s; a never-seen valid key at T0 + 32 s | 240 reserve takes, the valid key 429 (reviewer, 8a998a7) | 120 reserve takes (the second 120 × 429), the valid key 200 |
+
+   The round-5 measurements that counted 60 per window for unseen keys of distinct owners now count 300. Each of those keys has its own owner, which is the reserve case. The tests say so where the expectation changed.
+
+   **Residuals: what N accounts can still do (per isolate).**
+   - Each account causes at most 10 denied RPCs per window. Each of its dead keys costs one RPC per isolate unless the account holds more than 100 dead keys and cycles them, which sustains 10 a window. At 20 mints a day, 101 dead keys take an account 6 days. Database load from N such accounts is at most min(10N, 300) RPCs per window per isolate.
+   - Locking a never-seen valid key of another owner out needs both pools empty in the same window. That takes at least 6 accounts to empty the shared 60 plus 240 more accounts each spending a fresh dead key (one reserve take per owner per global window, measured with the round 7 skew test; 126 accounts sufficed at 8a998a7): at least 246 accounts, each holding more than 100 dead keys (6 days of minting each), sending from at least 30 addresses (10 per client). Warm keys are unaffected either way.
+   - Someone holding more than 100 dead keys of one owner can keep that owner's bucket empty, so the owner's never-seen valid keys wait for the window. They need that owner's keys.
+   - While the shared pool is empty, an owner gets one cold admission at a time. Several never-seen keys of one owner starting together get 429 (`Retry-After` to the window end) for all but one until answers come back.
+   - Evicting a warm key from the positive cache needs about 1,000 owners' worth of live keys between two uses of it. An evicted live key is still admitted unless both pools are empty.
+   - A leaked `API_KEY_TAG_SECRET` lets a forger choose owner ids, so 300 forged keys a window can empty both pools. They still read nothing, and the fix is a new secret. Unchanged from #5.
+   - Bounds are per isolate, and requests without `cf-connecting-ip` share one client bucket. Both are unchanged.
+
+#### 14.5 Uncommitted `tradeready-legal` edit
+
+- New file `tradeready-legal/developers.html` (the only file touched in that repo; `book.html`, `estimate.html`, `portal.html` keep their other-phase edits untouched). Static, no script, CSP-compatible with the existing `_headers`. Covers getting a key, auth, scopes and presets, the workers.dev base URL (Q4), pagination, incremental sync with a worked Node.js loop, tombstones, freshness, rate limits, errors, versioning, per-resource field tables, Zapier, security and privacy, and a changelog. Q6 (subscription gating) and Q7 (Cloudflare binding) are not mentioned.
+- The field tables are generated from the Worker's `SCHEMA`/`FIELDS` (scratch generator), and a jsdom check pins them to `FIELDS` exactly.
+- Not done (owner's call when publishing): adding the page to `sitemap.xml` and linking it from `support.html`.
+
+#### 14.6 Legal and privacy wording to apply (approved recommendations Q2, Q3; not applied here)
+
+- **`privacy.html` §1/§5 (Q2):** "If you create an API key, services you give it to can read the data types you chose. We log each API request (time, key, endpoint, IP address) for 90 days for security."
+- **`terms.html`, new "API access" section next to §7 "Your Data" (Q3):** "API access. TradeReady offers a read-only API for connecting other tools to your data. If you create an API key, you are responsible for where you use it and who you give it to: anyone who has the key can read the kinds of data you chose for it until it expires or you revoke it. Keep keys secret and revoke any key you think has been exposed. We may change API rate limits, and we may suspend or revoke keys used in a way that harms the service or other users. The API is provided as is, without any commitment to uptime or availability."
+- **Q5:** no App Store privacy-label change (re-check if the access log ever feeds analytics).
+
+#### 14.7 Test results
+
+| Command | Result |
+|---|---|
+| `cd backend-workers && npm test` | 238 pass, 0 fail (38 suites; 160 before this phase + 78 new: apiResources 39, apiAuth 23, apiKeysManage 16) |
+| `TZ=America/Phoenix npm test -- --runInBand --runTestsByPath __tests__/openApiWorkers.test.js` | 38 pass |
+| Every root suite that references `backend-workers` (29 files, including the portal, booking and phase 8 suites) under `TZ=America/Phoenix` | 29 suites, 459 tests pass |
+| `sh supabase/verify/local/api_keys.sh` (throwaway local PostgreSQL) | 52 pass, 0 fail: applies twice, hosted verify SQL passes and flags a leaked `key_hash` grant and a client EXECUTE grant, client roles refused, cap/rotate/revoke/replay, denied-log throttle, 70 concurrent callers → exactly 60 admitted, owner daily cap, RLS and column privileges, cascade delete |
+| Mutation check (scratch): 10 deliberate security breaks, each run against the suite meant to catch it (owner filter dropped, invoice email added, job notes added, non-GET allowed, raw key sent to the RPC, `x-forwarded-for` used as the IP, scope check skipped, unsigned cursor accepted, full settings blob selected, key written to the console) | all 12 runs failed, as they should; files restored byte for byte |
+| `developers.html` jsdom check (scratch) | 61 pass; fails with the page absent (pre-edit state) and catches 10/10 broken variants |
+| esbuild bundle of `src/index.js` (local, nothing deployed) | builds; the bundle serves `/v1/openapi.json` 200 and `DELETE /v1/customers` 405 |
+| `node scripts/parity-manifest.mjs --write` then `--check` | current (adds the `openApiWorkers` oracle) |
+| `sh native/run-doc-reference-check.sh` | 0 missing. Run on this spec: 1 missing, `N/NativeAPIKeyAdministration.swift` in §9, which the native slice creates |
+
+Round 5 (self-verifying keys, §14.4a #5, 2026-10-12):
+
+| Command | Result |
+|---|---|
+| `cd backend-workers && npm test` | 569 pass, 0 fail (apiAuth +5: tag format, forgeries, secret, key ids, owner bucket; apiKeysManage +2: no secret → 503, row-id mismatch → 500) |
+| `TZ=America/Phoenix npx jest --runInBand --runTestsByPath __tests__/openApiWorkers.test.js` | 70 pass (63 before; +7 in "self-verifying keys") |
+| `sh native/run-api-access-tests.sh` | passed, 398 checks |
+| `sh supabase/verify/local/api_keys.sh` (throwaway local PostgreSQL) | 68 pass, 0 fail (adds: create without the key id is `invalid_args`, rows stored under the Worker's id on create and rotate, key-id collision is `operation_conflict`, verify SQL flags a stale pre-tag overload and the migration drops it) |
+| `node scripts/parity-manifest.mjs --write` then `--check` | current (APIAccessTests and openApiWorkers hashes) |
+| `sh native/run-doc-reference-check.sh` | 0 missing; on this spec, 0 missing |
+| `npx wrangler deploy --dry-run` (output in a scratch directory; nothing deployed) | bundles |
+
+Round 6 (dead tag-valid keys, §14.4a #6, 2026-10-12):
+
+| Command | Result |
+|---|---|
+| `cd backend-workers && npm test` | 572 pass, 0 fail (apiAuth +3: reserve, per-owner negative cap, LRU and per-owner positive cap; mint_limit → 429 in apiKeysManage) |
+| `TZ=America/Phoenix npx jest --runInBand --runTestsByPath __tests__/openApiWorkers.test.js` | 74 pass (+4: reviewer scenarios a, b, c and the outage reserve close) |
+| `sh supabase/verify/local/api_keys.sh` | 75 pass, 0 fail (+7 for the mint limit) |
+| `node scripts/parity-manifest.mjs --write` then `--check` | current |
+| `sh native/run-doc-reference-check.sh` | 0 missing |
+
+#### 14.8 Owner ship steps (in order)
+
+1. Apply `supabase/migrations/20261003_api_keys.sql` in the Supabase SQL editor (staging first if one exists). Then run `supabase/migrations/verify/20261003_api_keys_verify.sql`; expect "ALL API KEY CHECKS PASSED" (psql) or every `ok` true (editor grid).
+2. Set the cursor secret: `wrangler secret put API_CURSOR_SECRET` with a long random value (for example the output of `openssl rand -base64 48`). Same for staging when it exists.
+2a. **Before deploying**, set the key-tag secret (§2, §14.4a #5): `wrangler secret put API_KEY_TAG_SECRET`, generated from at least 32 random bytes, for example `openssl rand -base64 48` (64 characters; the Worker refuses anything under 44 characters, which is 32 bytes in base64. It can check only the length; the randomness is yours to supply). Use a different value from `API_CURSOR_SECRET`, and a different value for staging when it exists. Without it `/v1` answers `503 not_configured` and key create/rotate answer `503 unavailable`. Keep it stable: changing it invalidates every key, and owners must create new ones.
+3. Deploy the Worker.
+4. Smoke from a terminal with a key created in the app: `curl …/v1/account -H "Authorization: Bearer $KEY"`, one list with `limit=1` and its `nextCursor`, then rotate and revoke in the app and confirm the old key gets 401.
+5. Turn on the native `apiAccessEnabled` flag (native slice) once the Worker is live.
+6. Review and publish `tradeready-legal/developers.html` together with the 14.6 privacy and terms wording; optionally add it to `sitemap.xml` and link it from `support.html`. Check its key-format wording first: it may describe the old `trk_` + 43-character key, and keys are now `trk_` + 107 characters (§2). The owner updates that repo; this branch does not touch it.
+7. Optional, after step 1: add `api_keys` and `api_access_log` to the expected list in `supabase/verify/account_deletion_cascade.sql` (left unchanged so that gate stays green before the migration is applied; both tables already cascade).
+
+#### 14.9 Not done / residuals
+
+- Native Settings → API access (§9) belongs to the native slice.
+- Hosted-project verification and a staging concurrency run wait for the owner's migration apply; the local proof covers the SQL behavior.
+- `Deprecation`/`Sunset` headers have nothing to announce until a `/v2` exists.
+- The request guard (§14.4a) and the 10/min manage limit are in-memory per isolate, as §6 accepts; the durable limits are the RPC counters.
+- **Owner decision, built (2026-10-12):** self-verifying keys close the §14.4a residual for random and forged keys (§14.4a #5), and round 6 (#6) stops dead tag-valid keys from locking other owners out. What is left is listed in #6's residuals: what N accounts can still do (lockout needs at least 246 accounts each holding more than 100 dead keys), a leaked tag secret, and per-isolate bounds. A store shared across isolates is still not built.
+- `tradeready-legal/developers.html` may still describe the 43-character key format; the owner updates it (§14.8 step 6).
+- P3 (round 7 review): a `rotate` at the durable mint limit (20 per owner per 24 hours, §14.4a #6) answers `429 rate_limited` and mints nothing, so the old key stays live. `revoke` is not limited, so the owner can still kill a leaked key at once, but the app only says "try later" and does not suggest revoking. Wording or a revoke hint in the app is a native follow-up.
+- Not verified on a device or against a deployed Worker: the WebCrypto HMAC runs under Node's `crypto.subtle` in tests (cross-checked byte for byte against a `node:crypto` HMAC oracle). A `wrangler deploy --dry-run` bundle builds; it was not run in workerd.

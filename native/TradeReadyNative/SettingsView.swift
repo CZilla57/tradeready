@@ -2,9 +2,10 @@ import SwiftUI
 import UIKit
 
 enum SettingsDestination: Hashable {
-    case business, schedule, pricing, numbering, importData
+    case business, schedule, calendarSync, pricing, numbering, importData, forms
     case payments, booking, appearance, ai, notifications, reviews
     case sync, subscription, account
+    case apiAccess  // Phase 23: only reachable through `apiAccessRows` (flag off = no row)
 }
 
 extension SettingsDestination {
@@ -45,8 +46,10 @@ struct SettingsView: View {
                     settingsGroup("YOUR BUSINESS", rows: [
                         (.business, "building.2.fill", "Business profile", "Name, trade, contact details, logo"),
                         (.schedule, "clock.fill", "Schedule", "Working hours, job length, time off"),
+                        (.calendarSync, "calendar", "Calendar sync", store.calendarSyncHubSubtitle),
                         (.pricing, "tag.fill", "Pricing defaults", "Labor, markup, overhead, and margin"),
                         (.numbering, "number.square.fill", "Invoice numbering", "Prefix and starting number"),
+                        (.forms, "checklist", "Forms & checklists", formsSubtitle),
                         (.importData, "square.and.arrow.down.fill", "Import data", "Bring records over from CSV or the old app")
                     ])
                     settingsGroup("GETTING PAID", rows: [
@@ -58,7 +61,7 @@ struct SettingsView: View {
                         (.ai, "sparkles", "AI Assistant", "Coach preferences and data access"),
                         (.notifications, "bell.badge.fill", "Notifications", "Invoices, appointments, and follow-ups"),
                         (.reviews, "star.fill", "Review requests", store.settings.reviewRequestEnabled ? "Automatic requests are on" : "Google review link and message")
-                    ])
+                    ] + SettingsDestination.apiAccessRows)
                     settingsGroup("SUBSCRIPTION & SUPPORT", rows: [
                         (.sync, "icloud.fill", "Cloud sync", syncSubtitle),
                         (.subscription, "diamond.fill", "Subscription", "Plan, billing, and restore purchases"),
@@ -134,19 +137,28 @@ struct SettingsView: View {
         switch destination {
         case .business: BusinessProfileSettings()
         case .schedule: NativeScheduleSettingsView()
+        case .calendarSync: NativeCalendarSyncSettingsView()
         case .pricing: PricingSettings()
         case .numbering: InvoiceNumberSettings()
         case .importData: ImportSettings()
+        case .forms: NativeFormTemplatesView()
         case .payments: PaymentsSettings()
         case .booking: NativeBookingSettingsView()
         case .appearance: AppearanceSettings()
         case .ai: AISettings()
         case .notifications: NotificationSettings()
         case .reviews: ReviewSettings()
+        case .apiAccess: NativeAPIAccessView()
         case .sync: SyncSettings()
         case .subscription: SubscriptionSettings()
         case .account: AccountSettings()
         }
+    }
+
+    /// Phase 20: the owner's saved form templates.
+    private var formsSubtitle: String {
+        let count = store.customFormTemplates.count
+        return count == 0 ? "Checklist and inspection templates" : "\(count) saved template\(count == 1 ? "" : "s")"
     }
 
     private var syncSubtitle: String {
@@ -218,6 +230,7 @@ struct BusinessProfileSettings: View {
             LabeledField(label: "Default terms shown on invoices & estimates") {
                 TextField("Payment due upon completion. We accept check, card, or bank transfer.", text: $store.settings.paymentNotes, axis: .vertical).lineLimit(3...7)
             }
+            NativeESignatureSettingsRows() // Phase 19: signature pad and agreement terms
         }
     })
     .nativeAnalyticsScreen(.settingsBusiness) }
@@ -225,6 +238,11 @@ struct BusinessProfileSettings: View {
 
 struct PricingSettings: View {
     @EnvironmentObject private var store: AppStore
+    // Phase 32 (spec 2026-10-03 §6.3): the days field commits (clamped to
+    // 0…365) when editing ends, so a half-typed number is never saved.
+    @ScaledMetric(relativeTo: .body) private var validityFieldWidth: CGFloat = 56
+    @State private var validityDaysText = ""
+    @FocusState private var validityDaysFocused: Bool
     var body: some View { SettingsPage(title: "Pricing Defaults", content: Group {
         Section("LABOR") { CurrencyField(title: "Billing rate per hour", value: $store.settings.laborRate); CurrencyField(title: "Owner labor cost per hour", value: $store.settings.ownerLaborCostRate) }
         Section("MARKUP & MARGIN") { percent("Material markup", $store.settings.materialMarkup); percent("Overhead", $store.settings.overheadPercent); percent("Profit margin", $store.settings.marginPercent) }
@@ -238,9 +256,33 @@ struct PricingSettings: View {
                 }
             }
         }
+        Section {
+            LabeledContent("Valid for") {
+                HStack(spacing: 4) {
+                    TextField("30", text: $validityDaysText)
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: validityFieldWidth)
+                        .focused($validityDaysFocused)
+                        .onSubmit(commitValidityDays)
+                        .accessibilityLabel("Estimates valid for, in days")
+                    Text("days").foregroundStyle(.secondary).accessibilityHidden(true)
+                }
+            }
+        } header: {
+            Text("ESTIMATES")
+        } footer: {
+            Text("New estimates get a valid-until date this many days after you send them. Customers can't approve an estimate online after that date. Enter 0 for estimates that don't expire. You can change the date on each estimate before you send it.")
+        }
         Section { Text("Defaults prefill new estimates. You can override them on an individual job.").font(.caption).foregroundStyle(.secondary) }
     })
+    .onAppear { validityDaysText = String(store.settings.estimateValidityDays) }
+    .onChange(of: validityDaysFocused) { _, focused in if !focused { commitValidityDays() } }
+    .onChange(of: store.settings.estimateValidityDays) { _, days in
+        if !validityDaysFocused { validityDaysText = String(days) }
+    }
     .onDisappear {
+        commitValidityDays()
         // Task 10.12 (D4): the setup checklist's `rate` task has no honest
         // live-derivation (RN's `SettingsPricingScreen` records it on save;
         // native's bindings write continuously, so leaving this page stands
@@ -248,6 +290,16 @@ struct PricingSettings: View {
         store.markSetupTaskDone(.rate)
     }
     .nativeAnalyticsScreen(.settingsPricing) }
+    /// Clamps to 0…365; anything that isn't a whole number restores the
+    /// saved value. The field then shows what was actually saved.
+    private func commitValidityDays() {
+        let trimmed = validityDaysText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let parsed = Int(trimmed) {
+            let clamped = min(max(parsed, 0), NativeQuoteExpiry.maximumValidityDays)
+            if clamped != store.settings.estimateValidityDays { store.settings.estimateValidityDays = clamped }
+        }
+        validityDaysText = String(store.settings.estimateValidityDays)
+    }
     private func percent(_ title: String, _ value: Binding<Double>) -> some View { HStack { Text(title); Spacer(); TextField("0", value: value, format: .number).keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 70); Text("%").foregroundStyle(.secondary) } }
 }
 
@@ -492,6 +544,12 @@ struct PaymentsSettings: View {
                             }
                         }.disabled(onboardBusy)
                     }
+                    // Phase 28 (tips spec §2): written through the same settings
+                    // save path as the neighbouring toggles; the existing sync
+                    // pushes it to the Worker with the settings blob.
+                    Toggle("Let customers add a tip", isOn: $store.settings.tipsEnabled)
+                    Text("Customers paying an invoice online can add an optional tip (10%, 15%, 20% or their own amount). Tips are recorded separately from the invoice and count as income. Not offered on deposits or automatic payments.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Button { confirmingDisconnect = true } label: {
                         HStack {
                             Text("Disconnect").foregroundStyle(Color.tradeDangerText)
@@ -530,6 +588,8 @@ struct PaymentsSettings: View {
             } message: {
                 Text("Your Stripe account will be unlinked. Payment links will stop working until you reconnect.")
             }
+            // Phase 18: hidden until Tap to Pay is supported and installed.
+            NativeTapToPaySettingsSection()
         } else if let provider = providers.first(where: { $0.id == store.settings.paymentProvider }) {
             Section(provider.label.uppercased()) {
                 if let hint = providerHint {
@@ -932,6 +992,7 @@ struct AccountSettings: View {
                 Section {
                     Text("This permanently deletes your account and all server and device data, including jobs, invoices, customers, and expenses. This cannot be undone.")
                         .foregroundStyle(.secondary)
+                    Text(NativeESignature.accountDeletionWarning).foregroundStyle(.secondary) // Phase 19 (19-Q6)
                 }
                 Section("TYPE DELETE TO CONFIRM") {
                     TextField(NativeAccountDeletionConfirmation.phrase, text: $deleteConfirmationText)

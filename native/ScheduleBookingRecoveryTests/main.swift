@@ -3016,10 +3016,19 @@ struct ScheduleBookingRecoveryTests {
                     "\(id) [M1]: …and its customer (found by name: no duplicate)")
         expectEqual(bookedCustomers(d).count, 1, "\(id): one customer on the device")
         expectEqual(d.queued("jobs"), 0, "\(id) [D-B3-2]: nothing is queued for the job")
-        expectEqual(d.queued("customers"), 0, "\(id): …or the customer")
+        // Phase 27 (spec 2026-10-02-lead-source-design.md §3): the Expo build
+        // records no lead source, so the matched customer's blank source is
+        // filled with the booking link (first touch, like a blank email) and
+        // that one fill is queued; every contact field is kept.
+        expectEqual(bookedCustomers(d).first?.leadSource, "booking_link",
+                    "\(id) [Phase 27]: the customer's blank lead source is filled")
+        expectEqual(bookedCustomers(d).first?.email, "sam@example.test", "\(id): …its contact fields are kept")
+        expectEqual(d.queued("customers"), 1, "\(id) [Phase 27]: …and only that fill is queued for the customer")
         expectEqual(d.queued("bookingRequests"), 1, "\(id) [M1]: the linked request is queued")
         d.reach.online = true
         await syncAndWait(d)
+        expectEqual(d.links.row("customers", "c-other-1")?["leadSource"] as? String, "booking_link",
+                    "\(id) [Phase 27]: after the push the cloud customer has the source")
         expectEqual(d.links.row("jobs", leadJobID)?["status"] as? String, "scheduled",
                     "\(id) [D-B3-2]: after the push the cloud job is still the other device's")
         expectEqual(d.links.requestRow("req-1")?["convertedJobId"] as? String, leadJobID,
@@ -3071,6 +3080,8 @@ struct ScheduleBookingRecoveryTests {
         expectEqual(customers.first?.address, "9 Oak Ave", "\(id) [I1]: …and the blank address")
         expectEqual(customers.first?.phone, "555-0100", "\(id) [I1]: the phone the customer had is kept")
         expectEqual(customers.first?.notes, "repeat", "\(id): …and every other field")
+        expectEqual(customers.first?.leadSource, "booking_link",
+                    "\(id) [Phase 27]: the blank lead source is filled with the booking link")
         expectEqual(d.queued("customers"), 1, "\(id) [I1]: the filled customer is queued")
         expectEqual(d.queued("jobs") + d.queued("bookingRequests"), 2, "\(id): …with the job and the linked request")
         d.reach.online = true
@@ -3078,6 +3089,7 @@ struct ScheduleBookingRecoveryTests {
         let cloud = d.links.row("customers", "cust-sam")
         expectEqual(cloud?["email"] as? String, "sam@example.test", "\(id) [I1]: the cloud customer has the email")
         expectEqual(cloud?["phone"] as? String, "555-0100", "\(id) [I1]: …and keeps its phone")
+        expectEqual(cloud?["leadSource"] as? String, "booking_link", "\(id) [Phase 27]: …and has the lead source")
         expectEqual(d.data.liveRowCount(table: "customers", userID: d.subject), 1, "\(id): one customer in the cloud")
     }
 
@@ -3133,6 +3145,131 @@ struct ScheduleBookingRecoveryTests {
                "\(id) [M1]: that job deleted before the commit: nothing is converted")
         expect(recheck(fresh, jobs: [otherJob], customers: [known]) == nil,
                "\(id): the plan's lead appeared meanwhile (another device won): nothing is converted")
+
+        // Phase 27 (spec 2026-10-02-lead-source-design.md §3): the recheck
+        // fills a blank lead source like a blank contact field, and a source
+        // set after the plan (first touch) is never replaced.
+        expectEqual(customer(same)?.leadSource, "booking_link",
+                    "\(id) [Phase 27]: nothing changed: the planned lead source fill is carried")
+        expectEqual(customer(raced)?.leadSource, "booking_link",
+                    "\(id) [Phase 27]: …and still fills a source left blank meanwhile")
+        var sourcedMeanwhile = known
+        sourcedMeanwhile.leadSource = "referral"
+        let sourcedRace = recheck(fresh, jobs: [], customers: [sourcedMeanwhile])
+        expectEqual(customer(sourcedRace)?.leadSource, "referral",
+                    "\(id) [Phase 27]: a source set after the plan is never replaced")
+        var complete = known
+        complete.email = "sam@example.test"
+        complete.address = "9 Oak Ave"
+        var tagged = workerBooking()
+        tagged["leadSource"] = "nextdoor"
+        guard let taggedData = try? JSONSerialization.data(withJSONObject: tagged),
+              let taggedRequest = try? JSONDecoder().decode(Canonical.BookingRequest.self, from: taggedData)
+        else {
+            expect(false, "\(id): fixture: the tagged booking decodes")
+            return
+        }
+        let sourceOnlyPlan = NativeBookingIntake.plan(
+            requests: [taggedRequest], jobs: [], customers: [complete], settings: settings,
+            makeCustomerID: { "c-new" }, nowISO: { writeStamp })
+        let sourceOnly = NativeScheduleBookingPolicy.recheckedIntakePlan(
+            sourceOnlyPlan, currentRequests: [taggedRequest], currentJobs: [], currentCustomers: [complete])
+        expectEqual(customer(sourceOnly)?.leadSource, "nextdoor",
+                    "\(id) [Phase 27]: the link's ?src= tag fills a blank source")
+        expect(sourceOnly?.customersChanged == true
+               && sourceOnly?.drafts.contains { $0.table == "customers" && $0.recordId == "cust-sam" } == true,
+               "\(id) [Phase 27]: …and a source-only fill is queued")
+        var completeSourced = complete
+        completeSourced.leadSource = "google"
+        let unchanged = NativeScheduleBookingPolicy.recheckedIntakePlan(
+            sourceOnlyPlan, currentRequests: [taggedRequest], currentJobs: [], currentCustomers: [completeSourced])
+        expectEqual(customer(unchanged)?.leadSource, "google",
+                    "\(id) [Phase 27]: a customer sourced meanwhile keeps it")
+        expect(unchanged?.drafts.contains { $0.table == "customers" } == false,
+               "\(id) [Phase 27]: …and is not queued")
+
+        // Phase 34 (spec 2026-10-03-referral-program-design.md §5.3): the
+        // recheck makes the same first-touch referrer fill, and a referrer or
+        // another source set after the plan wins.
+        var referrer = known
+        referrer.id = "cust-ref"
+        referrer.name = "Rita Ref"
+        referrer.referralCode = "0123456789abcdef"
+        var referred = workerBooking()
+        referred["referralCode"] = "0123456789abcdef"
+        guard let referredData = try? JSONSerialization.data(withJSONObject: referred),
+              let referredRequest = try? JSONDecoder().decode(Canonical.BookingRequest.self, from: referredData)
+        else {
+            expect(false, "\(id): fixture: the referred booking decodes")
+            return
+        }
+        let referralPlan = NativeBookingIntake.plan(
+            requests: [referredRequest], jobs: [], customers: [complete, referrer], settings: settings,
+            makeCustomerID: { "c-new" }, nowISO: { writeStamp })
+        let referralFill = NativeScheduleBookingPolicy.recheckedIntakePlan(
+            referralPlan, currentRequests: [referredRequest], currentJobs: [], currentCustomers: [complete, referrer])
+        expectEqual(customer(referralFill)?.leadSource, "referral", "\(id) [Phase 34]: the code makes the match a referral")
+        expectEqual(customer(referralFill)?.referredByCustomerId, "cust-ref", "\(id) [Phase 34]: …and the recheck fills the referrer")
+        expect(referralFill?.drafts.contains { $0.table == "customers" && $0.recordId == "cust-sam" } == true,
+               "\(id) [Phase 34]: …and the fill is queued")
+        var referredMeanwhile = complete
+        referredMeanwhile.leadSource = "referral"
+        referredMeanwhile.referredByCustomerId = "cust-other"
+        let referrerRace = NativeScheduleBookingPolicy.recheckedIntakePlan(
+            referralPlan, currentRequests: [referredRequest], currentJobs: [],
+            currentCustomers: [referredMeanwhile, referrer])
+        expectEqual(customer(referrerRace)?.referredByCustomerId, "cust-other",
+                    "\(id) [Phase 34]: a referrer set after the plan wins")
+        expect(referrerRace?.drafts.contains { $0.table == "customers" } == false,
+               "\(id) [Phase 34]: …and nothing is queued for the customer")
+        var otherSourceMeanwhile = complete
+        otherSourceMeanwhile.leadSource = "yelp"
+        let sourceRace = NativeScheduleBookingPolicy.recheckedIntakePlan(
+            referralPlan, currentRequests: [referredRequest], currentJobs: [],
+            currentCustomers: [otherSourceMeanwhile, referrer])
+        expectEqual(customer(sourceRace)?.leadSource, "yelp", "\(id) [Phase 34]: another source set meanwhile is kept")
+        expectEqual(customer(sourceRace)?.referredByCustomerId, nil,
+                    "\(id) [Phase 34]: …and no referrer is filled without a Referral source (R1)")
+        // Phase 33 (campaigns spec §9.2): the recheck commits the plan's lead
+        // job, so a resolved campaign code's `campaignId` is carried; a
+        // matched customer's blank source is never filled by a campaign, and
+        // an unresolvable code changes nothing.
+        let campaigns = [Canonical.Campaign(id: "cmp_fall", name: "Fall", code: "04hmasw9nf6yy41j",
+                                            createdAt: "2026-10-01T00:00:00.000Z")]
+        func coded(_ code: String) -> Canonical.BookingRequest? {
+            var booking = workerBooking()
+            booking["campaignCode"] = code
+            guard let data = try? JSONSerialization.data(withJSONObject: booking) else { return nil }
+            return try? JSONDecoder().decode(Canonical.BookingRequest.self, from: data)
+        }
+        guard let campaignRequest = coded("04hmasw9nf6yy41j"), let unknownRequest = coded("zzzzzzzzzzzzzzzz") else {
+            expect(false, "\(id): fixture: the coded bookings decode")
+            return
+        }
+        let campaignPlan = NativeBookingIntake.plan(
+            requests: [campaignRequest], jobs: [], customers: [complete], campaigns: campaigns, settings: settings,
+            makeCustomerID: { "c-new" }, nowISO: { writeStamp })
+        let campaignRecheck = NativeScheduleBookingPolicy.recheckedIntakePlan(
+            campaignPlan, currentRequests: [campaignRequest], currentJobs: [], currentCustomers: [complete])
+        expectEqual(campaignRecheck?.jobs.first { $0.id == leadJobID }?.campaignId, "cmp_fall",
+                    "\(id) [Phase 33]: the recheck applies the same campaignId to the lead job")
+        expect(campaignRecheck?.drafts.contains { draft in
+            guard draft.table == "jobs", case let .object(fields)? = draft.payload else { return false }
+            return fields["campaignId"] == .string("cmp_fall")
+        } == true, "\(id) [Phase 33]: …and the queued lead job carries it")
+        expectEqual(customer(campaignRecheck)?.leadSource, nil,
+                    "\(id) [Phase 33]: a matched customer's blank source is never filled by a campaign")
+        expect(campaignRecheck?.drafts.contains { $0.table == "customers" } == false,
+               "\(id) [Phase 33]: …so the complete customer is not queued")
+        let unknownPlan = NativeBookingIntake.plan(
+            requests: [unknownRequest], jobs: [], customers: [complete], campaigns: campaigns, settings: settings,
+            makeCustomerID: { "c-new" }, nowISO: { writeStamp })
+        let unknownRecheck = NativeScheduleBookingPolicy.recheckedIntakePlan(
+            unknownPlan, currentRequests: [unknownRequest], currentJobs: [], currentCustomers: [complete])
+        expectEqual(unknownRecheck?.jobs.first { $0.id == leadJobID }?.campaignId, nil,
+                    "\(id) [Phase 33]: an unresolvable code stamps nothing")
+        expectEqual(customer(unknownRecheck)?.leadSource, "booking_link",
+                    "\(id) [Phase 33]: …and Phase 27's blank fill applies")
     }
 
     /// K6: the account changes while the foreground refresh's pull is in its

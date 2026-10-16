@@ -52,14 +52,16 @@ function createAccountDeletionService({
     return false;
   }
 
-  async function purgeUserPhotos(photos, userId) {
+  // Deletes every object under `<userId>/` in one R2 bucket (job photos, or
+  // invoice PDFs uploaded for emailing). `label` names the bucket in the log.
+  async function purgeUserObjects(bucket, userId, label) {
     const prefix = `${userId}/`;
     const seenCursors = new Set();
     let cursor;
 
     try {
       do {
-        const listing = await photos.list(cursor ? { prefix, cursor } : { prefix });
+        const listing = await bucket.list(cursor ? { prefix, cursor } : { prefix });
         if (!listing || !Array.isArray(listing.objects)) {
           throw new Error('invalid R2 listing');
         }
@@ -67,7 +69,7 @@ function createAccountDeletionService({
         const keys = listing.objects
           .map((object) => object?.key)
           .filter((key) => typeof key === 'string' && key.startsWith(prefix));
-        if (keys.length > 0) await photos.delete(keys);
+        if (keys.length > 0) await bucket.delete(keys);
 
         if (!listing.truncated) break;
         if (typeof listing.cursor !== 'string' || !listing.cursor || seenCursors.has(listing.cursor)) {
@@ -79,7 +81,7 @@ function createAccountDeletionService({
     } catch {
       // The account is already gone at this point. Orphaned private objects are
       // preferable to reporting failure after the irreversible DB boundary.
-      logger.error('delete-account: R2 photo purge failed after account deletion');
+      logger.error(`delete-account: R2 ${label} purge failed after account deletion`);
     }
   }
 
@@ -96,6 +98,7 @@ function createAccountDeletionService({
       SUPABASE_ANON_KEY,
       SUPABASE_SERVICE_ROLE_KEY,
       PHOTOS,
+      INVOICE_PDFS,
     } = env;
     if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !SUPABASE_SERVICE_ROLE_KEY) {
       return response(500, MISCONFIGURED);
@@ -141,7 +144,10 @@ function createAccountDeletionService({
       // R2 is outside the database transaction. Run it only after the account
       // and relational data are gone, and never turn cleanup residue into an
       // ambiguous failure response after the irreversible boundary.
-      if (PHOTOS) await purgeUserPhotos(PHOTOS, userId);
+      // Each bucket is purged independently, so a failure in one never skips
+      // the other. Invoice PDFs are stored as `<userId>/<invoiceId>.pdf`.
+      if (PHOTOS) await purgeUserObjects(PHOTOS, userId, 'photo');
+      if (INVOICE_PDFS) await purgeUserObjects(INVOICE_PDFS, userId, 'invoice PDF');
 
       return response(200, { success: true });
     } catch {

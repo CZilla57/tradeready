@@ -323,5 +323,388 @@ do {
            "customer creation stays time-based per device (L3 limitation retained)")
 }
 
+// 14. Phase 27 lead source (spec 2026-10-02-lead-source-design.md §1/§3):
+// the link's `?src=` tag (or "booking_link") is the first touch for a created
+// customer or a matched customer whose source is blank; portal requests never
+// tag one.
+do {
+    func request(leadSource: String?, extra: String = "") -> Canonical.BookingRequest {
+        var fields = """
+        {"id":"bk_src","status":"new","name":"Dana Rivers",
+         "phone":"555-0142","email":"dana@example.com","address":"12 Elm St",
+         "details":"Leak","preferredTiming":"","createdAt":"2026-08-04T15:00:00.000Z"\(extra)
+        """
+        if let leadSource { fields += ",\"leadSource\":\"\(leadSource)\"" }
+        return decodeRequest(fields + "}")
+    }
+    func createdSource(_ request: Canonical.BookingRequest) -> String? {
+        let plan = NativeBookingIntake.plan(
+            requests: [request], jobs: [], customers: [],
+            settings: settings, makeCustomerID: idFactory("c_new"), nowISO: { fixedNow })
+        expect(plan.createdCustomerIDs == ["c_new"], "a customer is created for \(request.leadSource ?? "no tag")")
+        return plan.customers.first?.leadSource
+    }
+
+    expect(request(leadSource: "nextdoor").leadSource == "nextdoor", "the request decodes its tag")
+    expect(createdSource(request(leadSource: "nextdoor")) == "nextdoor", "a ?src= preset tags the new customer")
+    expect(createdSource(request(leadSource: nil)) == "booking_link", "no tag defaults to the booking link")
+    expect(createdSource(request(leadSource: "Home Show")) == "Home Show", "a custom tag is kept verbatim")
+    expect(createdSource(request(leadSource: "Google Ads")) == "google", "a tag alias normalizes to its preset")
+    expect(createdSource(request(leadSource: "   ")) == "booking_link", "a blank tag falls back to the booking link")
+
+    let created = NativeBookingIntake.plan(
+        requests: [request(leadSource: "yelp")], jobs: [], customers: [],
+        settings: settings, makeCustomerID: idFactory("c_new"), nowISO: { fixedNow })
+    let customerDraft = created.drafts.first { $0.table == "customers" }
+    guard case let .object(draftFields)? = customerDraft?.payload else {
+        expect(false, "created customer draft present"); exit(1)
+    }
+    expect(draftFields["leadSource"] == .string("yelp"), "the created customer's upsert carries the source")
+
+    // Matched customer with a blank source: filled, and the match counts as a change.
+    let blankMatch = decodeCustomer("""
+    {"id":"c1","name":"Dana Rivers","email":"dana@example.com","phone":"555-0142",
+     "address":"12 Elm St","notes":""}
+    """)
+    let filled = NativeBookingIntake.plan(
+        requests: [request(leadSource: "nextdoor")], jobs: [], customers: [blankMatch],
+        settings: settings, makeCustomerID: idFactory("c_dup"), nowISO: { fixedNow })
+    expect(filled.customers.count == 1 && filled.customers[0].leadSource == "nextdoor",
+           "a matched customer's blank source is filled")
+    expect(filled.customersChanged && filled.createdCustomerIDs.isEmpty
+           && filled.drafts.contains { $0.table == "customers" && $0.recordId == "c1" },
+           "the source-only fill is a published customer change")
+    let defaultFill = NativeBookingIntake.plan(
+        requests: [request(leadSource: nil)], jobs: [], customers: [blankMatch],
+        settings: settings, makeCustomerID: idFactory("c_dup"), nowISO: { fixedNow })
+    expect(defaultFill.customers[0].leadSource == "booking_link", "an untagged booking fills a blank source with the booking link")
+
+    // Matched customer with a source: first touch wins, nothing is published for it.
+    let sourced = decodeCustomer("""
+    {"id":"c1","name":"Dana Rivers","email":"dana@example.com","phone":"555-0142",
+     "address":"12 Elm St","notes":"","leadSource":"referral"}
+    """)
+    let kept = NativeBookingIntake.plan(
+        requests: [request(leadSource: "nextdoor")], jobs: [], customers: [sourced],
+        settings: settings, makeCustomerID: idFactory("c_dup"), nowISO: { fixedNow })
+    expect(kept.customers[0].leadSource == "referral", "a matched customer's source is never replaced")
+    expect(!kept.customersChanged && !kept.drafts.contains { $0.table == "customers" },
+           "an unchanged matched customer is not published")
+
+    // Portal: an existing customer is linked unchanged; a dangling id creates
+    // a customer with no source.
+    let portalLinked = NativeBookingIntake.plan(
+        requests: [request(leadSource: nil, extra: #","source":"portal","sourceCustomerId":"c1""#)],
+        jobs: [], customers: [blankMatch],
+        settings: settings, makeCustomerID: idFactory("c_dup"), nowISO: { fixedNow })
+    expect(portalLinked.customers[0].leadSource == nil && !portalLinked.customersChanged,
+           "a portal request leaves its customer's source alone")
+    let portalDangling = NativeBookingIntake.plan(
+        requests: [request(leadSource: nil, extra: #","source":"portal","sourceCustomerId":"c_gone""#)],
+        jobs: [], customers: [],
+        settings: settings, makeCustomerID: idFactory("c_portal"), nowISO: { fixedNow })
+    expect(portalDangling.createdCustomerIDs == ["c_portal"] && portalDangling.customers[0].leadSource == nil,
+           "a portal follow-up with a dangling id creates a customer without a source")
+    let portalBlankMatch = NativeBookingIntake.plan(
+        requests: [request(leadSource: nil, extra: #","source":"portal","sourceCustomerId":"c_gone""#)],
+        jobs: [], customers: [blankMatch],
+        settings: settings, makeCustomerID: idFactory("c_dup"), nowISO: { fixedNow })
+    expect(portalBlankMatch.customers[0].leadSource == nil && !portalBlankMatch.customersChanged,
+           "a portal fallback match never fills a blank source")
+
+    // upsertCustomer's default keeps pre-Phase-27 callers source-free.
+    let bare = NativeBookingIntake.upsertCustomer(
+        in: [], name: "Bare", email: "", phone: "", address: "",
+        makeCustomerID: { "c_bare" }, nowISO: { fixedNow })
+    expect(bare.customer?.leadSource == nil && encoded(bare.customer!)["leadSource"] == nil,
+           "upsert without a source writes no key")
+}
+
+// 15. Phase 34 referrals (spec 2026-10-03-referral-program-design.md §5.3):
+// a code from `?r=` makes the booker a referral of the code's owner (first
+// touch), self-referral and portal codes are ignored, and an unknown code is a
+// referral with no referrer.
+do {
+    let samCode = "0123456789abcdef"
+    let sam = decodeCustomer("""
+    {"id":"c_sam","name":"Sam Ortiz","email":"sam@example.com","phone":"(602) 555-0177",
+     "address":"9 Oak Ave","notes":"","leadSource":"google","referralCode":"\(samCode)"}
+    """)
+    func request(name: String = "Dana Rivers", email: String = "dana@example.com", phone: String = "555-0142",
+                 code: String?, extra: String = "", status: String = "new") -> Canonical.BookingRequest {
+        var fields = """
+        {"id":"bk_ref","status":"\(status)","name":"\(name)",
+         "phone":"\(phone)","email":"\(email)","address":"12 Elm St",
+         "details":"Leak","preferredTiming":"","createdAt":"2026-08-04T15:00:00.000Z"\(extra)
+        """
+        if let code { fields += ",\"referralCode\":\"\(code)\"" }
+        return decodeRequest(fields + "}")
+    }
+    func plan(_ request: Canonical.BookingRequest, _ customers: [Canonical.Customer]) -> NativeBookingIntake.Plan {
+        NativeBookingIntake.plan(requests: [request], jobs: [], customers: customers,
+                                 settings: settings, makeCustomerID: idFactory("c_new"), nowISO: { fixedNow })
+    }
+
+    expect(request(code: samCode).referralCode == samCode, "the request decodes its referral code")
+
+    // New customer via a code.
+    let created = plan(request(code: samCode, extra: #","leadSource":"nextdoor""#), [sam])
+    let fresh = created.customers.first { $0.id == "c_new" }
+    expect(fresh?.leadSource == "referral" && fresh?.referredByCustomerId == "c_sam",
+           "a new customer via a code is a referral of the code's owner (a code wins over ?src=)")
+    let draft = created.drafts.first { $0.table == "customers" && $0.recordId == "c_new" }
+    guard case let .object(draftFields)? = draft?.payload else { expect(false, "created customer draft present"); exit(1) }
+    expect(draftFields["referredByCustomerId"] == .string("c_sam") && draftFields["leadSource"] == .string("referral"),
+           "the created customer's upsert carries the referral")
+    expect(created.jobs.first.map { !$0.notes.contains("Sam") && !$0.title.contains("Sam") } == true,
+           "no referrer name goes into the lead job")
+
+    // Matched customer with a blank source: both fill.
+    let blank = decodeCustomer("""
+    {"id":"c1","name":"Dana Rivers","email":"","phone":"","address":"12 Elm St","notes":""}
+    """)
+    let filled = plan(request(code: samCode), [sam, blank])
+    let filledDana = filled.customers.first { $0.id == "c1" }
+    expect(filledDana?.leadSource == "referral" && filledDana?.referredByCustomerId == "c_sam",
+           "a matched customer with a blank source becomes a referral of Sam")
+    expect(filled.drafts.contains { $0.table == "customers" && $0.recordId == "c1" }, "the fill is published")
+
+    // Matched customer with another source: unchanged (first touch).
+    let google = decodeCustomer("""
+    {"id":"c1","name":"Dana Rivers","email":"dana@example.com","phone":"555-0142","address":"12 Elm St","notes":"","leadSource":"yelp"}
+    """)
+    let kept = plan(request(code: samCode), [sam, google])
+    let keptDana = kept.customers.first { $0.id == "c1" }
+    expect(keptDana?.leadSource == "yelp" && keptDana?.referredByCustomerId == nil,
+           "a matched customer with another source keeps both fields")
+    expect(!kept.drafts.contains { $0.table == "customers" }, "nothing is published for an unchanged match")
+
+    // Matched referral with no referrer: filled.
+    let referralNoReferrer = decodeCustomer("""
+    {"id":"c1","name":"Dana Rivers","email":"dana@example.com","phone":"555-0142","address":"12 Elm St","notes":"","leadSource":"Word of mouth"}
+    """)
+    let completed = plan(request(code: samCode), [sam, referralNoReferrer])
+    expect(completed.customers.first { $0.id == "c1" }?.referredByCustomerId == "c_sam",
+           "a matched referral with no referrer gets the referrer")
+    // Matched referral that already has a referrer: first touch wins.
+    let alreadyReferred = decodeCustomer("""
+    {"id":"c1","name":"Dana Rivers","email":"dana@example.com","phone":"555-0142","address":"12 Elm St","notes":"","leadSource":"referral","referredByCustomerId":"c_other"}
+    """)
+    expect(plan(request(code: samCode), [sam, alreadyReferred]).customers.first { $0.id == "c1" }?.referredByCustomerId == "c_other",
+           "an existing referrer is never replaced")
+
+    // Self-referral: by name, by email, by phone.
+    let byName = plan(request(name: "  sam ortiz", email: "", phone: "", code: samCode), [sam])
+    expect(byName.customers.count == 1 && byName.customers[0].referredByCustomerId == nil
+           && byName.customers[0].leadSource == "google", "self-referral by name changes nothing")
+    let byEmail = plan(request(name: "S Ortiz", email: "SAM@example.com", phone: "", code: samCode), [sam])
+    let emailCustomer = byEmail.customers.first { $0.id == "c_new" }
+    expect(emailCustomer?.leadSource == "booking_link" && emailCustomer?.referredByCustomerId == nil,
+           "self-referral by email is no referral (Phase 27 default)")
+    let byPhone = plan(request(name: "S Ortiz", email: "", phone: "602.555.0177", code: samCode), [sam])
+    expect(byPhone.customers.first { $0.id == "c_new" }?.referredByCustomerId == nil, "self-referral by phone is no referral")
+
+    // Unknown code: a referral with no referrer.
+    let unknown = plan(request(code: "zzzzzzzzzzzzzzzz"), [sam])
+    let unknownCustomer = unknown.customers.first { $0.id == "c_new" }
+    expect(unknownCustomer?.leadSource == "referral" && unknownCustomer?.referredByCustomerId == nil,
+           "an unknown code is a referral with no referrer")
+    // A code the device rejects is no code.
+    let malformed = plan(request(code: "ILOU456789abcdef"), [sam])
+    expect(malformed.customers.first { $0.id == "c_new" }?.leadSource == "booking_link", "a malformed code is no code")
+
+    // A portal request carrying a code: ignored, even on the dangling-id fallback.
+    let portal = plan(request(code: samCode, extra: #","source":"portal","sourceCustomerId":"c_gone""#), [sam])
+    let portalCustomer = portal.customers.first { $0.id == "c_new" }
+    expect(portalCustomer?.leadSource == nil && portalCustomer?.referredByCustomerId == nil, "a portal request's code is ignored")
+
+    // A slot booking carries the code too.
+    let slot = plan(request(code: samCode, extra: ",\"kind\":\"booked\",\"slot\":\(slotJSON)", status: "booked"), [sam])
+    expect(slot.createdJobIDs == ["jbk_bk_ref"] && slot.customers.first { $0.id == "c_new" }?.referredByCustomerId == "c_sam",
+           "a slot booking via a code records the referral")
+
+    // upsertCustomer: a referrer is set only with a referral source, never on itself.
+    let notReferral = NativeBookingIntake.upsertCustomer(
+        in: [], name: "X", email: "", phone: "", address: "", leadSource: "google", referredByCustomerId: "c_sam",
+        makeCustomerID: { "c_x" }, nowISO: { fixedNow })
+    expect(notReferral.customer?.referredByCustomerId == nil, "upsert drops a referrer without a referral source")
+    let selfRef = NativeBookingIntake.upsertCustomer(
+        in: [], name: "X", email: "", phone: "", address: "", leadSource: "referral", referredByCustomerId: "c_x",
+        makeCustomerID: { "c_x" }, nowISO: { fixedNow })
+    expect(selfRef.customer?.referredByCustomerId == nil, "upsert never makes a customer its own referrer")
+}
+
+// 15. Phase 33 campaign code (spec 2026-10-03-campaigns-tags-design.md §9.2):
+// `?c=` resolves by exact match among the owner's campaigns. A resolved code
+// stamps the lead job's `campaignId`; a customer the booking CREATES gets the
+// `campaign` source; a matched past customer's source is never filled; an
+// unresolvable or ambiguous code and portal requests change nothing.
+do {
+    func request(code: String?, src: String? = nil, extra: String = "") -> Canonical.BookingRequest {
+        var fields = """
+        {"id":"bk_cmp","status":"new","name":"Dana Rivers",
+         "phone":"555-0142","email":"dana@example.com","address":"12 Elm St",
+         "details":"Tune-up","preferredTiming":"","createdAt":"2026-10-04T15:00:00.000Z"\(extra)
+        """
+        if let code { fields += ",\"campaignCode\":\"\(code)\"" }
+        if let src { fields += ",\"leadSource\":\"\(src)\"" }
+        return decodeRequest(fields + "}")
+    }
+    let campaigns = [
+        Canonical.Campaign(id: "cmp_fall", name: "Fall", code: "04hmasw9nf6yy41j", createdAt: "2026-10-01T00:00:00.000Z"),
+        Canonical.Campaign(id: "cmp_dup_a", name: "A", code: "dddddddddddddddd", createdAt: "2026-10-01T00:00:00.000Z"),
+        Canonical.Campaign(id: "cmp_dup_b", name: "B", code: "dddddddddddddddd", createdAt: "2026-10-01T00:00:00.000Z"),
+    ]
+    func plan(_ request: Canonical.BookingRequest, customers: [Canonical.Customer] = []) -> NativeBookingIntake.Plan {
+        NativeBookingIntake.plan(requests: [request], jobs: [], customers: customers, campaigns: campaigns,
+                                 settings: settings, makeCustomerID: idFactory("c_new"), nowISO: { fixedNow })
+    }
+    func lead(_ plan: NativeBookingIntake.Plan) -> Canonical.Job? { plan.jobs.first { $0.id == "jbk_bk_cmp" } }
+
+    expect(request(code: "04hmasw9nf6yy41j").campaignCode == "04hmasw9nf6yy41j", "the request decodes its code")
+    expect(NativeBookingIntake.campaignDecision(for: request(code: "04hmasw9nf6yy41j"), campaigns: campaigns) == "cmp_fall",
+           "an exact code resolves to its campaign")
+    expect(NativeBookingIntake.campaignDecision(for: request(code: " 04HMASW9NF6YY41J "), campaigns: campaigns) == "cmp_fall",
+           "the code is matched lowercased and trimmed, as the Worker stores it")
+    expect(NativeBookingIntake.campaignDecision(for: request(code: "zzzzzzzzzzzzzzzz"), campaigns: campaigns) == nil,
+           "an unknown code resolves to none")
+    expect(NativeBookingIntake.campaignDecision(for: request(code: "dddddddddddddddd"), campaigns: campaigns) == nil,
+           "a code shared by two campaigns resolves to none")
+    expect(NativeBookingIntake.campaignDecision(for: request(code: ""), campaigns: campaigns) == nil, "an empty code is none")
+
+    // Creates a customer: the lead job is stamped and the customer's source is `campaign` (beats ?src=).
+    let created = plan(request(code: "04hmasw9nf6yy41j", src: "nextdoor"))
+    expect(lead(created)?.campaignId == "cmp_fall", "a resolved code stamps the lead job's campaignId")
+    expect(created.createdCustomerIDs == ["c_new"] && created.customers.first?.leadSource == "campaign",
+           "a customer created through a campaign link gets the campaign source")
+    let jobDraft = created.drafts.first { $0.table == "jobs" }
+    guard case let .object(jobFields)? = jobDraft?.payload else { expect(false, "lead job draft present"); exit(1) }
+    expect(jobFields["campaignId"] == .string("cmp_fall"), "the queued lead job carries campaignId")
+
+    // Matches an existing customer: the job is stamped, the source is never filled.
+    let blank = decodeCustomer("""
+    {"id":"c1","name":"Dana Rivers","email":"dana@example.com","phone":"555-0142","address":"12 Elm St","notes":""}
+    """)
+    let matched = plan(request(code: "04hmasw9nf6yy41j"), customers: [blank])
+    expect(lead(matched)?.campaignId == "cmp_fall", "a matched customer's lead job is stamped")
+    expect(matched.customers[0].leadSource == nil && !matched.customersChanged
+           && !matched.drafts.contains { $0.table == "customers" },
+           "a matched past customer's blank source is never filled by a campaign")
+    let sourced = decodeCustomer("""
+    {"id":"c1","name":"Dana Rivers","email":"dana@example.com","phone":"555-0142","address":"12 Elm St","notes":"","leadSource":"yelp"}
+    """)
+    expect(plan(request(code: "04hmasw9nf6yy41j"), customers: [sourced]).customers[0].leadSource == "yelp",
+           "a matched customer's source is unchanged")
+    let partial = decodeCustomer("""
+    {"id":"c1","name":"Dana Rivers","email":"","phone":"555-0142","address":"","notes":""}
+    """)
+    let backfilled = plan(request(code: "04hmasw9nf6yy41j"), customers: [partial])
+    expect(backfilled.customers[0].email == "dana@example.com" && backfilled.customers[0].leadSource == nil,
+           "blank contact fields still fill; the source does not")
+
+    // Unresolvable code: Phase 27 rules, no campaignId.
+    let unknown = plan(request(code: "zzzzzzzzzzzzzzzz"))
+    expect(lead(unknown)?.campaignId == nil && unknown.customers.first?.leadSource == "booking_link",
+           "an unresolvable code changes nothing (booking link default)")
+    let unknownMatch = plan(request(code: "zzzzzzzzzzzzzzzz"), customers: [blank])
+    expect(unknownMatch.customers[0].leadSource == "booking_link", "an unresolvable code keeps the Phase 27 blank fill")
+    let none = plan(request(code: nil, src: "google"))
+    expect(lead(none)?.campaignId == nil && (encoded(lead(none)!))["campaignId"] == nil && none.customers.first?.leadSource == "google",
+           "no code: no campaignId key, Phase 27 source")
+
+    // Portal: unchanged even with a code.
+    let portal = plan(request(code: "04hmasw9nf6yy41j", extra: #","source":"portal","sourceCustomerId":"c1""#), customers: [blank])
+    expect(lead(portal)?.campaignId == nil && portal.customers[0].leadSource == nil && !portal.customersChanged,
+           "a portal request never takes a campaign")
+
+    // Without campaigns (pre-Phase-33 callers) a code is inert.
+    let noCampaigns = NativeBookingIntake.plan(requests: [request(code: "04hmasw9nf6yy41j")], jobs: [], customers: [],
+                                               settings: settings, makeCustomerID: idFactory("c_new"), nowISO: { fixedNow })
+    expect(lead(noCampaigns)?.campaignId == nil, "the default campaigns list resolves nothing")
+}
+
+// 16. Referral code + campaign code together (campaigns spec §9.2): a referral
+// that resolves to a referrer wins and fills exactly what a referral-only
+// booking would, on a new customer and on a matched blank-source customer; an
+// unresolvable referral loses to the campaign (new customer), and a campaign
+// alone still never fills a matched customer's source.
+do {
+    let samCode = "0123456789abcdef"
+    let campaignCode = "04hmasw9nf6yy41j"
+    let sam = decodeCustomer("""
+    {"id":"c_sam","name":"Sam Ortiz","email":"sam@example.com","phone":"(602) 555-0177",
+     "address":"9 Oak Ave","notes":"","leadSource":"google","referralCode":"\(samCode)"}
+    """)
+    let blank = decodeCustomer("""
+    {"id":"c1","name":"Dana Rivers","email":"","phone":"","address":"12 Elm St","notes":""}
+    """)
+    let sourced = decodeCustomer("""
+    {"id":"c1","name":"Dana Rivers","email":"dana@example.com","phone":"555-0142","address":"12 Elm St","notes":"","leadSource":"yelp"}
+    """)
+    let campaigns = [
+        Canonical.Campaign(id: "cmp_fall", name: "Fall", code: campaignCode, createdAt: "2026-10-01T00:00:00.000Z"),
+    ]
+    func request(referral: String?, campaign: String?, name: String = "Dana Rivers",
+                 email: String = "dana@example.com", phone: String = "555-0142") -> Canonical.BookingRequest {
+        var fields = """
+        {"id":"bk_both","status":"new","name":"\(name)",
+         "phone":"\(phone)","email":"\(email)","address":"12 Elm St",
+         "details":"Tune-up","preferredTiming":"","createdAt":"2026-10-04T15:00:00.000Z"
+        """
+        if let referral { fields += ",\"referralCode\":\"\(referral)\"" }
+        if let campaign { fields += ",\"campaignCode\":\"\(campaign)\"" }
+        return decodeRequest(fields + "}")
+    }
+    func plan(_ request: Canonical.BookingRequest, _ customers: [Canonical.Customer]) -> NativeBookingIntake.Plan {
+        NativeBookingIntake.plan(requests: [request], jobs: [], customers: customers, campaigns: campaigns,
+                                 settings: settings, makeCustomerID: idFactory("c_new"), nowISO: { fixedNow })
+    }
+    func lead(_ plan: NativeBookingIntake.Plan) -> Canonical.Job? { plan.jobs.first { $0.id == "jbk_bk_both" } }
+
+    // New customer: the referral wins; the job is still stamped with the campaign.
+    let created = plan(request(referral: samCode, campaign: campaignCode), [sam])
+    let fresh = created.customers.first { $0.id == "c_new" }
+    expect(fresh?.leadSource == "referral" && fresh?.referredByCustomerId == "c_sam",
+           "both codes, new customer: a resolving referral wins over the campaign")
+    expect(lead(created)?.campaignId == "cmp_fall", "both codes, new customer: the lead job still carries the campaign")
+    let referralOnly = plan(request(referral: samCode, campaign: nil), [sam]).customers.first { $0.id == "c_new" }
+    expect(fresh?.leadSource == referralOnly?.leadSource && fresh?.referredByCustomerId == referralOnly?.referredByCustomerId,
+           "both codes, new customer: identical to a referral-only booking")
+
+    // Matched blank-source customer: the referral fills exactly like a referral-only booking.
+    let matchedBoth = plan(request(referral: samCode, campaign: campaignCode), [sam, blank])
+    let matchedDana = matchedBoth.customers.first { $0.id == "c1" }
+    expect(matchedDana?.leadSource == "referral" && matchedDana?.referredByCustomerId == "c_sam",
+           "both codes, matched blank-source customer: the referral source and referrer are filled")
+    expect(matchedBoth.drafts.contains { $0.table == "customers" && $0.recordId == "c1" }, "both codes, matched: the fill is published")
+    expect(lead(matchedBoth)?.campaignId == "cmp_fall", "both codes, matched: the lead job is stamped with the campaign")
+    let matchedReferralOnly = plan(request(referral: samCode, campaign: nil), [sam, blank]).customers.first { $0.id == "c1" }
+    expect(matchedDana?.leadSource == matchedReferralOnly?.leadSource
+           && matchedDana?.referredByCustomerId == matchedReferralOnly?.referredByCustomerId,
+           "both codes, matched: identical to a referral-only booking")
+
+    // A matched customer that already has a source keeps it (first touch).
+    let matchedSourced = plan(request(referral: samCode, campaign: campaignCode), [sam, sourced]).customers.first { $0.id == "c1" }
+    expect(matchedSourced?.leadSource == "yelp" && matchedSourced?.referredByCustomerId == nil,
+           "both codes, matched sourced customer: unchanged")
+
+    // Unresolvable referral + campaign: the campaign applies.
+    let unknownNew = plan(request(referral: "zzzzzzzzzzzzzzzz", campaign: campaignCode), [sam])
+    let unknownFresh = unknownNew.customers.first { $0.id == "c_new" }
+    expect(unknownFresh?.leadSource == "campaign" && unknownFresh?.referredByCustomerId == nil,
+           "unresolvable referral + campaign, new customer: the campaign source applies")
+    expect(lead(unknownNew)?.campaignId == "cmp_fall", "unresolvable referral + campaign: the job carries the campaign")
+    let unknownMatched = plan(request(referral: "zzzzzzzzzzzzzzzz", campaign: campaignCode), [sam, blank])
+    expect(unknownMatched.customers.first { $0.id == "c1" }?.leadSource == nil
+           && unknownMatched.customers.first { $0.id == "c1" }?.referredByCustomerId == nil,
+           "unresolvable referral + campaign, matched blank customer: still never filled")
+
+    // A self-referral is no referral: the campaign applies to a new customer.
+    let selfNew = plan(request(referral: samCode, campaign: campaignCode, name: "S Ortiz", email: "sam@example.com", phone: ""), [sam])
+    let selfFresh = selfNew.customers.first { $0.id == "c_new" }
+    expect(selfFresh?.leadSource == "campaign" && selfFresh?.referredByCustomerId == nil,
+           "self-referral + campaign: the campaign applies")
+}
+
 if failures == 0 { print("PASS: native booking intake tests") }
 else { print("\(failures) booking intake test(s) failed"); exit(1) }

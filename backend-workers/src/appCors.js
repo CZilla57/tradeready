@@ -26,14 +26,15 @@ export function appCors(c, methods) {
   c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 }
 
-// Client IP for rate limiting. Vercel's req.socket fallback has no Workers
-// equivalent; cf-connecting-ip is Cloudflare's always-present client IP and
-// serves the same role (a stable per-client key), with x-forwarded-for kept
-// first to match the source's precedence.
+// Client IP for rate limiting and consent records. cf-connecting-ip is set by
+// Cloudflare's edge and can't be supplied by the caller. x-forwarded-for is
+// only a fallback for local runs without the edge: Cloudflare appends to a
+// caller-sent x-forwarded-for, so its first entry is attacker-chosen and
+// must never win when cf-connecting-ip is present.
 export function clientIp(c) {
-  return (c.req.header('x-forwarded-for') || c.req.header('cf-connecting-ip') || 'unknown')
-    .split(',')[0]
-    .trim();
+  const edge = (c.req.header('cf-connecting-ip') || '').trim();
+  if (edge) return edge;
+  return (c.req.header('x-forwarded-for') || 'unknown').split(',')[0].trim() || 'unknown';
 }
 
 // Vercel's bodyParser leaves req.body undefined when absent/unparseable and

@@ -68,7 +68,9 @@ private func snapshot(
     outstandingTotal: Decimal = 0,
     totalCustomers: Int = 0,
     avgCompletedJobValue: Decimal = 0,
-    tax: NativeTaxSnapshotBlock? = nil
+    tax: NativeTaxSnapshotBlock? = nil,
+    leadSources: NativeLeadSourceSnapshotBlock? = nil,
+    referrals: NativeReferralSnapshotBlock? = nil
 ) -> NativeBusinessSnapshot {
     NativeBusinessSnapshot(
         asOf: asOf,
@@ -78,7 +80,9 @@ private func snapshot(
             activeJobsByStatus: activeJobsByStatus, totalCustomers: totalCustomers,
             topCustomers: topCustomers, avgCompletedJobValue: avgCompletedJobValue
         ),
-        tax: tax
+        tax: tax,
+        leadSources: leadSources,
+        referrals: referrals
     )
 }
 
@@ -221,6 +225,92 @@ private func testKeyNeverEntersPrompt() {
     expect(!prompt.contains(secretGroq), "the built system prompt never contains the Groq key")
 }
 
+// MARK: - Lead sources block (Phase 27, spec §6)
+
+private let leadSourceRows = NativeLeadSourceSnapshotBlock(rows: [
+    NativeLeadSourceSnapshotRow(name: "Google", collected: Decimal(string: "4200.4")!, won: 2, sent: 3,
+                                closeRate: Decimal(2) / Decimal(3)),
+    NativeLeadSourceSnapshotRow(name: "Home show", collected: 1800, won: 1, sent: 1, closeRate: 1),
+    NativeLeadSourceSnapshotRow(name: "Yelp", collected: 0, won: 0, sent: 0, closeRate: nil),
+    NativeLeadSourceSnapshotRow(name: "Unknown", collected: Decimal(string: "299.5")!, won: 0, sent: 2, closeRate: 0),
+])
+
+private let leadSourcesText =
+    "LEAD SOURCES (year to date, credited to each customer's first source): " +
+    "Google: $4200 collected, 2 of 3 estimates won (67% close rate); " +
+    "Home show: $1800 collected, 1 of 1 estimate won (100% close rate); " +
+    "Yelp: $0 collected, no estimates sent; " +
+    "Unknown: $300 collected, 0 of 2 estimates won (0% close rate). " +
+    "These lead-source figures are computed from the owner's records. " +
+    "Cite them exactly; never estimate figures for a source that isn't listed."
+
+private func testLeadSourcesBlock() {
+    var withSources = fullSnapshot
+    withSources.leadSources = leadSourceRows
+    let base = NativeCoachPrompt.buildSystemPrompt(settings: settings(), snapshot: fullSnapshot)
+    let prompt = NativeCoachPrompt.buildSystemPrompt(settings: settings(), snapshot: withSources)
+    expectEqual(prompt, base + "\n" + leadSourcesText,
+                "lead sources: the block follows the tax block on its own line, whole dollars and whole percents")
+    expect(prompt.hasSuffix("Cite them exactly; never estimate figures for a source that isn't listed."),
+           "lead sources: the block ends with the exact grounding sentence")
+
+    let noTax = snapshot(totalCustomers: 3, leadSources: leadSourceRows)
+    expectEqual(
+        NativeCoachPrompt.buildSystemPrompt(settings: settings(contactName: ""), snapshot: noTax),
+        "Assistant for Ace Plumbing, Plumbing. Rates: $85/hr labor, 20% materials markup, 15% overhead, " +
+            "20% margin, $75 min fee. Be brief. Itemize estimates. USD only." +
+            "BUSINESS DATA (2026-09-22):\n" +
+            "Revenue: $0 this month, $0 last month.\n" +
+            "Outstanding: $0.\n" +
+            "Active jobs: none.\n" +
+            "Customers: 3 total.\n" + leadSourcesText,
+        "lead sources without a tax block: directly after BUSINESS DATA"
+    )
+
+    var nilSources = fullSnapshot
+    nilSources.leadSources = nil
+    expectEqual(NativeCoachPrompt.buildSystemPrompt(settings: settings(), snapshot: nilSources), base,
+                "lead sources nil: the prompt is unchanged")
+    var emptySources = fullSnapshot
+    emptySources.leadSources = NativeLeadSourceSnapshotBlock(rows: [])
+    expectEqual(NativeCoachPrompt.buildSystemPrompt(settings: settings(), snapshot: emptySources), base,
+                "lead sources with no rows: the prompt is unchanged")
+}
+
+// MARK: - Referrals block (Phase 34, spec 2026-10-03-referral-program-design.md §5.8)
+
+private let referralRows = NativeReferralSnapshotBlock(
+    newReferred: 3, collected: Decimal(string: "2400.4")!,
+    topReferrers: [NativeReferralSnapshotRow(name: "Sam Ortiz", referred: 2, collected: 1800),
+                   NativeReferralSnapshotRow(name: "Ana Lee", referred: 1, collected: Decimal(string: "599.5")!)],
+    rewardsRecorded: 1, rewardsAmount: 25
+)
+
+private let referralsText =
+    "REFERRALS (year to date): 3 new referred customers; $2400 collected from referred customers. " +
+    "Top referrers: Sam Ortiz (2 referred, $1800 collected); Ana Lee (1 referred, $600 collected). " +
+    "Rewards recorded: 1 ($25). These referral figures are computed from the owner's records. " +
+    "Cite them exactly; never estimate figures for a referrer who isn't listed. " +
+    "Rewards are recorded by the owner; never promise, calculate or send a reward on the owner's behalf."
+
+private func testReferralsBlock() {
+    var withBoth = fullSnapshot
+    withBoth.leadSources = leadSourceRows
+    withBoth.referrals = referralRows
+    let base = NativeCoachPrompt.buildSystemPrompt(settings: settings(), snapshot: fullSnapshot)
+    expectEqual(NativeCoachPrompt.buildSystemPrompt(settings: settings(), snapshot: withBoth),
+                base + "\n" + leadSourcesText + "\n" + referralsText,
+                "referrals: LEAD SOURCES, then REFERRALS, each on its own line, whole dollars")
+    var referralsOnly = fullSnapshot
+    referralsOnly.referrals = referralRows
+    expectEqual(NativeCoachPrompt.buildSystemPrompt(settings: settings(), snapshot: referralsOnly),
+                base + "\n" + referralsText, "referrals without lead sources: directly after the tax block")
+    var nilReferrals = withBoth
+    nilReferrals.referrals = nil
+    expectEqual(NativeCoachPrompt.buildSystemPrompt(settings: settings(), snapshot: nilReferrals),
+                base + "\n" + leadSourcesText, "referrals nil: the existing exact prompt is unchanged")
+}
+
 // MARK: - getQuickPrompts fixtures
 
 private func expectPromptIDs(_ prompts: [NativeCoachQuickPrompt], _ expected: [String], _ label: String) {
@@ -273,6 +363,8 @@ testSnapshotTaxUnknownBothCaveats()
 testSnapshotAllEmptyZero()
 testSnapshotSingleOverdueInvoiceSingular()
 testKeyNeverEntersPrompt()
+testLeadSourcesBlock()
+testReferralsBlock()
 testQuickPromptsNoSnapshot()
 testQuickPromptsOverdueAndAvgJob()
 testQuickPromptsSingleOverdueSingular()

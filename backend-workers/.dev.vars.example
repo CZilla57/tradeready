@@ -15,8 +15,23 @@ REVENUECAT_WEBHOOK_SECRET=placeholder
 CRON_SECRET=placeholder
 RESEND_API_KEY=placeholder
 GROQ_API_KEY=placeholder
+# Phase 23 open API: HMAC key for /v1 list cursors (any long random string locally).
+API_CURSOR_SECRET=placeholder-local-cursor-secret
+# Phase 23 open API: HMAC key that tags API keys (at least 44 characters; /v1
+# answers 503 not_configured without it). Keys minted locally verify only here.
+API_KEY_TAG_SECRET=placeholder-local-api-key-tag-secret-0123456789abcd
 
 # Optional overrides (unset on Vercel today unless the dashboard says otherwise)
 # ESTIMATE_PUBLIC_ORIGIN=
 # ESTIMATE_PUBLIC_BASE=
 # CHANGE_PUBLIC_BASE=
+
+# Phase 19 e-signatures (both flags default OFF when unset). For a local seal
+# key, generate a throwaway pair (never the production key):
+#   openssl genpkey -algorithm ed25519 -out /tmp/esign-dev.pem
+#   openssl pkey -in /tmp/esign-dev.pem -pubout -outform DER | tail -c 32 | base64
+# ESIGN_V2=true
+# ESIGN_REQUIRE_CONSENT=true
+# ESIGN_SEAL_PRIVATE_KEY=<base64 PKCS#8 DER, or the PEM body>
+# ESIGN_SEAL_KEY_ID=dev
+# ESIGN_SEAL_PUBLIC_KEYS={"dev":"<base64 raw 32-byte public key>"}

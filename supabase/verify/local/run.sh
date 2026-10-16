@@ -40,7 +40,8 @@ eq()   { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got '$2', want '$3')"; 
 echo "== P12-024 compile and re-run"
 pq -q -f "$HERE/bootstrap.sql" >/dev/null 2>&1 || { echo "bootstrap failed"; exit 2; }
 pq -q -f "$MIG/20260807_booking_reservations.sql" >/dev/null 2>&1 || { echo "20260807 failed"; exit 2; }
-for f in 20260920_booking_lifecycle_rpcs 20260921_booking_admin_state 20260922_portal_token_admin; do
+# Phase 26: 20261003_calendar_busy (one server-authority table) rides the same apply/re-apply check.
+for f in 20260920_booking_lifecycle_rpcs 20260921_booking_admin_state 20260922_portal_token_admin 20261003_calendar_busy; do
   if pq -q -f "$MIG/$f.sql" >/dev/null 2>"$TMP/err"; then ok "$f applies"; else bad "$f applies: $(head -3 "$TMP/err")"; fi
   if pq -q -f "$MIG/$f.sql" >/dev/null 2>"$TMP/err"; then ok "$f re-applies (idempotent)"; else bad "$f re-applies: $(head -3 "$TMP/err")"; fi
 done
@@ -63,7 +64,7 @@ echo "$RPCS" | while read -r fn; do
   [ "$(pq -c "select has_function_privilege('service_role', '$fn', 'execute')")" = "t" ] || echo "BAD service_role cannot execute $fn"
 done > "$TMP/fn"; if [ -s "$TMP/fn" ]; then bad "$(cat "$TMP/fn")"; else ok "service_role can execute every Phase 8 function"; fi
 eq "PUBLIC has no execute on booking_take_lock" "$(pq -c "select coalesce(bool_or(grantee = 0), false) from (select (aclexplode(proacl)).grantee from pg_proc where proname = 'booking_take_lock') a")" "f"
-for t in booking_link_state booking_operations portal_operations; do
+for t in booking_link_state booking_operations portal_operations calendar_busy; do
   c=$(pq -c "select count(*) from pg_policies where schemaname='public' and tablename='$t'")
   eq "$t has no client-facing policy" "$c" "0"
   eq "$t has RLS enabled" "$(pq -c "select relrowsecurity from pg_class where oid = 'public.$t'::regclass")" "t"
@@ -91,7 +92,7 @@ r=$(pq -c "select set_config('request.jwt.claims', '{\"role\":\"authenticated\"}
 eq "client JWT role is refused inside the function" "$r" '{"ok": false, "error": "forbidden"}'
 
 echo "== hosted-project verify SQL runs and is clean on the scratch DB"
-for v in booking_lifecycle_rpcs booking_admin_state portal_token_admin; do
+for v in booking_lifecycle_rpcs booking_admin_state portal_token_admin calendar_busy; do
   if pq -f "$HERE/../$v.sql" >"$TMP/v.out" 2>"$TMP/v.err"; then ok "$v.sql runs"; else bad "$v.sql: $(head -3 "$TMP/v.err")"; fi
 done
 # The grant queries are written so a clean project returns no rows; a leaked

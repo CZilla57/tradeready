@@ -288,6 +288,95 @@ do {
            "invoice subtotal follows JavaScript negative half-cent rounding")
 }
 
+// MARK: - Phase 25 review fix: customer-approved lines (JobInvoiceApprovedQuote)
+//
+// The customer approved Better (4 h × $95 = $380 labor + $142.50 overhead) +
+// a $150 add-on = $672.50 through the link; the tier was then re-priced to
+// 8 h. The job keeps the current 8 h pricing and the consented total.
+
+do {
+    let approved = JobInvoiceApprovedQuote(lines: [
+        JobInvoiceLineDraft(description: "Labor (4 hrs @ $95/hr)", amount: 380, category: "labor"),
+        JobInvoiceLineDraft(description: "Overhead & operating costs", amount: d("142.5"), category: "overhead"),
+        JobInvoiceLineDraft(description: "Surge protector", amount: 150, category: "other")
+    ])
+    let quoted = JobInvoiceDomain.computeBillableBreakdown(
+        estimateTotal: d("672.5"), laborHours: 8, laborRate: 95, materials: [], materialMarkup: 0,
+        directCosts: [], status: "approved", timeSessions: [], changeOrders: [approvedCO("co", 80)],
+        addOnLines: [JobInvoiceLineDraft(description: "Surge protector", amount: 150, category: "other")],
+        approvedQuote: approved
+    )
+    expect(quoted.total, d("752.5"), "approved quote: total is the consented total plus change orders")
+    expect(quoted.approvedLines, approved.lines, "approved quote: the breakdown carries the approved lines")
+    let lines = JobInvoiceDomain.buildInvoiceLineItems(
+        breakdown: quoted, laborRate: 95, materialCount: 0, singleMaterialName: nil,
+        approvedChangeOrders: [JobInvoiceApprovedChangeOrder(title: "Extra vent", amount: 80)]
+    )
+    expect(lines.map(\.description), [
+        "Labor (4 hrs @ $95/hr)", "Overhead & operating costs", "Surge protector", "Change order — Extra vent"
+    ], "approved quote: approved lines verbatim (no re-derived $760 labor, no duplicate add-on), then change orders")
+    expect(lines.reduce(Decimal.zero) { $0 + $1.amount }, quoted.total, "approved quote: lines sum to the amount due")
+
+    let tracked = JobInvoiceDomain.computeBillableBreakdown(
+        estimateTotal: d("672.5"), laborHours: 8, laborRate: 95, materials: [], materialMarkup: 0,
+        directCosts: [], status: "complete", timeSessions: [closedSession(7)], changeOrders: [],
+        approvedQuote: approved
+    )
+    expect(tracked.usedTrackedTime, true, "approved quote: tracked time still applies once complete")
+    expect(tracked.total, d("957.5"), "approved quote: tracked 7 h × $95 replaces the approved $380 labor")
+    let trackedLines = JobInvoiceDomain.buildInvoiceLineItems(
+        breakdown: tracked, laborRate: 95, materialCount: 0, singleMaterialName: nil, approvedChangeOrders: []
+    )
+    expect(trackedLines.first, JobInvoiceLineDraft(description: "Labor — 7 hrs @ $95/hr", amount: 665, category: "labor"),
+           "approved quote: the tracked labor line takes the approved labor line's place")
+    expect(trackedLines.reduce(Decimal.zero) { $0 + $1.amount }, tracked.total, "approved quote: tracked lines sum to the amount due")
+
+    let zeroLabor = JobInvoiceApprovedQuote(lines: [
+        JobInvoiceLineDraft(description: "Labor (0 hrs @ $95/hr)", amount: 0, category: "labor"),
+        JobInvoiceLineDraft(description: "Flat install", amount: 300, category: "other")
+    ])
+    let flat = JobInvoiceDomain.computeBillableBreakdown(
+        estimateTotal: 300, laborHours: 0, laborRate: 95, materials: [], materialMarkup: 0,
+        directCosts: [], status: "complete", timeSessions: [closedSession(2)], changeOrders: [],
+        approvedQuote: zeroLabor
+    )
+    let flatLines = JobInvoiceDomain.buildInvoiceLineItems(
+        breakdown: flat, laborRate: 95, materialCount: 0, singleMaterialName: nil, approvedChangeOrders: []
+    )
+    expect(flatLines.map(\.description), ["Flat install"], "approved quote: a $0 labor line is omitted like today's")
+    expect(flat.total, 300, "approved quote: a flat-priced job gains no tracked labor")
+}
+
+// MARK: - appendingReferralCredit (Phase 34, spec 2026-10-03-referral-program-design.md §5.6)
+
+do {
+    let jobLines = [
+        JobInvoiceLineDraft(description: "Labor — 4 hrs @ $100/hr", amount: d("400"), category: "labor"),
+        JobInvoiceLineDraft(description: "Materials", amount: d("100"), category: "materials"),
+    ]
+    let created = JobInvoiceDomain.appendingReferralCredit(jobLines, existingInvoiceLines: [], credit: d("25"))
+    expect(created.count, 3, "create: the job lines plus one credit line")
+    expect(created.last, JobInvoiceLineDraft(description: "Referral credit \u{2014} thank you!", amount: d("-25"),
+                                             category: "referral_credit"), "create: the credit is a negative referral_credit line")
+    expect(JobInvoiceDomain.referralCreditTotal(created), d("-25"), "create: the credit total")
+    expect(created.reduce(Decimal.zero) { $0 + $1.amount }, d("475"), "create: the lines sum to the lowered amount")
+
+    let existing = jobLines + [
+        JobInvoiceLineDraft(description: "Referral credit \u{2014} thank you!", amount: d("-25"), category: "referral_credit"),
+        JobInvoiceLineDraft(description: "Old permit", amount: d("50"), category: "permit"),
+    ]
+    let finalized = JobInvoiceDomain.appendingReferralCredit(jobLines, existingInvoiceLines: existing, credit: 0)
+    expect(finalized.map(\.category), ["labor", "materials", "referral_credit"],
+           "finalize: a recompute keeps the earlier credit line and drops other stale lines")
+    let both = JobInvoiceDomain.appendingReferralCredit(jobLines, existingInvoiceLines: existing, credit: d("10.005"))
+    expect(both.map(\.amount), [d("400"), d("100"), d("-25"), d("-10.01")],
+           "finalize: an earlier credit plus a new one, rounded to cents")
+    let none = JobInvoiceDomain.appendingReferralCredit(jobLines, existingInvoiceLines: [], credit: 0)
+    expect(none, jobLines, "zero credit adds no line")
+    expect(JobInvoiceDomain.appendingReferralCredit(jobLines, existingInvoiceLines: [], credit: d("-5")), jobLines,
+           "a negative credit adds no line")
+}
+
 // MARK: - defaultDueDate
 
 do {

@@ -89,6 +89,9 @@ expectEqual(NativeTodayBriefing.destination(for: .selectDate(date: "2026-07-04")
 expectEqual(NativeTodayBriefing.destination(for: .customer(customerId: "c1")), .customer(customerId: "c1"), "target customer")
 expectEqual(NativeTodayBriefing.destination(for: .customers), .customers, "target customers")
 expectEqual(NativeTodayBriefing.destination(for: .money), .money, "target money")
+// Phase 33: the maintenance_due:all row opens the campaign builder with its preset.
+expectEqual(NativeTodayBriefing.destination(for: .newCampaign(preset: "due_for_maintenance")),
+            .newCampaign(preset: "due_for_maintenance"), "target newCampaign")
 
 // MARK: - Header: greeting cutoffs (§1.4), pinned to dateHelpers.test.js
 
@@ -378,6 +381,42 @@ expectEqual(
     "bookingRowLabel: native-only missingJob falls back to the presentation summary"
 )
 
+// MARK: - Phase 32: quote_update requests (spec 2026-10-03 §6.9)
+
+let quoteUpdateDetails = "Updated estimate requested for \"Water heater\" (expired November 2, 2026) — Can you redo it?"
+let quoteUpdateRow = NativeBookingAttention.Row(
+    kind: .portalChange,
+    request: bookedRequest(id: "bkeu_1", status: "portal_change_requested", jobRef: "j7", portalKind: "quote_update"),
+    jobID: "j7",
+    note: quoteUpdateDetails
+)
+let quoteUpdatePresentation = NativeTodayBriefing.bookingRowPresentation(quoteUpdateRow)
+expectEqual(quoteUpdatePresentation.title, "Dana Fox asked for an updated estimate", "quote_update: title")
+expectEqual(quoteUpdatePresentation.summary, "Dana Fox asked for an updated estimate", "quote_update: summary")
+expectEqual(quoteUpdatePresentation.body, quoteUpdateDetails, "quote_update: the body is the server details")
+expectEqual(quoteUpdatePresentation.jobDestination, .job(jobId: "j7"), "quote_update: destination is the job")
+expectEqual(NativeTodayBriefing.bookingRowLabel(quoteUpdateRow), "Dana Fox asked for an updated estimate", "quote_update: label")
+
+let quoteUpdateMissingJob = NativeBookingAttention.Row(
+    kind: .missingJob,
+    request: bookedRequest(id: "bkeu_2", status: "portal_change_requested", jobRef: "gone", portalKind: "quote_update"),
+    jobID: "gone",
+    note: quoteUpdateDetails
+)
+let quoteUpdateMissingPresentation = NativeTodayBriefing.bookingRowPresentation(quoteUpdateMissingJob)
+expectEqual(quoteUpdateMissingPresentation.title, "Dana Fox asked for an updated estimate", "quote_update missing job: title names the estimate")
+expectEqual(quoteUpdateMissingPresentation.jobDestination, .jobs, "quote_update missing job: falls back to the Jobs tab")
+expectEqual(NativeTodayBriefing.bookingRowLabel(quoteUpdateMissingJob), "Dana Fox asked for an updated estimate", "quote_update missing job: label")
+
+let rescheduleKind = NativeBookingAttention.Row(
+    kind: .portalChange,
+    request: bookedRequest(id: "bk4", status: "portal_change_requested", jobRef: "j1", portalKind: "reschedule"),
+    jobID: "j1",
+    note: "n"
+)
+expectEqual(NativeTodayBriefing.bookingRowLabel(rescheduleKind), "Dana Fox asked to reschedule an appointment",
+            "quote_update: other portal kinds keep their verbs")
+
 // MARK: - isSampleId (utils/sampleData.ts SAMPLE_ID_RE port)
 
 expect(NativeTodayBriefing.isSampleId("j1"), "isSampleId j1")
@@ -386,6 +425,37 @@ expect(NativeTodayBriefing.isSampleId("2"), "isSampleId bare digit")
 expect(NativeTodayBriefing.isSampleId("j1-sabc123"), "isSampleId namespaced")
 expect(!NativeTodayBriefing.isSampleId("j4"), "isSampleId j4 is out of range")
 expect(!NativeTodayBriefing.isSampleId("c1734567890123_4"), "isSampleId real id is never a false positive")
+
+// MARK: - Phase 26: the calendar checks attention row (calendar sync spec §4.5)
+
+do {
+    var phoenix = Calendar(identifier: .gregorian)
+    phoenix.timeZone = TimeZone(identifier: "America/Phoenix")!
+    let lastRun = ISO8601DateFormatter().date(from: "2026-10-02T19:30:00Z")!
+    expectEqual(NativeTodayBriefing.calendarChecksStaleMessage(slotsOn: true, checksEnabled: true, fresh: false,
+                                                               lastRunAt: lastRun, calendar: phoenix),
+                .some("Online booking is request-only: calendar checks haven't run since Oct 2"),
+                "calendar row: slots on, checks enabled, not fresh → request-only row with the last run date")
+    expectEqual(NativeTodayBriefing.calendarChecksStaleMessage(slotsOn: false, checksEnabled: true, fresh: false,
+                                                               lastRunAt: lastRun, calendar: phoenix), nil,
+                "calendar row: slots off → no row (booking takes requests anyway)")
+    expectEqual(NativeTodayBriefing.calendarChecksStaleMessage(slotsOn: true, checksEnabled: true, fresh: true,
+                                                               lastRunAt: lastRun, calendar: phoenix), nil,
+                "calendar row: fresh checks → no row")
+    expectEqual(NativeTodayBriefing.calendarChecksStaleMessage(slotsOn: true, checksEnabled: false, fresh: false,
+                                                               lastRunAt: nil, calendar: phoenix), nil,
+                "calendar row: checks not enabled on the server → no row")
+    expectEqual(NativeTodayBriefing.calendarChecksStaleMessage(slotsOn: true, checksEnabled: true, fresh: false,
+                                                               lastRunAt: nil, calendar: phoenix),
+                .some("Online booking is request-only: calendar checks haven't run yet"),
+                "calendar row: enabled with nothing shared yet")
+    var auckland = Calendar(identifier: .gregorian)
+    auckland.timeZone = TimeZone(identifier: "Pacific/Auckland")!
+    expectEqual(NativeTodayBriefing.calendarChecksStaleMessage(slotsOn: true, checksEnabled: true, fresh: false,
+                                                               lastRunAt: lastRun, calendar: auckland),
+                .some("Online booking is request-only: calendar checks haven't run since Oct 3"),
+                "calendar row: the date reads in the device calendar")
+}
 
 if failures > 0 {
     print("\(failures) failure(s)")

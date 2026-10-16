@@ -5,10 +5,17 @@ struct NativePricingCalculatorView: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
     @State private var draft: NativeJobPricingDraft
+    @State private var saveErrorMessage: String?
+    /// Phase 25: set when pricing one good/better/best option; the save then
+    /// writes that tier (`AppStore.saveQuoteTierPricing`), not the job.
+    private let tierID: String?
+    private let tierName: String?
     private static let ids = LocalIDGenerator()
 
-    init(draft: NativeJobPricingDraft) {
+    init(draft: NativeJobPricingDraft, tierID: String? = nil, tierName: String? = nil) {
         _draft = State(initialValue: draft)
+        self.tierID = tierID
+        self.tierName = tierName
     }
 
     private var range: PricingRange { PricingEngine.priceRange(draft.input) }
@@ -175,21 +182,40 @@ struct NativePricingCalculatorView: View {
             .nativeContentColumn(.list)
             .scrollContentBackground(.hidden)
             .background(Color.tradeCanvas)
-            .navigationTitle("Pricing Calculator")
+            .navigationTitle(tierName.map { "Pricing · \($0)" } ?? "Pricing Calculator")
             .navigationBarTitleDisplayMode(.inline)
             .nativeKeyboardDoneBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction) }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        if store.saveJobPricing(draft) { dismiss() }
-                    }
+                    Button("Save", action: save)
                     .fontWeight(.semibold)
                     .keyboardShortcut("s", modifiers: .command)
                 }
             }
+            .alert("Couldn’t save pricing", isPresented: Binding(
+                get: { saveErrorMessage != nil },
+                set: { if !$0 { saveErrorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) { saveErrorMessage = nil }
+            } message: {
+                Text(saveErrorMessage ?? "Please try again.")
+            }
         }
         .nativeAnalyticsScreen(.pricingCalculator)
+    }
+
+    private func save() {
+        let saved = if let tierID {
+            store.saveQuoteTierPricing(draft, tierID: tierID)
+        } else {
+            store.saveJobPricing(draft)
+        }
+        if saved {
+            dismiss()
+        } else {
+            saveErrorMessage = store.migrationMessage ?? "Pricing could not be saved."
+        }
     }
 
     private func money(_ value: Decimal) -> String {

@@ -123,9 +123,64 @@ enum NativeCoachPrompt {
                     "You may cite these as set-aside guidance only — for filing, deduction elections, " +
                     "eligibility, or business-entity questions, decline and refer the user to a tax professional."
             }
+
+            // Phase 27 (spec §6): after the tax block, so the tax fixtures
+            // keep their exact suffix whenever this block is absent.
+            if let leadSources = snapshot.leadSources, !leadSources.rows.isEmpty {
+                prompt += "\n" + leadSourcesBlock(leadSources)
+            }
+
+            // Phase 34 (spec §5.8): after LEAD SOURCES, absent when nil.
+            if let referrals = snapshot.referrals {
+                prompt += "\n" + referralsBlock(referrals)
+            }
         }
 
         return prompt
+    }
+
+    static let leadSourcesGuardrail = "These lead-source figures are computed from the owner's records. " +
+        "Cite them exactly; never estimate figures for a source that isn't listed."
+
+    /// "LEAD SOURCES (year to date, …): Google: $4200 collected, 3 of 5
+    /// estimates won (60% close rate); Unknown: $300 collected, no estimates
+    /// sent. These lead-source figures …" — whole dollars and whole percents.
+    static func leadSourcesBlock(_ block: NativeLeadSourceSnapshotBlock) -> String {
+        let rows = block.rows.map { row -> String in
+            let estimates: String
+            if let rate = row.closeRate {
+                let noun = row.sent == 1 ? "estimate" : "estimates"
+                estimates = "\(row.won) of \(row.sent) \(noun) won (\(toFixed0(rate * 100))% close rate)"
+            } else {
+                estimates = "no estimates sent"
+            }
+            return "\(row.name): $\(toFixed0(row.collected)) collected, \(estimates)"
+        }
+        return "LEAD SOURCES (year to date, credited to each customer's first source): " +
+            rows.joined(separator: "; ") + ". " + leadSourcesGuardrail
+    }
+
+    static let referralsGuardrail = "These referral figures are computed from the owner's records. " +
+        "Cite them exactly; never estimate figures for a referrer who isn't listed. " +
+        "Rewards are recorded by the owner; never promise, calculate or send a reward on the owner's behalf."
+
+    /// "REFERRALS (year to date): 3 new referred customers; $2400 collected
+    /// from referred customers. Top referrers: Sam Ortiz (2 referred, $1800
+    /// collected); … Rewards recorded: 1 ($25). These referral figures …" —
+    /// whole dollars. No top-referrers sentence when every referrer is gone;
+    /// "Rewards recorded: none." when nothing was recorded.
+    static func referralsBlock(_ block: NativeReferralSnapshotBlock) -> String {
+        let noun = block.newReferred == 1 ? "customer" : "customers"
+        var text = "REFERRALS (year to date): \(block.newReferred) new referred \(noun); " +
+            "$\(toFixed0(block.collected)) collected from referred customers."
+        if !block.topReferrers.isEmpty {
+            let rows = block.topReferrers.map { "\($0.name) (\($0.referred) referred, $\(toFixed0($0.collected)) collected)" }
+            text += " Top referrers: " + rows.joined(separator: "; ") + "."
+        }
+        text += block.rewardsRecorded > 0
+            ? " Rewards recorded: \(block.rewardsRecorded) ($\(toFixed0(block.rewardsAmount)))."
+            : " Rewards recorded: none."
+        return text + " " + referralsGuardrail
     }
 
     // MARK: Number formatting

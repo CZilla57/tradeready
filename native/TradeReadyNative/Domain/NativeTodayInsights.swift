@@ -14,7 +14,7 @@ import Foundation
 /// All local-frame date/month math is pure string/component arithmetic
 /// (`NativeSchedule.shiftDate`, `monthsBetween`, `shiftMonth`) — never
 /// `Date`-parsing a bare `YYYY-MM-DD` (FA-039).
-public enum NativeInsightKind: String, Equatable, Hashable, Codable {
+public enum NativeInsightKind: String, Equatable, Hashable, Codable, CaseIterable {
     case laborOverrun = "labor_overrun"
     case lowMarginEstimate = "low_margin_estimate"
     case uninvoicedComplete = "uninvoiced_complete"
@@ -22,7 +22,22 @@ public enum NativeInsightKind: String, Equatable, Hashable, Codable {
     case openSlot = "open_slot"
     case unscheduledApproved = "unscheduled_approved"
     case maintenanceDue = "maintenance_due"
+    /// Phase 21 (spec §4): one piece of equipment's warranty ends soon.
+    case warrantyExpiring = "warranty_expiring"
     case expenseAnomaly = "expense_anomaly"
+    /// Phase 34 (referrals, spec §5.7): thank a referrer after the referred
+    /// customer's first payment.
+    case referralThanks = "referral_thanks"
+    /// Phase 32: a sent estimate reaches its valid-until date within 3 days.
+    case quoteExpiring = "quote_expiring"
+    /// Phase 32: a sent estimate passed its valid-until date in the last 14 days.
+    case quoteExpired = "quote_expired"
+
+    /// Whether the §9.5 analytics catalog's `InsightKind` enum lists this
+    /// kind. Phase 34's native-only `referral_thanks` stays out of the insight
+    /// events (the catalog is not extended for it); Phases 21 and 32 added
+    /// `warranty_expiring`, `quote_expiring` and `quote_expired` to the catalog.
+    public var isInAnalyticsCatalog: Bool { self != .referralThanks }
 }
 
 /// Mirrors `InsightTarget` — the routing contract 10.04 maps onto
@@ -39,6 +54,11 @@ public enum NativeInsightTarget: Equatable, Hashable {
     case customer(customerId: String)
     case customers
     case money
+    /// Phase 33: the campaign builder, preset applied (`due_for_maintenance`).
+    case newCampaign(preset: String)
+
+    /// The `maintenance_due:all` row's preset key (`NativeCampaignSegments.Preset`).
+    public static let dueForMaintenancePreset = "due_for_maintenance"
 }
 
 /// One proactive insight row. `id` is the stable dedup identity the mute
@@ -90,7 +110,7 @@ public enum NativeTodayInsights {
     /// Minimum free gap worth surfacing, in minutes.
     public static let minGapMinutes = 120
     /// Fixed cadence for the maintenance-due rule — a constant, not a setting.
-    public static let maintenanceDueMonths = 6
+    public static let maintenanceDueMonths = NativeServiceHistory.maintenanceDueMonths
     /// Month-to-date spend must exceed this multiple of the prior-3-month
     /// average to surface.
     public static let expenseAnomalyMult = 1.5
@@ -101,10 +121,8 @@ public enum NativeTodayInsights {
 
     private static let overrunStatuses: Set<String> = ["approved", "scheduled", "in_progress"]
     private static let lowMarginStatuses: Set<String> = ["lead", "estimate_sent"]
-    private static let serviceHistoryStatuses: Set<String> = ["complete", "invoiced", "paid"]
-    private static let activePipelineStatuses: Set<String> = [
-        "lead", "estimate_sent", "approved", "scheduled", "in_progress",
-    ]
+    // Phase 33: the delivered and active-pipeline status sets moved to
+    // `NativeServiceHistory` with the maintenance_due rule.
 
     private static let expenseCategoryLabels: [String: String] = [
         "materials": "Materials",
@@ -119,7 +137,10 @@ public enum NativeTodayInsights {
 
     // MARK: - Entry point
 
-    /// Concatenates all eight selectors, in the documented priority order.
+    /// Concatenates all eleven selectors, in the documented priority order.
+    /// Phase 32 (spec 2026-10-03 §6.8): `quote_expiring` runs right after
+    /// `due_soon`; `quote_expired` after the schedule rules and before
+    /// `maintenance_due`.
     /// Absent inputs suppress their rules instead of guessing:
     /// `customers`/`recurringJobs`/`expenses` default to empty arrays.
     public static func select(
@@ -137,12 +158,18 @@ public enum NativeTodayInsights {
         out.append(contentsOf: selectLowMarginEstimates(jobs: jobs, targetMarginPercent: targetMarginPercent))
         out.append(contentsOf: selectUninvoicedComplete(jobs: jobs))
         out.append(contentsOf: selectDueSoon(invoices: invoices, now: now))
+        out.append(contentsOf: selectQuoteExpiring(jobs: jobs, now: now))
         out.append(contentsOf: selectScheduleInsights(jobs: jobs, now: now, schedule: schedule))
+        out.append(contentsOf: selectQuoteExpired(jobs: jobs, now: now))
         // Long-horizon, so it rides last — it must never crowd out today's-money
         // rows given the card's top-3 cap.
         out.append(contentsOf: selectMaintenanceDue(jobs: jobs, customers: customers, recurringJobs: recurringJobs, now: now))
+        // Phase 21 (spec §4): right after maintenance due, at most one row.
+        out.append(contentsOf: selectWarrantyExpiring(customers: customers, now: now))
         // Business-level spend trend — lowest priority.
         out.append(contentsOf: selectExpenseAnomaly(expenses: expenses, now: now))
+        // Phase 34: runs last (spec §5.7).
+        out.append(contentsOf: selectReferralThanks(customers: customers, invoices: invoices, now: now))
         return out
     }
 
@@ -385,16 +412,129 @@ public enum NativeTodayInsights {
         return out
     }
 
+    // MARK: - Phase 32. quote_expiring, quote_expired
+
+    /// Non-archived, unanswered `estimate_sent` jobs with a real valid-until
+    /// date, paired with their `NativeQuoteExpiry` state on the local `today`
+    /// (`NativeCashBasis.ymd`, FA-039 safe).
+    private static func quoteExpiryStates(jobs: [Canonical.Job], now: Date) -> [(job: Canonical.Job, state: NativeQuoteExpiry.State)] {
+        let today = NativeCashBasis.ymd(now)
+        return jobs.compactMap { job in
+            guard !isArchived(job.archivedAt),
+                  job.approval?.decision == nil,
+                  let state = NativeQuoteExpiry.state(job: job, today: today)
+            else { return nil }
+            return (job, state)
+        }
+    }
+
+    /// "from $X" (the lowest tier) for undecided quote options, otherwise
+    /// the job's quoted total.
+    static func quoteAmountLabel(_ job: Canonical.Job) -> String {
+        if let options = job.quoteOptions, options.acceptance == nil,
+           let lowest = options.tiers.map(\.estimateTotal).min() {
+            return "from \(formatQuote(double(lowest)))"
+        }
+        return formatQuote(double(job.estimateTotal))
+    }
+
+    /// The send stamp as "Oct 3, 2026", or `nil` when absent. The local
+    /// `estimateSentAt` is used as is; a link-only `approval.sentAt` is a UTC
+    /// instant, so it is read as the local calendar day it fell on (its UTC
+    /// date prefix can be a day ahead west of UTC, FA-039).
+    private static func sentLabel(_ job: Canonical.Job) -> String? {
+        guard let raw = job.estimateSentAt ?? job.approval?.sentAt,
+              let sent = NativeCashBasis.parseLocalDate(raw)
+        else { return nil }
+        let day = NativeCashBasis.ymd(sent)
+        guard NativeQuoteExpiry.addDays(day, 0) != nil else { return nil }
+        return NativeQuoteExpiry.displayDate(day, style: .medium)
+    }
+
+    static func selectQuoteExpiring(jobs: [Canonical.Job], now: Date) -> [NativeTodayInsight] {
+        let expiring: [(job: Canonical.Job, validUntil: String, daysLeft: Int)] = quoteExpiryStates(jobs: jobs, now: now)
+            .compactMap { entry in
+                guard case let .open(validUntil, daysLeft) = entry.state,
+                      daysLeft >= 0, daysLeft <= NativeQuoteExpiry.expiringSoonDays
+                else { return nil }
+                return (entry.job, validUntil, daysLeft)
+            }
+        if expiring.isEmpty { return [] }
+        if expiring.count == 1 {
+            let (job, validUntil, daysLeft) = expiring[0]
+            let phrase = NativeQuoteExpiry.relativePhrase(daysLeft: daysLeft)
+            let amount = quoteAmountLabel(job)
+            let date = NativeQuoteExpiry.displayDate(validUntil, style: .medium)
+            let sent = sentLabel(job).map { " on \($0)" } ?? ""
+            return [NativeTodayInsight(
+                kind: .quoteExpiring,
+                id: "quote_expiring:\(job.id):\(validUntil)",
+                title: "Estimate for \(job.customerName) expires \(phrase)",
+                detail: "\(job.title) · \(amount)",
+                target: .job(jobId: job.id),
+                reason: "You sent '\(job.title)'\(sent) and it's valid until \(date). After that the customer " +
+                    "can't approve it online. Follow up now or extend it.",
+                coachPrompt: "My estimate for '\(job.title)' (\(amount)) to \(job.customerName) expires \(phrase) " +
+                    "and they haven't answered. What's a good follow-up, and should I extend it?"
+            )]
+        }
+        return [NativeTodayInsight(
+            kind: .quoteExpiring,
+            id: "quote_expiring:all",
+            title: "\(expiring.count) estimates expire within \(NativeQuoteExpiry.expiringSoonDays) days",
+            target: .jobs,
+            reason: "\(expiring.count) sent estimates reach their valid-until dates within " +
+                "\(NativeQuoteExpiry.expiringSoonDays) days. After that customers can't approve them online. " +
+                "Follow up now or extend them."
+        )]
+    }
+
+    static func selectQuoteExpired(jobs: [Canonical.Job], now: Date) -> [NativeTodayInsight] {
+        let expired: [(job: Canonical.Job, validUntil: String)] = quoteExpiryStates(jobs: jobs, now: now)
+            .compactMap { entry in
+                guard case let .expired(validUntil, daysAgo) = entry.state,
+                      daysAgo >= 1, daysAgo <= NativeQuoteExpiry.expiredLookbackDays
+                else { return nil }
+                return (entry.job, validUntil)
+            }
+        if expired.isEmpty { return [] }
+        if expired.count == 1 {
+            let (job, validUntil) = expired[0]
+            return [NativeTodayInsight(
+                kind: .quoteExpired,
+                id: "quote_expired:\(job.id):\(validUntil)",
+                title: "Estimate for \(job.customerName) expired \(NativeQuoteExpiry.displayDate(validUntil, style: .short))",
+                detail: "\(job.title) · \(quoteAmountLabel(job))",
+                target: .job(jobId: job.id),
+                reason: "'\(job.title)' passed its valid-until date (\(NativeQuoteExpiry.displayDate(validUntil, style: .medium))) " +
+                    "without a response, so the customer can no longer approve it online. Extend it, send an " +
+                    "updated estimate, or let it go. Dismissing hides this until the date changes."
+            )]
+        }
+        // The aggregate is dismiss-only too, so its id carries the newest
+        // date in the set: a dismissal hides this batch, and the next
+        // estimate to expire (a later date) brings the row back. A constant
+        // "quote_expired:all" would hide every future batch for good.
+        let newest = expired.map(\.validUntil).max() ?? ""
+        return [NativeTodayInsight(
+            kind: .quoteExpired,
+            id: "quote_expired:all:\(newest)",
+            title: "\(expired.count) estimates expired in the last 2 weeks",
+            target: .jobs,
+            reason: "\(expired.count) sent estimates passed their valid-until dates in the last 2 weeks without " +
+                "a response, so customers can no longer approve them online. Extend them, send updated " +
+                "estimates, or let them go."
+        )]
+    }
+
     // MARK: - 7. maintenance_due
 
     /// Whole calendar months elapsed from a local `YYYY-MM-DD` to `now` —
-    /// pure component math, never Date-parsing the string (FA-039).
+    /// pure component math, never Date-parsing the string (FA-039). Phase 33:
+    /// the one implementation lives in `NativeServiceHistory`, shared with
+    /// campaign segments.
     static func monthsBetween(from: String, now: Date) -> Int {
-        guard let (y, m, d) = NativeSchedule.parseDateComponents(from) else { return 0 }
-        let (ny, nmZeroBased, nd) = NativeCashBasis.localComponents(now)
-        var months = (ny - y) * 12 + (nmZeroBased + 1 - m)
-        if nd < d { months -= 1 }
-        return months
+        NativeServiceHistory.monthsBetween(from: from, now: now)
     }
 
     private struct MaintenanceDue {
@@ -411,27 +551,25 @@ public enum NativeTodayInsights {
         now: Date
     ) -> [NativeTodayInsight] {
         var due: [MaintenanceDue] = []
+        // Phase 33 (spec §5.3): the last-service rule and its guards come from
+        // `NativeServiceHistory`, shared with the "Due for maintenance"
+        // campaign preset, so the two always agree.
+        let jobsByCustomer = NativeServiceHistory.jobsByCustomer(jobs)
         for customer in customers {
             guard !customer.id.isEmpty, !isArchived(customer.archivedAt) else { continue }
+            // Phase 33 (§4.3): the row's "Ask coach" drafts a check-in text,
+            // so a customer who opted out of marketing is skipped.
+            guard !customer.isMarketingOptedOut else { continue }
             let hasContact = !customer.phone.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !customer.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             guard hasContact else { continue }
-            let theirJobs = jobs.filter { $0.customerId == customer.id }
-            if theirJobs.contains(where: { activePipelineStatuses.contains($0.status) && !isArchived($0.archivedAt) }) { continue }
-            if recurringJobs.contains(where: { $0.isActive && $0.customerId == customer.id }) { continue }
-            var lastDate = ""
-            var lastTitle = ""
-            for job in theirJobs {
-                guard serviceHistoryStatuses.contains(job.status), let scheduledDate = job.scheduledDate, !scheduledDate.isEmpty else { continue }
-                if scheduledDate > lastDate {
-                    lastDate = scheduledDate
-                    lastTitle = job.title
-                }
-            }
-            guard !lastDate.isEmpty else { continue }
-            let months = monthsBetween(from: lastDate, now: now)
+            if NativeServiceHistory.hasOpenWork(customerID: customer.id, jobsByCustomer: jobsByCustomer) { continue }
+            if NativeServiceHistory.hasActiveMaintenancePlan(customerID: customer.id, recurringJobs: recurringJobs) { continue }
+            guard let last = NativeServiceHistory.lastService(customerID: customer.id, jobsByCustomer: jobsByCustomer)
+            else { continue }
+            let months = monthsBetween(from: last.date, now: now)
             if months >= maintenanceDueMonths {
-                due.append(MaintenanceDue(customer: customer, months: months, lastDate: lastDate, lastTitle: lastTitle))
+                due.append(MaintenanceDue(customer: customer, months: months, lastDate: last.date, lastTitle: last.title))
             }
         }
         if due.isEmpty { return [] }
@@ -459,9 +597,47 @@ public enum NativeTodayInsights {
             kind: .maintenanceDue,
             id: "maintenance_due:all",
             title: "\(due.count) customers haven't been serviced in \(maintenanceDueMonths)+ months",
-            target: .customers,
+            // Phase 33 (§5.5): opens the campaign builder already filtered to
+            // the same set ("Due for maintenance").
+            target: .newCampaign(preset: NativeInsightTarget.dueForMaintenancePreset),
             reason: "\(due.count) customers had their last delivered job over \(maintenanceDueMonths) months " +
                 "ago and have no upcoming work or active recurring plan. Snoozing hides this for 30 days."
+        )]
+    }
+
+    // MARK: - 7b. warranty_expiring (Phase 21)
+
+    /// Spec §4: the soonest active warranty ending within the next
+    /// `NativePropertiesEquipment.warrantyWindowDays` local days, today
+    /// included (ties: customer name, then equipment id). Today is
+    /// `NativeCashBasis.ymd(now)`, so the day boundary is the local one, and
+    /// the day count is civil-day arithmetic on the two dates (FA-039). The
+    /// id carries the expiry date, so a corrected date resurfaces after a
+    /// dismissal.
+    static func selectWarrantyExpiring(customers: [Canonical.Customer], now: Date) -> [NativeTodayInsight] {
+        let today = NativeCashBasis.ymd(now)
+        guard let hit = NativePropertiesEquipment.expiringWarranties(customers: customers, today: today).first
+        else { return [] }
+        let customer = hit.customer
+        let name = customer.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let firstName = name.split(separator: " ", omittingEmptySubsequences: true).first.map(String.init) ?? customer.name
+        let type = NativePropertiesEquipment.typeSentenceName(hit.equipment.type)
+        let date = NativePropertiesEquipment.displayDate(hit.expires)
+        let place = hit.property.isPrimary ? "" : " at \(hit.property.displayName)"
+        let when = hit.days == 0 ? "today" : hit.days == 1 ? "tomorrow" : "in \(hit.days) days"
+        let model = [hit.equipment.make, hit.equipment.model].compactMap { NativePropertiesEquipment.singleLine($0) }
+            .joined(separator: " ")
+        return [NativeTodayInsight(
+            kind: .warrantyExpiring,
+            id: "warranty_expiring:\(hit.equipment.id):\(hit.expires)",
+            title: "\(name)'s \(type) warranty ends \(date)",
+            detail: "A good time to offer a maintenance plan.",
+            target: .customer(customerId: customer.id),
+            reason: "The warranty on \(name)'s \(type)\(model.isEmpty ? "" : " (\(model))")\(place) ends " +
+                "\(hit.expires), \(when) (window: \(NativePropertiesEquipment.warrantyWindowDays) days). " +
+                "Only the soonest expiry is shown. Snoozing hides this for 14 days.",
+            coachPrompt: "\(firstName)'s \(type) warranty ends \(date). Draft a short, friendly text offering " +
+                "a maintenance plan before it runs out."
         )]
     }
 
@@ -535,6 +711,74 @@ public enum NativeTodayInsights {
                 "(\(priorYMs[0]), \(priorYMs[1]), \(priorYMs[2])) — \(pct)% higher. Biggest driver: " +
                 "\(catLabel) (\(formatMoney(topMtd)) vs \(formatMoney(topAvg)) average). " +
                 "Dismissing hides this for the rest of the month."
+        )]
+    }
+
+    // MARK: - 9. referral_thanks (Phase 34, spec 2026-10-03-referral-program-design.md §5.7, D8)
+
+    private struct ReferralThanksHit {
+        let referred: Canonical.Customer
+        let referrer: Canonical.Customer
+        let firstPaymentDay: String
+        let paidSoFar: Decimal
+    }
+
+    /// Referred customers with a live referrer (R1, not dangling) and no
+    /// reward record, whose first non-voided payment (all their invoices,
+    /// attributed id first then by unique name) falls on a local day from
+    /// `thanksWindowDays` days ago through today. At most one row: the most
+    /// recent first payment, ties by name then id. Prompting at booking would
+    /// thank people for leads that never turn into work.
+    static func selectReferralThanks(
+        customers: [Canonical.Customer],
+        invoices: [Canonical.Invoice],
+        now: Date
+    ) -> [NativeTodayInsight] {
+        let today = NativeCashBasis.ymd(now)
+        guard let cutoff = NativeSchedule.shiftDate(today, days: -NativeReferrals.thanksWindowDays) else { return [] }
+        let byID = Dictionary(customers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let resolver = NativeReferrals.CustomerResolver(customers: customers)
+        var firstDay: [String: String] = [:]
+        var paid: [String: Decimal] = [:]
+        for invoice in invoices {
+            guard let owner = resolver.customerID(customerId: invoice.customerId, name: invoice.customer) else { continue }
+            for payment in PaymentLedger.materializeLegacyLedger(NativeCashBasis.ledgerInvoice(invoice))
+            where payment.voidedAt == nil {
+                guard let date = NativeCashBasis.parseLocalDate(payment.date) else { continue }
+                let day = NativeCashBasis.ymd(date)
+                paid[owner, default: 0] += payment.amount
+                if firstDay[owner].map({ day < $0 }) ?? true { firstDay[owner] = day }
+            }
+        }
+        var hits: [ReferralThanksHit] = []
+        for customer in customers where customer.referralReward == nil {
+            guard let referrerID = NativeReferrals.validReferrerID(of: customer),
+                  let referrer = byID[referrerID],
+                  let day = firstDay[customer.id], day >= cutoff, day <= today
+            else { continue }
+            hits.append(ReferralThanksHit(
+                referred: customer, referrer: referrer, firstPaymentDay: day, paidSoFar: paid[customer.id] ?? 0
+            ))
+        }
+        hits.sort { lhs, rhs in
+            if lhs.firstPaymentDay != rhs.firstPaymentDay { return lhs.firstPaymentDay > rhs.firstPaymentDay }
+            let byName = lhs.referred.name.localizedCaseInsensitiveCompare(rhs.referred.name)
+            if byName != .orderedSame { return byName == .orderedAscending }
+            return lhs.referred.id < rhs.referred.id
+        }
+        guard let hit = hits.first else { return [] }
+        let referrerName = NativeReferrals.firstName(hit.referrer.name)
+        let referredName = NativeReferrals.firstName(hit.referred.name)
+        let dayLabel = NativeReferrals.shortDate(hit.firstPaymentDay) ?? hit.firstPaymentDay
+        return [NativeTodayInsight(
+            kind: .referralThanks,
+            id: "referral_thanks:\(hit.referred.id)",
+            title: "Thank \(referrerName) for referring \(referredName)",
+            detail: "\(referredName) has paid \(NativeReferrals.money(hit.paidSoFar)) so far.",
+            target: .customer(customerId: hit.referrer.id),
+            reason: "\(referredName) was referred by \(referrerName) and paid for the first time on \(dayLabel). " +
+                "No thank-you is recorded yet.",
+            coachPrompt: "Help me write a short thank-you text to \(referrerName) for referring \(referredName)."
         )]
     }
 

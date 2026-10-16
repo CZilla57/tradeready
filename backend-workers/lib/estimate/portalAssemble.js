@@ -10,6 +10,12 @@ const { balanceDue, amountPaid, PAID_EPSILON } = require('../paymentMath.js');
 const { isAllowedPaymentLink } = require('../reminderEmail.js');
 const { changeOrderStatus } = require('./changeOrderMath.js');
 const { photoSignature, PHOTO_URL_TTL_SEC } = require('../photoSign.js');
+const { hasSnapshotOptions, lowestTierTotal } = require('./quoteOptions.js');
+const { snapshotExpiry } = require('./estimateExpiry.js');
+const { isPlanOfferable, planCents } = require('../autopay/offer.js');
+const { cadencePhrase } = require('../autopay/consentText.js');
+const { cardLabel, centsToDollars } = require('../autopay/format.js');
+const { mintSetupToken, mintManageToken, payPageUrl } = require('../pay/payToken.js');
 
 const ESTIMATE_PAGE = 'https://gettradereadyapp.com/estimate.html';
 const CHANGE_PAGE = 'https://gettradereadyapp.com/change.html';
@@ -77,18 +83,43 @@ function buildAppointments(jobRows, requestRows, { token, apiOrigin, nowMs }) {
     });
 }
 
+// Phase 25: an accepted good/better/best choice is the price the customer
+// agreed to; an undecided option estimate shows its lowest tier ("From $X");
+// a legacy estimate keeps its frozen snapshot total.
+function estimateTotal(approval, hasOptions) {
+  const accepted = approval.decision === 'approved' && approval.selection
+    ? Number(approval.selection.total) : NaN;
+  if (Number.isFinite(accepted)) return accepted;
+  if (hasOptions) {
+    const lowest = lowestTierTotal(approval.snapshot);
+    if (lowest !== null) return lowest;
+  }
+  return Number(approval.snapshot?.total || 0);
+}
+
 // Only jobs with an approval link are customer-visible estimates — the
 // frozen snapshot plus the shipped approval page. Internal jobs stay
 // invisible. (v1 behavior, moved verbatim from the route.)
-function buildEstimates(jobRows) {
+// Phase 32: `validUntil` is the frozen snapshot's date (null when undated);
+// `expired` uses the same owner-zone rule as respond and is false once the
+// customer decided — a decided estimate no longer needs a decision.
+function buildEstimates(jobRows, nowMs) {
   return jobRows
     .filter((r) => r.data && r.data.approval && r.data.approval.token)
-    .map((r) => ({
-      title: cap(r.data.approval.snapshot?.jobTitle || r.data.title, 200),
-      total: Number(r.data.approval.snapshot?.total || 0),
-      decision: r.data.approval.decision || null,
-      approvalUrl: `${ESTIMATE_PAGE}?j=${encodeURIComponent(r.id)}&t=${encodeURIComponent(r.data.approval.token)}`,
-    }));
+    .map((r) => {
+      const approval = r.data.approval;
+      const hasOptions = hasSnapshotOptions(approval.snapshot);
+      const { validUntil, expired } = snapshotExpiry(approval.snapshot, nowMs);
+      return {
+        title: cap(approval.snapshot?.jobTitle || r.data.title, 200),
+        total: estimateTotal(approval, hasOptions),
+        decision: approval.decision || null,
+        hasOptions,
+        validUntil,
+        expired: !approval.decision && expired,
+        approvalUrl: `${ESTIMATE_PAGE}?j=${encodeURIComponent(r.id)}&t=${encodeURIComponent(approval.token)}`,
+      };
+    });
 }
 
 // Mirrors the estimates rule: no approval token → the CO is internal and
@@ -172,15 +203,57 @@ function buildPhotos(jobRows, photoRows, { userId, apiOrigin, photoSecret, nowMs
   return out;
 }
 
-function assemblePortalView({ businessName, customerRow, jobRows, invoiceRows, requestRows, photoRows, token, apiOrigin, nowMs, userId, photoSecret }) {
+// Phase 24 (spec §4.9): one entry per plan of this customer that offers
+// autopay (active, "Offer autopay" on). `on` carries the card label and a
+// manage link; `available` carries a 7-day setup link bound to this
+// customer. Links are minted per response and never persisted. Without the
+// pay-link secret or a Stripe connection the section is empty (fail closed:
+// a link the pay page would refuse is worse than none).
+function buildAutopay(planRows, enrollmentRows, { userId, customerId, paySecret, payEnv, stripeConnected, nowMs }) {
+  if (!paySecret || !stripeConnected) return [];
+  const activeByPlan = new Map();
+  for (const e of Array.isArray(enrollmentRows) ? enrollmentRows : []) {
+    if (e && e.status === 'active' && e.customer_id === customerId) activeByPlan.set(e.recurring_invoice_id, e);
+  }
+  const nowSec = Math.floor(nowMs / 1000);
+  const out = [];
+  for (const plan of Array.isArray(planRows) ? planRows : []) {
+    if (!isPlanOfferable(plan) || plan.data.customerId !== customerId) continue;
+    const active = activeByPlan.get(plan.id) || null;
+    let setupUrl = null;
+    let manageUrl = null;
+    try {
+      if (active) manageUrl = payPageUrl(payEnv, 'm', mintManageToken(paySecret, { userId, enrollmentId: active.id }));
+      else setupUrl = payPageUrl(payEnv, 's', mintSetupToken(paySecret, { userId, planId: plan.id, customerId, nowSec }));
+    } catch {
+      continue; // an id the token format refuses: skip the plan, never fail the portal
+    }
+    out.push({
+      description: cap(plan.data.description, 200),
+      amount: centsToDollars(planCents(plan)),
+      cadence: cadencePhrase(plan.data.cadence) || '',
+      status: active ? 'on' : 'available',
+      card: active ? cardLabel(active.card_brand, active.card_last4) : null,
+      setupUrl,
+      manageUrl,
+    });
+  }
+  return out;
+}
+
+function assemblePortalView({
+  businessName, customerRow, jobRows, invoiceRows, requestRows, photoRows, token, apiOrigin, nowMs, userId, photoSecret,
+  planRows = [], enrollmentRows = [], paySecret = null, payEnv = {}, stripeConnected = false,
+}) {
   return {
     businessName: cap(businessName, 120),
     customerName: cap(customerRow.data?.name, 120),
     appointments: buildAppointments(jobRows, requestRows, { token, apiOrigin, nowMs }),
-    estimates: buildEstimates(jobRows),
+    estimates: buildEstimates(jobRows, nowMs),
     changeOrders: buildChangeOrders(jobRows),
     invoices: buildInvoices(invoiceRows),
     photos: buildPhotos(jobRows, photoRows, { userId, apiOrigin, photoSecret, nowMs }),
+    autopay: buildAutopay(planRows, enrollmentRows, { userId, customerId: customerRow.id, paySecret, payEnv, stripeConnected, nowMs }),
   };
 }
 

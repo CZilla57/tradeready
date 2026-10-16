@@ -249,6 +249,8 @@ enum NativeRejectedChangeDisplay {
         case "trips": "Trip"
         case "bookingRequests": "Booking request"
         case "jobPhotos": "Job photo"
+        case "forms": "Form"
+        case "campaigns": "Campaign"
         case "settings": "Business settings"
         case "customer_notes": "Customer note"
         default: "Record"
@@ -267,6 +269,8 @@ enum NativeRejectedChangeDisplay {
         case "expenses": candidates = ["description"]
         case "recurringInvoices": candidates = ["customerName", "description"]
         case "trips": candidates = ["purpose", "toLabel"]
+        case "forms": candidates = ["title"]
+        case "campaigns": candidates = ["name"]
         default: candidates = []
         }
         for field in candidates {

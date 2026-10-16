@@ -1297,6 +1297,52 @@ struct PoorNetworkTests {
             }
         }
 
+        // Forms (Phase 20): the `forms` line of the rebase, same rules as jobs.
+        // A form edit still pending push survives a pull that changes the same form.
+        func form(_ id: String, _ title: String) -> Canonical.Form {
+            Canonical.Form(
+                id: id, kind: Canonical.Form.kindInstance, jobId: idOf["A"], templateId: "builtin:test",
+                title: title, items: [Canonical.FormItem(id: "\(id)-i1", kind: "check", label: "Item")],
+                createdAt: "2026-10-01T09:00:00.000Z"
+            )
+        }
+        func withForms(_ snapshot: Canonical.Snapshot, _ forms: [Canonical.Form]) -> Canonical.Snapshot {
+            var copy = snapshot
+            copy.payload.forms = forms
+            return copy
+        }
+        let formsBase = withForms(base, [form("fm-1", "Form 1"), form("fm-2", "Form 2")])
+        struct FormCase {
+            let name: String
+            let pulled: Canonical.Snapshot
+            let live: Canonical.Snapshot
+            let protected: Set<String>
+            let forms: [String]
+            let held: Set<String>
+        }
+        let formCases: [FormCase] = [
+            FormCase(name: "pending form edit against a server change to the same form: the local edit wins, the cursor holds",
+                     pulled: withForms(base, [form("fm-1", "Form 1 server"), form("fm-2", "Form 2")]),
+                     live: withForms(base, [form("fm-1", "Form 1 local"), form("fm-2", "Form 2")]),
+                     protected: ["forms/fm-1"],
+                     forms: ["fm-1=Form 1 local", "fm-2=Form 2"], held: ["forms"]),
+            FormCase(name: "untouched form takes the server's change, a pending edit to another form is kept",
+                     pulled: withForms(base, [form("fm-1", "Form 1"), form("fm-2", "Form 2 server")]),
+                     live: withForms(base, [form("fm-1", "Form 1 local"), form("fm-2", "Form 2")]),
+                     protected: ["forms/fm-1"],
+                     forms: ["fm-1=Form 1 local", "fm-2=Form 2 server"], held: []),
+        ]
+        for c in formCases {
+            do {
+                let merged = try AppStore.rebasePulledDelta(base: formsBase, pulled: c.pulled, live: c.live, protectedKeys: c.protected)
+                expectEqual((merged.snapshot.payload.forms ?? []).map { "\($0.id)=\($0.title)" }, c.forms,
+                            "rebase: forms: \(c.name) (forms)")
+                expectEqual(merged.heldCursorTables, c.held, "rebase: forms: \(c.name) (held cursors)")
+            } catch {
+                expect(false, "rebase: forms: \(c.name) threw")
+            }
+        }
+
         // Settings: pending wins; untouched takes the server; changed locally (pushed) is kept.
         var serverSettings = base
         serverSettings.payload.settings?.businessName = "Server Co"
@@ -1371,7 +1417,7 @@ struct PoorNetworkTests {
                 description: "Maintenance", amount: 150, dueDays: 30,
                 cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
                 occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: today,
-                isActive: true, createdAt: today, autoSendEnabled: false)
+                isActive: true, createdAt: today, autoSendEnabled: false, autopayEnabled: nil)
         }
         let firstPlan = plan("rinv-h-first"), secondPlan = plan("rinv-h-second")
 
@@ -1494,7 +1540,7 @@ struct PoorNetworkTests {
             description: "Maintenance", amount: 150, dueDays: 30,
             cadence: "monthly", endCondition: "never", endCount: nil, endDate: nil,
             occurrenceCount: 0, lastGeneratedDate: nil, nextDueDate: today,
-            isActive: true, createdAt: today, autoSendEnabled: false)
+            isActive: true, createdAt: today, autoSendEnabled: false, autopayEnabled: nil)
         expect(h.store.createRecurringInvoice(invoiceRule), "L237.d fixture plan rule creates")
         let jobsBefore = h.store.jobs.count
         let invoicesBefore = h.store.invoices.count

@@ -8,6 +8,10 @@ MODULE_CACHE="${TMPDIR:-/tmp}/tradeready-money-card-module-cache"
 swiftc \
   -module-cache-path "$MODULE_CACHE" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/CanonicalModels.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeLeadSourceReport.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeLeadSource.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeReferrals.swift" \
+  "$ROOT_DIR/native/TradeReadyNative/Domain/NativeReferralReport.swift" \
   "$ROOT_DIR/native/TradeReadyNative/Domain/FinancialDomain.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeChangeOrders.swift" \
   "$ROOT_DIR/native/TradeReadyNative/NativeJobProfitability.swift" \

@@ -13,9 +13,13 @@ struct CustomersView: View {
     @State private var showingArchived = false
     @State private var path: [NativeCustomerRoute] = []
     @State private var isRootVisible = true
+    // Phase 33: the list filter (per session), campaigns and the tag picker.
+    @State private var listFilter = NativeCustomerListFilter()
+    @State private var showingCampaigns = false
+    @State private var showingTagFilter = false
 
     /// Task 11.11 fix round 1: anything this screen presents over itself.
-    private var isPresentingAnything: Bool { showingEditor }
+    private var isPresentingAnything: Bool { showingEditor || showingCampaigns || showingTagFilter }
 
     /// ⌘N (new customer) only while the list is on top: never under the
     /// editor sheet, nor under a pushed customer.
@@ -28,13 +32,13 @@ struct CustomersView: View {
     }
 
     private var customers: [NativeCustomerListEntry] {
-        allCustomers.filter { customer in
+        NativeCustomerListFilter.apply(allCustomers.filter { customer in
             customer.isArchived == showingArchived
                 && (search.isEmpty
                     || customer.name.localizedCaseInsensitiveContains(search)
                     || customer.email.localizedCaseInsensitiveContains(search)
                     || customer.phone.localizedCaseInsensitiveContains(search))
-        }
+        }, customers: store.canonicalCustomers, filter: listFilter)
     }
 
     private var activeCustomers: [NativeCustomerListEntry] {
@@ -49,7 +53,8 @@ struct CustomersView: View {
         NativeContentState.collection(
             visibleCount: customers.count,
             totalCount: customersInSelectedScope.count,
-            query: search
+            query: search,
+            isFiltering: listFilter.isActive
         )
     }
 
@@ -77,6 +82,10 @@ struct CustomersView: View {
                         value: activeCustomers.reduce(0) { $0 + $1.totalSpent }.currency
                     )
                     Toggle("Show archived", isOn: $showingArchived)
+                }
+
+                if listFilter.isActive {
+                    Section { NativeCustomerListFilterChips(filter: $listFilter, vocabulary: store.customerTagVocabulary) }
                 }
 
                 if !showingArchived,
@@ -137,7 +146,7 @@ struct CustomersView: View {
                                 ? "Archived customers will appear here."
                                 : "Add a customer or create an invoice to get started.",
                             symbol: showingArchived ? "archivebox" : "person.2",
-                            resetAction: { search = "" }
+                            resetAction: { search = ""; listFilter = .init() }
                         )
                         .listRowBackground(Color.clear)
                     }
@@ -149,6 +158,11 @@ struct CustomersView: View {
             .navigationTitle("Customers")
             .searchable(text: $search)
             .toolbar {
+                NativeCustomerListFilterMenu(
+                    filter: $listFilter, showingTagPicker: $showingTagFilter, vocabulary: store.customerTagVocabulary
+                )
+                Button("Campaigns", systemImage: "megaphone") { showingCampaigns = true }
+                    .accessibilityLabel("Campaigns")
                 Button {
                     guard !isPresentingAnything else { return }
                     showingEditor = true
@@ -162,6 +176,10 @@ struct CustomersView: View {
             }
             .sheet(isPresented: $showingEditor) {
                 CustomerEditor(customer: Customer(), mode: .create)
+            }
+            .sheet(isPresented: $showingCampaigns) { NativeCampaignListView() }
+            .sheet(isPresented: $showingTagFilter) {
+                NativeCustomerTagFilterSheet(filter: $listFilter, vocabulary: store.customerTagVocabulary)
             }
             .onChange(of: store.deepLinkedCustomerID) { _, id in
                 openRequestedCustomer(id)
@@ -205,6 +223,7 @@ struct CustomersView: View {
                 Text(customerSummary(customer))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                if customer.isManual { NativeCustomerRowMarketingCaption(customerID: customer.id) }
             }
         }
         .padding(.vertical, 3)
@@ -335,6 +354,13 @@ struct CustomerDetailView: View {
                         LabeledContent("Invoices", value: "\(invoices.count)")
                         LabeledContent("Collected", value: customer.totalSpent.currency)
                         LabeledContent("Outstanding", value: customer.totalOwed.currency)
+                        if let leadSource = storedCustomer?.leadSource, NativeLeadSource.normalize(leadSource) != nil {
+                            LabeledContent("Found you via", value: NativeLeadSource.displayName(leadSource))
+                        }
+                    }
+
+                    if let storedCustomer {
+                        NativeCustomerTagsSection(customerID: storedCustomer.id, customerName: storedCustomer.name)
                     }
 
                     if !customer.phone.isEmpty || !customer.email.isEmpty || !(storedCustomer?.address ?? "").isEmpty {
@@ -343,6 +369,14 @@ struct CustomerDetailView: View {
                             if !customer.email.isEmpty { LabeledContent("Email", value: customer.email) }
                             if let address = storedCustomer?.address, !address.isEmpty { Text(address) }
                         }
+                    }
+                    if let storedCustomer { NativeCustomerPropertiesSection(customerID: storedCustomer.id) } // Phase 21
+
+                    // Phase 34: referrals (renders nothing for an unsaved customer).
+                    NativeCustomerReferralsSection(customerID: storedCustomer?.id ?? customer.id, customerName: customer.name)
+
+                    if let storedCustomer {
+                        NativeCustomerMarketingSection(customerID: storedCustomer.id, customerName: storedCustomer.name)
                     }
 
                     // Customer Portal section
@@ -606,6 +640,8 @@ struct CustomerEditor: View {
     let mode: NativeCustomerEditorMode
     @State private var saveIssue: NativeCustomerEditorSaveIssue?
     @StateObject private var addressLookup = NativeAddressLookupModel()
+    /// True while "Other…" is chosen, so an empty custom field stays open.
+    @State private var isEnteringOtherLeadSource = false
 
     var body: some View {
         NavigationStack {
@@ -669,6 +705,8 @@ struct CustomerEditor: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                leadSourceSection
+                NativeCustomerEditorMarketingSection(customer: $customer)
                 Section("Notes") {
                     TextField("Access details, preferences…", text: $customer.notes, axis: .vertical)
                         .lineLimit(3...8)
@@ -722,6 +760,82 @@ struct CustomerEditor: View {
             }
         }
         .nativeAnalyticsScreen(.customerEditor)
+    }
+
+    // MARK: Lead source (Phase 27, spec 2026-10-02-lead-source-design.md §3)
+
+    /// Picker tag for "Other…". Normalization strips control characters, so
+    /// no stored label can collide with it.
+    private static let otherLeadSourceTag = "\u{1}other"
+
+    /// Custom labels already in use (D2: no settings list). The saved value
+    /// of the customer being edited goes first so its own spelling is the
+    /// one offered and selected.
+    private var customLeadSourceLabels: [String] {
+        let saved = store.customers.first { $0.id == customer.id }?.leadSource
+        return NativeLeadSource.customLabels(in: [saved] + store.customers.map(\.leadSource))
+    }
+
+    /// The picker row for the current value: "" (Not set), a preset key, a
+    /// listed custom label, or "Other…" (also for a stored label that is not
+    /// listed, so the text field shows it instead of losing it).
+    private var leadSourceSelection: String {
+        if isEnteringOtherLeadSource { return Self.otherLeadSourceTag }
+        guard let value = NativeLeadSource.normalize(customer.leadSource) else { return "" }
+        if NativeLeadSource.preset(key: value) != nil { return value }
+        return customLeadSourceLabels.first { $0.caseInsensitiveCompare(value) == .orderedSame }
+            ?? Self.otherLeadSourceTag
+    }
+
+    private var leadSourceSection: some View {
+        let selection = Binding<String>(
+            get: { leadSourceSelection },
+            set: { tag in
+                if tag == Self.otherLeadSourceTag {
+                    if !isEnteringOtherLeadSource { customer.leadSource = nil }
+                    isEnteringOtherLeadSource = true
+                } else {
+                    isEnteringOtherLeadSource = false
+                    customer.leadSource = tag.isEmpty ? nil : tag
+                }
+            }
+        )
+        let showsOtherField = leadSourceSelection == Self.otherLeadSourceTag
+        return Section {
+            Picker("Lead source", selection: selection) {
+                Text("Not set").tag("")
+                ForEach(NativeLeadSource.presets, id: \.key) { preset in
+                    Text(preset.displayName).tag(preset.key)
+                }
+                ForEach(customLeadSourceLabels, id: \.self) { label in
+                    Text(label).tag(label)
+                }
+                Text("Other…").tag(Self.otherLeadSourceTag)
+            }
+            .pickerStyle(.menu)
+            // Phase 34 (§5.4): who referred them, while the source is Referral.
+            if NativeLeadSource.normalize(customer.leadSource) == "referral" {
+                NativeReferredByRow(customerID: customer.id, referredByCustomerId: $customer.referredByCustomerId)
+            }
+            if showsOtherField {
+                TextField("Home show, radio ad…", text: Binding(
+                    get: { customer.leadSource ?? "" },
+                    set: {
+                        // Typing keeps the field open even when it is cleared.
+                        isEnteringOtherLeadSource = true
+                        customer.leadSource = $0
+                    }
+                ))
+                .textInputAutocapitalization(.words)
+                .accessibilityLabel("Other lead source")
+            }
+        } header: {
+            Text("How they found you")
+        } footer: {
+            if showsOtherField {
+                Text("Up to \(NativeLeadSource.customLabelMaxLength) characters. You can pick it again for other customers.")
+            }
+        }
     }
 }
 

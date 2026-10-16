@@ -356,6 +356,19 @@ enum NativeScheduleBookingPolicy {
             if isBlank(merged.email), !isBlank(customer.email) { merged.email = customer.email; filled = true }
             if isBlank(merged.phone), !isBlank(customer.phone) { merged.phone = customer.phone; filled = true }
             if isBlank(merged.address), !isBlank(customer.address) { merged.address = customer.address; filled = true }
+            // Phase 27 first touch: a source set since the plan was built wins.
+            if isBlank(merged.leadSource ?? ""), !isBlank(customer.leadSource ?? "") {
+                merged.leadSource = customer.leadSource; filled = true
+            }
+            // Phase 34 (§5.3): the same first-touch referrer fill, guarded by
+            // R1 on the CURRENT record, so a referrer or another source set
+            // since the plan was built wins.
+            if isBlank(merged.referredByCustomerId ?? ""),
+               let referrer = NativeReferrals.sanitizedReferrer(
+                   customer.referredByCustomerId, customerID: merged.id, leadSource: merged.leadSource
+               ) {
+                merged.referredByCustomerId = referrer; filled = true
+            }
             guard filled else { continue }
             nextCustomers[index] = merged
             filledCustomers.append(customer.id)

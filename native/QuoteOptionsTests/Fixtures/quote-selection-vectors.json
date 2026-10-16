@@ -1,0 +1,120 @@
+{
+  "description": "Shared parity vectors for good/better/best selection (docs/superpowers/specs/2026-10-02-quote-options-design.md §3). Loaded by native/QuoteOptionsTests and backend-workers/tests/quoteOptions.test.cjs. Error codes: choose_option, invalid_addons. jsOnly vectors exercise inputs Swift's typed API cannot express.",
+  "snapshots": {
+    "main": {
+      "recommendedTierId": "qt_better",
+      "tiers": [
+        {
+          "id": "qt_good",
+          "name": "Repair",
+          "description": "Replace the failed capacitor and recharge.",
+          "lineItems": [
+            { "label": "Labor (2 hrs @ $95/hr)", "amount": 190 },
+            { "label": "Overhead & operating costs", "amount": 1010 }
+          ],
+          "total": 1200
+        },
+        {
+          "id": "qt_better",
+          "name": "Standard unit",
+          "lineItems": [
+            { "label": "Labor (6 hrs @ $95/hr)", "amount": 570 },
+            { "label": "Materials (2 items)", "amount": 900.25 },
+            { "label": "Overhead & operating costs", "amount": 380.25 }
+          ],
+          "total": 1850.5
+        },
+        {
+          "id": "qt_best",
+          "name": "High-efficiency unit",
+          "description": "16 SEER2, 10-year parts warranty.",
+          "lineItems": [
+            { "label": "Labor (8 hrs @ $95/hr)", "amount": 760 },
+            { "label": "Materials (3 items)", "amount": 1600.99 },
+            { "label": "Overhead & operating costs", "amount": 639 }
+          ],
+          "total": 2999.99
+        }
+      ],
+      "addOns": [
+        { "id": "qa_haul", "label": "Haul away old unit", "amount": 150 },
+        { "id": "qa_ws", "label": "Wi-Fi thermostat", "description": "Installed and paired.", "amount": 49.99 }
+      ]
+    },
+    "floaty": {
+      "recommendedTierId": "qt_a",
+      "tiers": [
+        { "id": "qt_a", "name": "Basic", "lineItems": [{ "label": "Labor (1 hrs @ $100.1/hr)", "amount": 100.1 }], "total": 100.1 },
+        { "id": "qt_b", "name": "Plus", "lineItems": [{ "label": "Labor (2 hrs @ $100.1/hr)", "amount": 200.2 }], "total": 200.2 }
+      ],
+      "addOns": [
+        { "id": "qa_x", "label": "Extra A", "amount": 0.2 },
+        { "id": "qa_y", "label": "Extra B", "amount": 0.1 }
+      ]
+    }
+  },
+  "vectors": [
+    { "name": "tier only", "snapshot": "main", "input": { "tierId": "qt_good", "addOnIds": [] },
+      "expect": { "ok": true, "tierName": "Repair", "addOnIds": [], "total": 1200,
+        "lineItems": [
+          { "label": "Labor (2 hrs @ $95/hr)", "amount": 190 },
+          { "label": "Overhead & operating costs", "amount": 1010 }
+        ] } },
+    { "name": "tier plus one add-on", "snapshot": "main", "input": { "tierId": "qt_better", "addOnIds": ["qa_haul"] },
+      "expect": { "ok": true, "tierName": "Standard unit", "addOnIds": ["qa_haul"], "total": 2000.5,
+        "lineItems": [
+          { "label": "Labor (6 hrs @ $95/hr)", "amount": 570 },
+          { "label": "Materials (2 items)", "amount": 900.25 },
+          { "label": "Overhead & operating costs", "amount": 380.25 },
+          { "label": "Haul away old unit", "amount": 150 }
+        ] } },
+    { "name": "add-ons normalized to snapshot order", "snapshot": "main", "input": { "tierId": "qt_best", "addOnIds": ["qa_ws", "qa_haul"] },
+      "expect": { "ok": true, "tierName": "High-efficiency unit", "addOnIds": ["qa_haul", "qa_ws"], "total": 3199.98,
+        "lineItems": [
+          { "label": "Labor (8 hrs @ $95/hr)", "amount": 760 },
+          { "label": "Materials (3 items)", "amount": 1600.99 },
+          { "label": "Overhead & operating costs", "amount": 639 },
+          { "label": "Haul away old unit", "amount": 150 },
+          { "label": "Wi-Fi thermostat", "amount": 49.99 }
+        ] } },
+    { "name": "duplicate add-on ids are de-duplicated", "snapshot": "main", "input": { "tierId": "qt_better", "addOnIds": ["qa_haul", "qa_haul"] },
+      "expect": { "ok": true, "tierName": "Standard unit", "addOnIds": ["qa_haul"], "total": 2000.5,
+        "lineItems": [
+          { "label": "Labor (6 hrs @ $95/hr)", "amount": 570 },
+          { "label": "Materials (2 items)", "amount": 900.25 },
+          { "label": "Overhead & operating costs", "amount": 380.25 },
+          { "label": "Haul away old unit", "amount": 150 }
+        ] } },
+    { "name": "integer-cent sum avoids float drift", "snapshot": "floaty", "input": { "tierId": "qt_a", "addOnIds": ["qa_x", "qa_y"] },
+      "expect": { "ok": true, "tierName": "Basic", "addOnIds": ["qa_x", "qa_y"], "total": 100.4,
+        "lineItems": [
+          { "label": "Labor (1 hrs @ $100.1/hr)", "amount": 100.1 },
+          { "label": "Extra A", "amount": 0.2 },
+          { "label": "Extra B", "amount": 0.1 }
+        ] } },
+    { "name": "integer-cent sum avoids float drift (2)", "snapshot": "floaty", "input": { "tierId": "qt_b", "addOnIds": ["qa_y"] },
+      "expect": { "ok": true, "tierName": "Plus", "addOnIds": ["qa_y"], "total": 200.3,
+        "lineItems": [
+          { "label": "Labor (2 hrs @ $100.1/hr)", "amount": 200.2 },
+          { "label": "Extra B", "amount": 0.1 }
+        ] } },
+    { "name": "missing tier", "snapshot": "main", "input": { "addOnIds": [] },
+      "expect": { "ok": false, "error": "choose_option" } },
+    { "name": "unknown tier", "snapshot": "main", "input": { "tierId": "qt_nope", "addOnIds": [] },
+      "expect": { "ok": false, "error": "choose_option" } },
+    { "name": "unknown add-on", "snapshot": "main", "input": { "tierId": "qt_good", "addOnIds": ["qa_nope"] },
+      "expect": { "ok": false, "error": "invalid_addons" } },
+    { "name": "too many add-on ids", "snapshot": "main", "input": { "tierId": "qt_good", "addOnIds": ["qa_haul", "qa_haul", "qa_haul", "qa_haul", "qa_haul", "qa_haul", "qa_haul", "qa_haul", "qa_haul", "qa_haul", "qa_haul"] },
+      "expect": { "ok": false, "error": "invalid_addons" } },
+    { "name": "absent add-on list means none", "snapshot": "main", "jsOnly": true, "input": { "tierId": "qt_good" },
+      "expect": { "ok": true, "tierName": "Repair", "addOnIds": [], "total": 1200,
+        "lineItems": [
+          { "label": "Labor (2 hrs @ $95/hr)", "amount": 190 },
+          { "label": "Overhead & operating costs", "amount": 1010 }
+        ] } },
+    { "name": "add-on list must be an array", "snapshot": "main", "jsOnly": true, "input": { "tierId": "qt_good", "addOnIds": "qa_haul" },
+      "expect": { "ok": false, "error": "invalid_addons" } },
+    { "name": "add-on ids must be strings", "snapshot": "main", "jsOnly": true, "input": { "tierId": "qt_good", "addOnIds": [7] },
+      "expect": { "ok": false, "error": "invalid_addons" } }
+  ]
+}

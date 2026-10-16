@@ -5,7 +5,8 @@ import Foundation
 // Pure port of `utils/businessSnapshot.ts` (`aggregateSnapshot` +
 // `buildTaxSnapshotBlock`). The snapshot is the compact business summary the AI
 // coach may cite, so every figure comes from the shared engines —
-// `PaymentLedger` (balances), `NativeCashBasis.collectedByPeriod` (revenue),
+// `PaymentLedger` (balances), `NativeCashBasis.receivedByPeriod` (revenue,
+// tips included since Phase 28),
 // `NativeChangeOrders.billableTotal` (job value), and `TaxEstimateEngine` — and
 // nothing here mutates canonical state.
 //
@@ -53,10 +54,17 @@ struct NativeBusinessSnapshotAggregate: Equatable {
 
 /// `BusinessSnapshot` — the aggregate plus the snapshot stamp and the optional
 /// tax block (absent, never zeroed, when the tax inputs could not be built).
+/// Phase 27 adds the optional year-to-date lead-source block (absent when no
+/// customer has a source); it sits after `tax` so the memberwise init stays
+/// source-compatible.
 struct NativeBusinessSnapshot: Equatable {
     var asOf: String
     var aggregate: NativeBusinessSnapshotAggregate
     var tax: NativeTaxSnapshotBlock?
+    var leadSources: NativeLeadSourceSnapshotBlock?
+    /// Phase 34: the year-to-date referral block (absent when no customer has
+    /// a referrer). Last, so the memberwise init stays source-compatible.
+    var referrals: NativeReferralSnapshotBlock?
 
     var revenueThisMonth: Decimal { aggregate.revenueThisMonth }
     var revenueLastMonth: Decimal { aggregate.revenueLastMonth }
@@ -103,7 +111,8 @@ enum NativeBusinessSnapshotEngine {
             start: NativeCashBasis.localDate(year: lastYear, month: lastMonth, day: 1),
             end: NativeCashBasis.localDate(year: lastYear, month: lastMonth + 1, day: 0)
         )
-        let revenue = NativeCashBasis.collectedByPeriod(
+        // Phase 28 (tips spec §6.3): the coach revenue series counts tips.
+        let revenue = NativeCashBasis.receivedByPeriod(
             invoices: invoices, ranges: [thisMonthRange, lastMonthRange]
         )
 
@@ -192,7 +201,8 @@ enum NativeBusinessSnapshotEngine {
 
     // MARK: getBusinessSnapshot
 
-    /// The live-shaped snapshot: aggregate + `asOf` + tax. `asOf` is the **UTC**
+    /// The live-shaped snapshot: aggregate + `asOf` + tax + the Phase 27
+    /// year-to-date lead-source block. `asOf` is the **UTC**
     /// calendar date of `now`, matching RN's
     /// `now.toISOString().split("T")[0]` (the one deliberate UTC use in this
     /// feature — it stamps when the snapshot was taken, not a business window).
@@ -217,7 +227,11 @@ enum NativeBusinessSnapshotEngine {
                     invoices: invoices, expenses: expenses, trips: trips,
                     values: values, mileageRate: mileageRate, now: now
                 )
-                : nil
+                : nil,
+            leadSources: NativeLeadSourceReport.snapshotBlock(
+                customers: customers, jobs: jobs, invoices: invoices, now: now
+            ),
+            referrals: NativeReferralReport.snapshotBlock(customers: customers, invoices: invoices, now: now)
         )
     }
 

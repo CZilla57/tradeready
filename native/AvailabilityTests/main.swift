@@ -248,6 +248,87 @@ do {
     }
 }
 
+// MARK: - Phase 26: calendar busy gate, offer pipeline and "24:00" (shared with Jest)
+
+do {
+    let fixturesURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["SCHEDULE_FIXTURES_PATH"]
+        ?? "native/ScheduleTests/Fixtures/scheduleVectors.json")
+    let json = try! JSONSerialization.jsonObject(with: Data(contentsOf: fixturesURL)) as! [String: Any]
+
+    func windows(_ raw: Any?) -> [NativeAvailability.BusyWindow] {
+        (raw as? [[String: String]] ?? []).map { .init(date: $0["date"]!, start: $0["start"]!, end: $0["end"]!) }
+    }
+    func millis(_ iso: String) -> Int64 { NativeCalendarBusy.parseAnyInstant(iso)! }
+
+    let busyVectors = json["calendarBusyVectors"] as? [[String: Any]] ?? []
+    expect(busyVectors.count >= 18, "shared fixture carries the calendar busy vectors")
+    for vector in busyVectors {
+        let name = vector["name"] as! String
+        let expected = vector["expected"] as! [String: Any]
+        let row = NativeCalendarBusy.StoredRow(jsonObject: vector["row"])
+        if !(vector["row"] is NSNull) { expect(row != nil, "busy vector row parses: \(name)") }
+        let result = NativeCalendarBusy.gate(row, timeZoneID: vector["zone"] as! String, nowMillis: millis(vector["nowUtc"] as! String))
+        switch expected["state"] as! String {
+        case "off": expectEqual(result, .off, "busy vector: \(name)")
+        case "stale": expectEqual(result, .stale, "busy vector: \(name)")
+        default:
+            expectEqual(result, .fresh(windows: windows(expected["windows"]), lastCoveredDate: expected["lastCoveredDate"] as! String),
+                        "busy vector: \(name)")
+        }
+    }
+
+    let scenarios = json["offerableScenarios"] as? [[String: Any]] ?? []
+    expect(scenarios.count >= 6, "shared fixture carries the offer scenarios")
+    for scenario in scenarios {
+        let name = scenario["name"] as! String
+        let blob = try! JSONSerialization.data(withJSONObject: scenario["scheduleBlob"]!)
+        let schedule = NativeSchedule.resolveSchedule(try! decoder.decode(Canonical.ScheduleConfig.self, from: blob))
+        let jobs = (scenario["jobs"] as! [[String: Any]]).map {
+            job($0["id"] as! String, date: $0["scheduledDate"] as? String, start: $0["scheduledStartTime"] as? String,
+                end: $0["scheduledEndTime"] as? String, labor: ($0["laborHours"] as? Double) ?? 0,
+                status: ($0["status"] as? String) ?? "scheduled")
+        }
+        let reservations = (scenario["reservations"] as! [[String: String]]).map {
+            NativeAvailability.BusyWindow(date: $0["slot_date"]!, start: $0["slot_start"]!, end: $0["slot_end"]!)
+        }
+        let out = NativeCalendarBusy.offerableSlots(schedule: schedule, jobs: jobs, reservations: reservations,
+                                                    stored: NativeCalendarBusy.StoredRow(jsonObject: scenario["row"]),
+                                                    nowMillis: millis(scenario["nowUtc"] as! String))
+        let expected = scenario["expected"] as! [String: Any]
+        expectEqual(out.state.rawValue, expected["state"] as! String, "offer scenario state: \(name)")
+        let slots = (expected["slots"] as! [[String: String]]).map {
+            NativeAvailability.PublicSlot(date: $0["date"]!, start: $0["start"]!, end: $0["end"]!,
+                                          startUtc: $0["startUtc"]!, endUtc: $0["endUtc"]!)
+        }
+        expectEqual(out.slots, slots, "offer scenario slots: \(name)")
+    }
+
+    for vector in json["midnightEndVectors"] as? [[String: Any]] ?? [] {
+        let blob = try! JSONSerialization.data(withJSONObject: vector["scheduleBlob"]!)
+        let schedule = NativeSchedule.resolveSchedule(try! decoder.decode(Canonical.ScheduleConfig.self, from: blob))
+        let now = vector["now"] as! [String: Any]
+        let input = NativeAvailability.AvailabilityInput(schedule: schedule, jobs: [TJob](), extraBusy: windows(vector["extraBusy"]),
+            fromDate: vector["fromDate"] as! String, days: vector["days"] as! Int,
+            now: (date: now["date"] as! String, minutes: now["minutes"] as! Int))
+        let expected = (vector["expected"] as! [[String: String]]).map {
+            NativeAvailability.CandidateSlot(date: $0["date"]!, start: $0["start"]!, end: $0["end"]!)
+        }
+        expectEqual(NativeAvailability.computeCandidateSlots(input: input), expected, "\(vector["name"] as! String) (§4.6)")
+    }
+    expect((json["midnightEndVectors"] as? [Any])?.isEmpty == false, "shared fixture carries the 24:00 vector")
+}
+
+do {
+    // §4.6 directly: an end of exactly "24:00" blocks to midnight (1440)…
+    let late = NativeAvailability.busyWindowsFor(date: "2026-10-05", jobs: [TJob](),
+        extraBusy: [.init(date: "2026-10-05", start: "22:00", end: "24:00")], bufferMinutes: 0)
+    expectEqual(late.map { [$0.0, $0.1] }, [[1320, 1440]], "an extraBusy end of 24:00 is 1440, not a dropped window")
+    // …while other out-of-range ends are still rejected.
+    let bogus = NativeAvailability.busyWindowsFor(date: "2026-10-05", jobs: [TJob](),
+        extraBusy: [.init(date: "2026-10-05", start: "22:00", end: "24:30")], bufferMinutes: 0)
+    expect(bogus.isEmpty, "24:30 is still not a time")
+}
+
 // MARK: - DST/zone boundary details
 
 do {

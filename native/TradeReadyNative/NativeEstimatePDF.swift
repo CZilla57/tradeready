@@ -5,9 +5,38 @@ struct NativeEstimatePDFLineItem: Equatable, Sendable {
     let amount: Decimal
 }
 
+/// Phase 25 (good/better/best): one tier exactly as frozen in
+/// `snapshot.options`, in the snapshot's order. `description` is empty when
+/// the tier has none.
+struct NativeEstimatePDFOption: Equatable, Sendable {
+    let name: String
+    let description: String
+    let isRecommended: Bool
+    let lineItems: [NativeEstimatePDFLineItem]
+    let total: Decimal
+}
+
+/// Phase 25: one optional add-on as the customer sees it. The snapshot never
+/// carries the owner's internal cost, so neither does the document.
+struct NativeEstimatePDFAddOn: Equatable, Sendable {
+    let label: String
+    let description: String
+    let amount: Decimal
+}
+
 /// Immutable, customer-facing input to the PDF renderer. It is built from the
 /// reviewed approval snapshot so exporting cannot observe or flatten a newer
 /// canonical job while the sheet is open.
+///
+/// Phase 25: `options`/`addOns` are populated only from an undecided options
+/// snapshot (`snapshot.options`); a single-total or accepted estimate leaves
+/// both empty. `lineItems`/`total` always mirror the snapshot's top level (the
+/// recommended tier for an options snapshot), exactly as before.
+///
+/// Phase 32 (spec 2026-10-03 §6.6): `validUntil` is the reviewed snapshot's
+/// frozen date (the one the customer is shown and the Worker enforces), and
+/// `closingNote` is the customer copy the renderer draws, so the host suite
+/// tests both without UIKit.
 struct NativeEstimatePDFDocument: Equatable, Sendable {
     let businessName: String
     let businessContactName: String
@@ -18,12 +47,39 @@ struct NativeEstimatePDFDocument: Equatable, Sendable {
     let customerPhone: String
     let customerEmail: String
     let customerAddress: String
+    /// Phase 21: the job's address when it differs from the customer's
+    /// (empty otherwise), printed as "Service address".
+    let serviceAddress: String
     let jobTitle: String
     let jobDescription: String
     let lineItems: [NativeEstimatePDFLineItem]
     let total: Decimal
+    let options: [NativeEstimatePDFOption]
+    let addOns: [NativeEstimatePDFAddOn]
     let currency: String
     let issueDate: String
+    /// Phase 32: inclusive `YYYY-MM-DD`, or `nil` when the estimate doesn't expire.
+    let validUntil: String?
+    /// Phase 19 (spec 2026-10-03 §3.4, §3.7): the owner's agreement terms
+    /// frozen in the reviewed snapshot (`snapshot.terms`), so the PDF shows
+    /// the same terms the customer signs online. Empty when there are none.
+    let terms: String
+
+    /// "Nov 2, 2026" for the header's "Valid until" line; `nil` when undated.
+    var validUntilDisplay: String? {
+        validUntil.map { NativeQuoteExpiry.displayDate($0, style: .medium) }
+    }
+
+    /// The closing sentence under the estimate. Dated: "This estimate is valid
+    /// until November 2, 2026. " followed by the call to action; undated: the
+    /// call to action alone.
+    var closingNote: String {
+        let action = options.isEmpty
+            ? "Reply to approve and we'll get you scheduled."
+            : "Reply with the option you'd like and we'll get you scheduled."
+        guard let validUntil else { return action }
+        return "This estimate is valid until \(NativeQuoteExpiry.displayDate(validUntil, style: .long)). \(action)"
+    }
 
     init(review: NativeEstimateReviewDraft, issuedAt: Date = .now, calendar: Calendar = .current) {
         businessName = review.snapshot.businessName
@@ -35,13 +91,31 @@ struct NativeEstimatePDFDocument: Equatable, Sendable {
         customerPhone = review.customerPhone
         customerEmail = review.customerEmail
         customerAddress = review.customerAddress
+        serviceAddress = review.serviceAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         jobTitle = review.snapshot.jobTitle
         jobDescription = review.jobDescription
         lineItems = review.snapshot.lineItems.map {
             NativeEstimatePDFLineItem(label: $0.label, amount: $0.amount)
         }
         total = review.snapshot.total
+        let snapshotOptions = review.snapshot.options
+        options = snapshotOptions?.tiers.map { tier in
+            NativeEstimatePDFOption(
+                name: tier.name,
+                description: tier.description ?? "",
+                isRecommended: tier.id == snapshotOptions?.recommendedTierId,
+                lineItems: tier.lineItems.map {
+                    NativeEstimatePDFLineItem(label: $0.label, amount: $0.amount)
+                },
+                total: tier.total
+            )
+        } ?? []
+        addOns = snapshotOptions?.addOns.map {
+            NativeEstimatePDFAddOn(label: $0.label, description: $0.description ?? "", amount: $0.amount)
+        } ?? []
         currency = review.snapshot.currency
+        validUntil = review.snapshot.validUntil
+        terms = review.snapshot.terms?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US")
@@ -140,15 +214,69 @@ enum NativeEstimatePDFRenderer {
                 if y + height > page.height - 58 { beginPage(continued: true) }
             }
 
-            func drawTableHeader() {
-                _ = draw("ITEM", x: margin, y: y, width: 390,
+            func drawTableHeader(item: String = "ITEM", amount: String = "AMOUNT") {
+                _ = draw(item, x: margin, y: y, width: 390,
                          font: .systemFont(ofSize: 10, weight: .bold), color: secondary)
-                _ = draw("AMOUNT", x: 448, y: y, width: 116,
+                _ = draw(amount, x: 448, y: y, width: 116,
                          font: .systemFont(ofSize: 10, weight: .bold), color: secondary,
                          alignment: .right)
                 y += 18
                 strokeLine(from: CGPoint(x: margin, y: y), to: CGPoint(x: page.width - margin, y: y), color: rule)
                 y += 6
+            }
+
+            /// One ITEM/AMOUNT table row. A row that would cross the bottom
+            /// band starts a continued page and runs `redrawHeader` first, so
+            /// every page of a table carries its column header. Phase 25 adds
+            /// the optional secondary `detail` line (add-on descriptions).
+            func drawRow(
+                _ label: String,
+                detail: String = "",
+                amount: String,
+                redrawHeader: () -> Void
+            ) {
+                let height = rowHeight(label, detail: detail)
+                if y + height > rowBandBottom {
+                    beginPage(continued: true)
+                    redrawHeader()
+                }
+                _ = draw(label, x: margin, y: y + 6, width: 375,
+                         font: .systemFont(ofSize: 12.5), color: ink)
+                if !detail.isEmpty {
+                    let labelHeight = measuredHeight(label, width: 375, font: .systemFont(ofSize: 12.5))
+                    _ = draw(detail, x: margin, y: y + 9 + labelHeight, width: 375,
+                             font: .systemFont(ofSize: 10), color: secondary)
+                }
+                _ = draw(amount, x: 438, y: y + 6, width: 126,
+                         font: .monospacedDigitSystemFont(ofSize: 12.5, weight: .medium), color: ink,
+                         alignment: .right)
+                y += height
+                strokeLine(from: CGPoint(x: margin, y: y), to: CGPoint(x: page.width - margin, y: y), color: rule)
+            }
+
+            /// Keeps a heading block (of `leadHeight`) on the same page as the
+            /// first row it introduces, using the same band `drawRow` checks.
+            func keepWithFirstRow(leadHeight: CGFloat, firstRowHeight: CGFloat) {
+                if y + leadHeight + firstRowHeight > rowBandBottom { beginPage(continued: true) }
+            }
+
+            /// Phase 25: "OPTION 2 · Better" with a text "RECOMMENDED" tag (the
+            /// meaning never rides on color alone). The continued form repeats
+            /// the heading on a new page so orphaned rows keep their option.
+            func drawOptionHeading(_ option: NativeEstimatePDFOption, number: Int, continued: Bool) {
+                let layout = optionHeadingLayout(option, number: number, continued: continued)
+                _ = draw(layout.text, x: margin, y: y, width: layout.textWidth,
+                         font: optionHeadingFont, color: ink)
+                if option.isRecommended {
+                    let tagRect = CGRect(x: page.width - margin - layout.tagWidth, y: y,
+                                         width: layout.tagWidth, height: 20)
+                    totalWash.setFill()
+                    UIBezierPath(roundedRect: tagRect, cornerRadius: 10).fill()
+                    _ = draw(recommendedTag, x: tagRect.minX, y: y + 4.5, width: layout.tagWidth,
+                             font: recommendedTagFont, color: accent, alignment: .center,
+                             characterSpacing: 1)
+                }
+                y += layout.height
             }
 
             beginPage()
@@ -193,48 +321,134 @@ enum NativeEstimatePDFRenderer {
             let customerContact = [document.customerEmail, document.customerPhone, document.customerAddress]
                 .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                 .joined(separator: "\n")
-            let contactHeight = draw(customerContact, x: margin, y: y, width: 240,
+            var contactHeight = draw(customerContact, x: margin, y: y, width: 240,
                                      font: .systemFont(ofSize: 10), color: secondary)
-            _ = draw("Date  \(document.issueDate)\nPending approval", x: 330, y: y, width: 234,
+            if !document.serviceAddress.isEmpty {
+                // Phase 21: where the work is, when it isn't the customer's address.
+                let top = y + contactHeight + (contactHeight > 0 ? 8 : 0)
+                let labelHeight = draw("SERVICE ADDRESS", x: margin, y: top, width: 240,
+                                       font: .systemFont(ofSize: 9, weight: .bold), color: secondary,
+                                       characterSpacing: 1)
+                let addressHeight = draw(document.serviceAddress, x: margin, y: top + labelHeight + 2, width: 240,
+                                         font: .systemFont(ofSize: 10), color: ink)
+                contactHeight = top - y + labelHeight + 2 + addressHeight
+            }
+            // Phase 32: the "Valid until" line appears only on a dated estimate.
+            let validityLine = document.validUntilDisplay.map { "\nValid until  \($0)" } ?? ""
+            _ = draw("Date  \(document.issueDate)\(validityLine)\nPending approval", x: 330, y: y, width: 234,
                      font: .systemFont(ofSize: 10), color: secondary, alignment: .right)
-            y += max(contactHeight, 34) + 28
+            y += max(contactHeight, document.validUntilDisplay == nil ? 34 : 48) + 28
 
-            drawTableHeader()
-            for item in document.lineItems {
-                let labelHeight = measuredHeight(item.label, width: 375, font: .systemFont(ofSize: 12.5))
-                let rowHeight = max(30, labelHeight + 14)
-                if y + rowHeight > page.height - 100 {
-                    beginPage(continued: true)
-                    drawTableHeader()
+            if document.options.isEmpty {
+                drawTableHeader()
+                for item in document.lineItems {
+                    drawRow(item.label, amount: money(item.amount, currency: document.currency)) {
+                        drawTableHeader()
+                    }
                 }
-                _ = draw(item.label, x: margin, y: y + 6, width: 375,
-                         font: .systemFont(ofSize: 12.5), color: ink)
-                _ = draw(money(item.amount, currency: document.currency), x: 438, y: y + 6, width: 126,
-                         font: .monospacedDigitSystemFont(ofSize: 12.5, weight: .medium), color: ink,
+
+                require(74)
+                y += 14
+                let totalRect = CGRect(x: margin, y: y, width: page.width - margin * 2, height: 56)
+                totalWash.setFill()
+                UIBezierPath(roundedRect: totalRect, cornerRadius: 8).fill()
+                _ = draw("TOTAL ESTIMATE", x: margin + 16, y: y + 19, width: 220,
+                         font: .systemFont(ofSize: 12, weight: .semibold), color: ink)
+                _ = draw(money(document.total, currency: document.currency), x: 330, y: y + 13, width: 218,
+                         font: .monospacedDigitSystemFont(ofSize: 22, weight: .bold), color: accent,
                          alignment: .right)
-                y += rowHeight
-                strokeLine(from: CGPoint(x: margin, y: y), to: CGPoint(x: page.width - margin, y: y), color: rule)
+                y += 78
+            } else {
+                // Phase 25: one block per tier in snapshot order, replacing the
+                // single table and TOTAL ESTIMATE box.
+                for (index, option) in document.options.enumerated() {
+                    let number = index + 1
+                    let description = option.description.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let descriptionHeight = description.isEmpty
+                        ? 0 : measuredHeight(description, width: page.width - margin * 2,
+                                             font: .systemFont(ofSize: 10.5)) + 8
+                    // Heading, description, column header and the first row
+                    // stay together.
+                    keepWithFirstRow(
+                        leadHeight: optionHeadingLayout(option, number: number, continued: false).height
+                            + descriptionHeight + tableHeaderHeight,
+                        firstRowHeight: option.lineItems.first.map { rowHeight($0.label) } ?? 0
+                    )
+                    drawOptionHeading(option, number: number, continued: false)
+                    if !description.isEmpty {
+                        _ = draw(description, x: margin, y: y, width: page.width - margin * 2,
+                                 font: .systemFont(ofSize: 10.5), color: secondary)
+                        y += descriptionHeight
+                    }
+                    drawTableHeader()
+                    for item in option.lineItems {
+                        drawRow(item.label, amount: money(item.amount, currency: document.currency)) {
+                            drawOptionHeading(option, number: number, continued: true)
+                            drawTableHeader()
+                        }
+                    }
+
+                    require(56)
+                    y += 8
+                    let optionTotalRect = CGRect(x: margin, y: y, width: page.width - margin * 2, height: 40)
+                    totalWash.setFill()
+                    UIBezierPath(roundedRect: optionTotalRect, cornerRadius: 8).fill()
+                    _ = draw("OPTION \(number) TOTAL", x: margin + 16, y: y + 13, width: 220,
+                             font: .systemFont(ofSize: 11, weight: .semibold), color: ink,
+                             characterSpacing: 0.5)
+                    _ = draw(money(option.total, currency: document.currency), x: 330, y: y + 9, width: 218,
+                             font: .monospacedDigitSystemFont(ofSize: 17, weight: .bold), color: accent,
+                             alignment: .right)
+                    y += 40 + 26
+                }
+
+                if let firstAddOn = document.addOns.first {
+                    func drawAddOnHeader(continued: Bool) {
+                        _ = draw(continued ? "OPTIONAL ADD-ONS — CONTINUED" : "OPTIONAL ADD-ONS",
+                                 x: margin, y: y, width: 280,
+                                 font: .systemFont(ofSize: 10, weight: .bold), color: secondary,
+                                 characterSpacing: 1)
+                        y += 20
+                        drawTableHeader(item: "ADD-ON", amount: "PRICE")
+                    }
+                    keepWithFirstRow(
+                        leadHeight: 20 + tableHeaderHeight,
+                        firstRowHeight: rowHeight(
+                            firstAddOn.label,
+                            detail: firstAddOn.description.trimmingCharacters(in: .whitespacesAndNewlines)
+                        )
+                    )
+                    drawAddOnHeader(continued: false)
+                    for addOn in document.addOns {
+                        drawRow(
+                            addOn.label,
+                            detail: addOn.description.trimmingCharacters(in: .whitespacesAndNewlines),
+                            amount: "+" + money(addOn.amount, currency: document.currency)
+                        ) {
+                            drawAddOnHeader(continued: true)
+                        }
+                    }
+                    y += 16
+                }
+
+                let choiceNote = document.addOns.isEmpty
+                    ? "Choose one option."
+                    : "Choose one option. Add-ons are optional and added to the option you choose."
+                require(40)
+                y += draw(choiceNote, x: margin, y: y, width: page.width - margin * 2,
+                          font: .systemFont(ofSize: 10.5, weight: .medium), color: ink)
+                y += 28
             }
 
-            require(74)
-            y += 14
-            let totalRect = CGRect(x: margin, y: y, width: page.width - margin * 2, height: 56)
-            totalWash.setFill()
-            UIBezierPath(roundedRect: totalRect, cornerRadius: 8).fill()
-            _ = draw("TOTAL ESTIMATE", x: margin + 16, y: y + 19, width: 220,
-                     font: .systemFont(ofSize: 12, weight: .semibold), color: ink)
-            _ = draw(money(document.total, currency: document.currency), x: 330, y: y + 13, width: 218,
-                     font: .monospacedDigitSystemFont(ofSize: 22, weight: .bold), color: accent,
-                     alignment: .right)
-            y += 78
-
-            if !document.jobDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                var remaining = document.jobDescription
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                var firstScopePage = true
+            /// A titled text block that continues across pages (scope of
+            /// work; Phase 19's agreement terms).
+            func drawTextBlock(_ title: String, _ text: String) {
+                var remaining = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !remaining.isEmpty else { return }
+                var firstPage = true
                 while !remaining.isEmpty {
                     require(52)
-                    _ = draw(firstScopePage ? "SCOPE OF WORK" : "SCOPE OF WORK — CONTINUED",
+                    _ = draw(firstPage ? title : "\(title) — CONTINUED",
                              x: margin, y: y, width: 280,
                              font: .systemFont(ofSize: 10, weight: .bold), color: secondary,
                              characterSpacing: 1)
@@ -250,14 +464,17 @@ enum NativeEstimatePDFRenderer {
                               width: page.width - margin * 2,
                               font: .systemFont(ofSize: 11), color: ink)
                     remaining = split.remainder
-                    firstScopePage = false
+                    firstPage = false
                     if !remaining.isEmpty { beginPage(continued: true) }
                 }
                 y += 22
             }
 
+            drawTextBlock("SCOPE OF WORK", document.jobDescription)
+            drawTextBlock("TERMS", document.terms)
+
             require(50)
-            _ = draw("This estimate is valid for 30 days. Reply to approve and we'll get you scheduled.",
+            _ = draw(document.closingNote,
                      x: margin, y: y, width: page.width - margin * 2,
                      font: .systemFont(ofSize: 10.5), color: secondary)
 
@@ -265,6 +482,39 @@ enum NativeEstimatePDFRenderer {
         }
         guard result.starts(with: Data("%PDF-".utf8)) else { throw NativeEstimatePDFError.renderFailed }
         return result
+    }
+
+    /// Table rows never start below this line; the band underneath is left for
+    /// the totals and the footer.
+    private static var rowBandBottom: CGFloat { page.height - 100 }
+    /// `drawTableHeader`'s advance: label line plus rule spacing.
+    private static let tableHeaderHeight: CGFloat = 24
+    private static let recommendedTag = "RECOMMENDED"
+    private static var recommendedTagFont: UIFont { .systemFont(ofSize: 9, weight: .bold) }
+    private static var optionHeadingFont: UIFont { .systemFont(ofSize: 14, weight: .semibold) }
+
+    private static func rowHeight(_ label: String, detail: String = "") -> CGFloat {
+        let labelHeight = measuredHeight(label, width: 375, font: .systemFont(ofSize: 12.5))
+        let detailHeight = detail.isEmpty
+            ? 0 : measuredHeight(detail, width: 375, font: .systemFont(ofSize: 10)) + 3
+        return max(30, labelHeight + detailHeight + 14)
+    }
+
+    /// Phase 25: one source for the option heading's text and geometry, so the
+    /// keep-together check and the drawing cannot disagree.
+    private static func optionHeadingLayout(
+        _ option: NativeEstimatePDFOption,
+        number: Int,
+        continued: Bool
+    ) -> (text: String, textWidth: CGFloat, tagWidth: CGFloat, height: CGFloat) {
+        let tagWidth = option.isRecommended
+            ? ceil(NSString(string: recommendedTag)
+                .size(withAttributes: [.font: recommendedTagFont, .kern: 1]).width) + 24
+            : 0
+        let textWidth = page.width - margin * 2 - (option.isRecommended ? tagWidth + 12 : 0)
+        let text = "OPTION \(number) · \(option.name)" + (continued ? " (continued)" : "")
+        let textHeight = measuredHeight(text, width: textWidth, font: optionHeadingFont)
+        return (text, textWidth, tagWidth, max(textHeight, 20) + 6)
     }
 
     private static func localImage(reference: String?) -> UIImage? {

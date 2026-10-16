@@ -1,11 +1,12 @@
 // GET /api/stripe/connect-status — Workers port of
 // backend/lib/stripe/connectStatus.js.
 // Returns the Stripe Connect status for the authenticated user:
-// { connected: false } or { connected: true, details_submitted, display_name }
+// { connected: false } or { connected: true, details_submitted, display_name,
+// charges_enabled, card_payments_capability }
 //
 // Auth: Supabase JWT via "Authorization: Bearer <token>"
 
-import Stripe from 'stripe';
+import { makeStripe } from '../../../lib/stripe/client.js';
 import { appCors } from '../../appCors.js';
 
 export async function connectStatusHandler(c) {
@@ -45,10 +46,7 @@ export async function connectStatusHandler(c) {
   if (!stripeAccountId) return c.json({ connected: false }, 200);
 
   try {
-    const stripe = new Stripe(STRIPE_SECRET_KEY, {
-      apiVersion: '2023-10-16',
-      httpClient: Stripe.createFetchHttpClient(),
-    });
+    const stripe = makeStripe(c.env);
     const account = await stripe.accounts.retrieve(stripeAccountId);
 
     return c.json({
@@ -58,6 +56,9 @@ export async function connectStatusHandler(c) {
         account.settings?.dashboard?.display_name ||
         account.business_profile?.name ||
         null,
+      // Phase 18 (additive): Tap to Pay needs card payments live on the account.
+      charges_enabled: account.charges_enabled === true,
+      card_payments_capability: account.capabilities?.card_payments ?? null,
     }, 200);
   } catch (err) {
     // Account was deleted or deauthorized on Stripe's side — treat as not connected.

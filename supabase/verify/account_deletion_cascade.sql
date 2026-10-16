@@ -18,6 +18,7 @@ begin
       ('auto_reminder_log'),
       ('bookingRequests'),
       ('booking_reservations'),
+      ('calendar_busy'),
       ('customer_notes'),
       ('customers'),
       ('expenses'),
@@ -30,6 +31,8 @@ begin
       ('recurringInvoices'),
       ('recurringJobs'),
       ('settings'),
+      ('signature_events'),
+      ('signature_records'),
       ('stripe_accounts'),
       ('subscriptions'),
       ('trips')

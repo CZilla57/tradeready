@@ -224,6 +224,58 @@ do {
     expectEqual(copy.start, "14:00", "edited copy carries the new value")
 }
 
+// MARK: - Phase 26: personal busy overlay, the "personal event" label, gap suggestion
+
+do {
+    let jobs = [
+        job("overlap", date: "2026-08-10", start: "09:00", end: "10:00"),
+        job("clear", date: "2026-08-10", start: "13:00", end: "14:00"),
+        job("touching", date: "2026-08-10", start: "11:30", end: "12:00"),
+        job("history", date: "2026-08-10", start: "09:30", end: "10:30", status: "complete"),
+    ]
+    let busy = [
+        NativeCalendar.PersonalBusyBlock(date: "2026-08-10", startMinutes: 570, endMinutes: 660),   // 09:30–11:00
+        NativeCalendar.PersonalBusyBlock(date: "2026-08-10", startMinutes: 650, endMinutes: 690),   // 10:50–11:30 (merges)
+        NativeCalendar.PersonalBusyBlock(date: "2026-08-11", startMinutes: 540, endMinutes: 600),   // another day
+    ]
+    let day: NativeCalendar.CalendarDay<TJob> = NativeCalendar.buildCalendarDay(jobs: jobs, date: "2026-08-10", schedule: schedule, personalBusy: busy)
+    expectEqual(day.personalBusy, [NativeCalendar.PersonalBusyBlock(date: "2026-08-10", startMinutes: 570, endMinutes: 690)],
+                "personal busy blocks for the day are merged; other days are left out")
+    let flags = Dictionary(uniqueKeysWithValues: day.timed.map { ($0.job.scheduleJobId, $0.overlapsPersonalBusy) })
+    expectEqual(flags["overlap"], true, "a live job overlapping personal busy time is labelled")
+    expectEqual(flags["clear"], false, "a job clear of personal busy time is not")
+    expectEqual(flags["touching"], false, "touching personal busy time is not an overlap")
+    expectEqual(flags["history"], false, "terminal history is never labelled")
+    expect(day.timed.first { $0.job.scheduleJobId == "overlap" }?.inConflict == false,
+           "the job-vs-job conflict flag is separate from the personal label (it overlaps only terminal history)")
+
+    let plain: NativeCalendar.CalendarDay<TJob> = NativeCalendar.buildCalendarDay(jobs: jobs, date: "2026-08-10", schedule: schedule)
+    expect(plain.personalBusy.isEmpty && plain.timed.allSatisfy { !$0.overlapsPersonalBusy },
+           "the default (no personal busy) leaves every existing projection unchanged")
+
+    expect(NativeCalendar.overlapsPersonalBusy(date: "2026-08-10", start: "10:00", end: "10:30", laborHours: 1, personalBusy: busy),
+           "the schedule editor's warning: a draft inside personal busy time")
+    expect(!NativeCalendar.overlapsPersonalBusy(date: "2026-08-10", start: "08:00", end: "09:30", laborHours: 1, personalBusy: busy),
+           "a draft ending where personal busy time starts does not warn")
+    expect(NativeCalendar.overlapsPersonalBusy(date: "2026-08-10", start: "09:00", end: nil, laborHours: 1, personalBusy: busy),
+           "a missing end uses the blockWindow rule (09:00 + 1 h overlaps 09:30)")
+    expect(!NativeCalendar.overlapsPersonalBusy(date: "2026-08-12", start: "09:00", end: "17:00", laborHours: 1, personalBusy: busy),
+           "another date never warns")
+
+    // Gap suggestion: personal busy time counts as occupied.
+    let one = [job("a", date: "2026-08-10", start: "08:00", end: "09:00")]
+    expectEqual(NativeSchedule.largestFreeGap(jobs: one, date: "2026-08-10"), NativeSchedule.FreeGap(start: "09:00", minutes: 480),
+                "without personal busy the gap runs to 17:00")
+    expectEqual(NativeSchedule.largestFreeGap(jobs: one, date: "2026-08-10", extraBusy: [(600, 900)]),
+                NativeSchedule.FreeGap(start: "15:00", minutes: 120),
+                "personal busy 10:00–15:00 moves the suggestion to the largest remaining gap")
+    expectEqual(NativeSchedule.largestFreeGap(jobs: [TJob](), date: "2026-08-10", extraBusy: [(480, 720)]),
+                NativeSchedule.FreeGap(start: "12:00", minutes: 300),
+                "a day with only personal busy time still gets a suggestion")
+    expectEqual(NativeSchedule.largestFreeGap(jobs: [TJob](), date: "2026-08-10"), nil,
+                "an empty day (no jobs, no personal busy) still has none")
+}
+
 if failures == 0 {
     print("PASS: native calendar tests")
 } else {
