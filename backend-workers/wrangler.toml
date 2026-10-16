@@ -30,6 +30,7 @@ compatibility_flags = ["nodejs_compat"]
 crons = ["0 15 * * *", "*/15 * * * *"]
 
 [vars]
+ESIGN_REQUIRE_CONSENT = "true"
 ESIGN_V2 = "true"
 ESIGN_SEAL_PUBLIC_KEYS = '{"k2026-10":"aoEIduHhgJiwSd1/NPgPDISa21riZFmG93stQEzc+PM="}'
 ESIGN_SEAL_KEY_ID = "k2026-10"
