@@ -12,7 +12,6 @@
 		A00000000000000000000022 /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000033 /* RevenueCat */; };
 		A00000000000000000000023 /* PostHog in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000035 /* PostHog */; };
 		A00000000000000000000024 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000037 /* Sentry */; };
-		C11000000000000000000002 /* TradeReadyWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C11000000000000000000001 /* TradeReadyWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		B00000000000000000000001 /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000011 /* TestSupport.swift */; };
 		B00000000000000000000002 /* CanonicalModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000012 /* CanonicalModelTests.swift */; };
 		B00000000000000000000003 /* FinancialDomainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000013 /* FinancialDomainTests.swift */; };
@@ -20,6 +19,7 @@
 		B00000000000000000000005 /* canonical-rich.json in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000015 /* canonical-rich.json */; };
 		B00000000000000000000006 /* canonical-legacy.json in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000016 /* canonical-legacy.json */; };
 		B00000000000000000000007 /* canonical-forward-compatible.json in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000017 /* canonical-forward-compatible.json */; };
+		C11000000000000000000002 /* TradeReadyWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C11000000000000000000001 /* TradeReadyWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -55,7 +55,6 @@
 
 /* Begin PBXFileReference section */
 		A00000000000000000000008 /* TradeReadyNative.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TradeReadyNative.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		C11000000000000000000001 /* TradeReadyWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TradeReadyWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		B00000000000000000000010 /* TradeReadyNativeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TradeReadyNativeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B00000000000000000000011 /* TestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSupport.swift; sourceTree = "<group>"; };
 		B00000000000000000000012 /* CanonicalModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanonicalModelTests.swift; sourceTree = "<group>"; };
@@ -64,14 +63,14 @@
 		B00000000000000000000015 /* canonical-rich.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = "canonical-rich.json"; path = "CanonicalTests/Fixtures/canonical-rich.json"; sourceTree = "<group>"; };
 		B00000000000000000000016 /* canonical-legacy.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = "canonical-legacy.json"; path = "CanonicalTests/Fixtures/canonical-legacy.json"; sourceTree = "<group>"; };
 		B00000000000000000000017 /* canonical-forward-compatible.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = "canonical-forward-compatible.json"; path = "CanonicalTests/Fixtures/canonical-forward-compatible.json"; sourceTree = "<group>"; };
+		C11000000000000000000001 /* TradeReadyWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TradeReadyWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		C1100000000000000000000B /* Exceptions for "TradeReadyWidgets" folder in "TradeReadyWidgets" target */ = {
+		C1100000000000000000000B /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
-				TradeReadyWidgets.entitlements,
 			);
 			target = C11000000000000000000006 /* TradeReadyWidgets */;
 		};
@@ -79,7 +78,7 @@
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		A00000000000000000000009 /* TradeReadyNative */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = TradeReadyNative; sourceTree = "<group>"; };
-		C1100000000000000000000A /* TradeReadyWidgets */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (C1100000000000000000000B /* Exceptions for "TradeReadyWidgets" folder in "TradeReadyWidgets" target */, ); explicitFileTypes = {}; explicitFolders = (); path = TradeReadyWidgets; sourceTree = "<group>"; };
+		C1100000000000000000000A /* TradeReadyWidgets */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (C1100000000000000000000B /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = TradeReadyWidgets; sourceTree = "<group>"; };
 		C1100000000000000000000C /* TradeReadyNative/Widgets/Shared */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = TradeReadyNative/Widgets/Shared; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
@@ -490,6 +489,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 96J48TJWX3;
+				ENABLE_TESTABILITY = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TradeReadyWidgets/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -506,7 +506,6 @@
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) TRADEREADY_WIDGET_EXTENSION";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				ENABLE_TESTABILITY = YES;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -536,8 +535,8 @@
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) TRADEREADY_WIDGET_EXTENSION";
-				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
