@@ -30,6 +30,8 @@ compatibility_flags = ["nodejs_compat"]
 crons = ["0 15 * * *", "*/15 * * * *"]
 
 [vars]
+ESIGN_SEAL_PUBLIC_KEYS = '{"k2026-10":"aoEIduHhgJiwSd1/NPgPDISa21riZFmG93stQEzc+PM="}'
+ESIGN_SEAL_KEY_ID = "k2026-10"
 # Non-secret only — everything else via `wrangler secret put`.
 # SUPABASE_URL is public (shipped in the app bundle).
 SUPABASE_URL = "https://ncbqswfdvckmdocbawaa.supabase.co"
