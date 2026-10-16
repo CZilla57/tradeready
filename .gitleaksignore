@@ -109,3 +109,15 @@ fc5bd58e05644bdebdf071cb0e010491d711f08e:native/ErrorRedactionTests/main.swift:s
 68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase3DevicePreflightTests/fixtures/wrong-supabase-build-settings.txt:generic-api-key:14
 68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase4DevicePreflightTests/fixtures/wrong-backend-build-settings.txt:generic-api-key:4
 68105fe7ddeeb72f4ff9a2c5c93caf7787899107:native/Phase4DevicePreflightTests/fixtures/wrong-backend-build-settings.txt:generic-api-key:6
+0a61dc78009ee1c8da5ade0ff8741efc1f2333bc:native/APIAccessTests/main.swift:generic-api-key:31
+0a61dc78009ee1c8da5ade0ff8741efc1f2333bc:native/APIAccessTests/main.swift:generic-api-key:32
+861d9ad4e276ffea0920a61cd50de11c20524561:native/ESignatureTests/main.swift:generic-api-key:299
+861d9ad4e276ffea0920a61cd50de11c20524561:native/ESignatureTests/main.swift:generic-api-key:317
+2512c2a6e12eac86de3e1a944a4c89134fe2ca45:native/APIAccessTests/main.swift:generic-api-key:31
+2512c2a6e12eac86de3e1a944a4c89134fe2ca45:native/APIAccessTests/main.swift:generic-api-key:32
+58b738c6fd198aceef693df2e75a55ac3b2f8132:backend-workers/tests/esignFixtures.cjs:generic-api-key:98
+58b738c6fd198aceef693df2e75a55ac3b2f8132:backend-workers/tests/esign.test.cjs:private-key:366
+58b738c6fd198aceef693df2e75a55ac3b2f8132:__tests__/esignRoutesWorkers.test.js:generic-api-key:31
+aa1bbbfbdaa3acfa7b070c10eea44473dfd35e4b:backend-workers/tests/estimateExpiry.test.cjs:generic-api-key:288
+cd604ebe7da1648d648ec9319dcc24c8c4ffb2da:backend-workers/tests/quoteOptions.test.cjs:generic-api-key:289
+cd604ebe7da1648d648ec9319dcc24c8c4ffb2da:backend-workers/tests/quoteOptions.test.cjs:generic-api-key:391
