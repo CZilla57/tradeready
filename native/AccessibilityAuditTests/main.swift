@@ -1715,7 +1715,8 @@ func testSemanticColors(root: URL, sources: [SourceFile]) {
     // 23: Phase 33's Delete draft (builder) and Delete campaign (detail) rows.
     // 24: Phase 26's "Turn off calendar checks" for checks on another device.
     // 25: Phase 23's Revoke key row on Settings › API access.
-    expectEqual(inRowDestructive, 25, "in-row destructive buttons audited")
+    // 26: "Remove data from this device" on the account-mismatch gate.
+    expectEqual(inRowDestructive, 26, "in-row destructive buttons audited")
     if let views = file(sources, "NativeAccessibilityViews.swift") {
         let raw = String(views.raw)
         expect(raw.contains("func nativeDestructiveText() -> some View {\n        modifier(NativeDestructiveText())"),

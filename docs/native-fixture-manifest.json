@@ -7,7 +7,7 @@
    "testSources": [
     {
      "path": "native/AccessibilityAuditTests",
-     "sha256": "2219521715a16be41cee9bc802210e02176a7f2bccf6e94686e85d6070aa10e7"
+     "sha256": "463ad61f109a04c35c7b673190f0855c871441ff117fbe9ba24207c3386842fa"
     }
    ],
    "fixtures": []
@@ -120,7 +120,7 @@
    "testSources": [
     {
      "path": "native/APIAccessTests",
-     "sha256": "75d406186d170e390c79a1efca82105ab57e508e299d72cd825d621ae15da11e"
+     "sha256": "f97eb1104e3449b641b52f599d942e39b412f99ca784278920c957b5f6d69477"
     }
    ],
    "fixtures": []
@@ -1077,7 +1077,7 @@
    "testSources": [
     {
      "path": "native/LegacyReimportTests",
-     "sha256": "4f98f45e08bcc85ea98327b0c680f463ba6ed086c85b8c481e2b8efb37fc417c"
+     "sha256": "d87e81db12be44532d5275ca5169305267cc84426012b63492d1d47c2bb36e21"
     }
    ],
    "fixtures": []

@@ -2,6 +2,8 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var store: AppStore
+    @State private var removeOtherAccountDataConfirmation = false
+    @State private var removeOtherAccountDataFailure = false
 
     var body: some View {
         Group {
@@ -181,10 +183,30 @@ struct RootView: View {
             ContentUnavailableView {
                 Label("Different account", systemImage: "person.crop.circle.badge.exclamationmark")
             } description: {
-                Text("This device contains data from another account. It remains safely separated. Sign in with the matching account to continue.")
+                Text("This device contains data from another account. It remains safely separated. Sign in with the matching account to continue, or remove that data if the account is gone.")
             } actions: {
                 Button("Use another account") { Task { await store.useAnotherAccount() } }
                     .tradeReadyProminentButtonStyle()
+                Button(role: .destructive) {
+                    removeOtherAccountDataConfirmation = true
+                } label: {
+                    Text("Remove data from this device").nativeDestructiveText()
+                }
+            }
+            .confirmationDialog(
+                "Remove the other account's data?",
+                isPresented: $removeOtherAccountDataConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Remove data", role: .destructive) { removeOtherAccountData() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Its records are deleted from this device, including changes that never synced. Data already in the cloud is not affected. You'll need to sign in again.")
+            }
+            .alert("Data not removed", isPresented: $removeOtherAccountDataFailure) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("TradeReady could not remove the other account's data. Try again.")
             }
         case .unavailable:
             NativeContentStateView(
@@ -196,6 +218,19 @@ struct RootView: View {
                 errorMessage: "Your saved data is still safe. Check your connection and try again.",
                 retryAction: { Task { await store.retryAuthentication() } }
             )
+        }
+    }
+
+    /// A scrub that fails part-way leaves its marker pending, and RootView
+    /// then shows the "cleanup paused" screen with its own retry; the alert
+    /// covers a failure before anything was removed.
+    private func removeOtherAccountData() {
+        Task {
+            do {
+                try await store.removeOtherAccountDataFromDevice()
+            } catch {
+                if !store.isAccountScrubBlocked { removeOtherAccountDataFailure = true }
+            }
         }
     }
 }

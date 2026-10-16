@@ -6149,6 +6149,19 @@ final class AppStore: ObservableObject {
         await activateMigratedAuthenticatedIdentity()
     }
 
+    /// The account-mismatch gate's way out when no account matches the data
+    /// on this device (its owner was deleted or recreated, or RN-era data
+    /// carries no provable owner): the local half of a sign-out. The `.live`
+    /// scrub removes the snapshot, the account workspace and the RN-era
+    /// auxiliary state, which are what every mismatch path checks, plus the
+    /// signed-in session, so any account can then sign in fresh. The server
+    /// is not contacted. The completed migration journal stays, so the RN
+    /// data is never re-imported. A no-op outside the mismatch gate.
+    func removeOtherAccountDataFromDevice() async throws {
+        guard authenticationGateState == .accountMismatch else { return }
+        try await signOut(revokeRemote: false)
+    }
+
     func useAnotherAccount(
         clearGoogleCredential: @MainActor () -> Void = {
             NativeGoogleSignInProvider.clearLocalCredential()
@@ -7498,6 +7511,12 @@ final class AppStore: ObservableObject {
         let generation = initialSyncGateGeneration
         let subject = outcome.verifiedUserSubject
         let localSnapshot = snapshot
+        // Device report (2026-10-16): with no local account data before the
+        // pull, everything the pull commits is this verified owner's, so the
+        // workspace may be created for them. Without this, a first sign-in
+        // to an account with cloud records on an empty device (a fresh
+        // install, or after a sign-out) met the account-mismatch gate.
+        let startedWithoutLocalAccountData = !hasLocalAccountData
         // Phase 12 (12.00b.2-K, P12-016): the account generation the pull
         // starts under, for the pull marks below (the recovery mark too since
         // the final review, M1), and the period (`pullMarkPeriod`).
@@ -7537,6 +7556,7 @@ final class AppStore: ObservableObject {
                 self.advancePastInitialSync(
                     outcome: outcome,
                     allowUnboundWorkspaceAdoption: allowUnboundWorkspaceAdoption
+                        || startedWithoutLocalAccountData
                 )
                 // Fix round 3: generation waits for the gate to advance (it is
                 // gated on the post-initial-sync state). Synchronous, so no

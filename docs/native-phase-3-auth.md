@@ -128,6 +128,21 @@ push/pull sync, physical-device purchase proof, or the full account lifecycle.
 - Exact legacy-owner mismatch is a blocking root state. Choosing another account
   removes the active Keychain pointer and its current generation while retaining
   the prior local business data.
+- When no account can match that data (its owner was deleted or recreated, or
+  RN-era data has no provable owner), the gate's double-confirmed "Remove data
+  from this device" (`AppStore.removeOtherAccountDataFromDevice`, added
+  2026-10-15) runs the local half of a sign-out: the `.live` scrub removes the
+  snapshot, the account workspace, the RN-era auxiliary state and the session,
+  without contacting the server, and returns to sign-in. The completed
+  migration journal and the RN sources stay, so nothing is re-imported. Host
+  evidence: `sh native/run-legacy-reimport-tests.sh`
+  (`testMismatchGateRemovesOtherAccountData`, with and without RN owner keys).
+- A first sign-in on a device with no local account data creates the
+  workspace for the verified account even when its initial sync brings cloud
+  records (fixed 2026-10-16 after a device report: the just-synced records
+  had read as unowned local data and sent the owner to the mismatch gate).
+  Unowned local data present before the sync still blocks as before. Host
+  evidence: `testFirstSignInWithCloudRecordsIsNotAMismatch` in the same runner.
 - Fresh native installs no longer seed sample data before authentication. Sample
   versus fresh data remains an explicit post-paywall choice.
 - Explicit sign-out revokes only the current device's Supabase session before

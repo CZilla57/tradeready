@@ -866,6 +866,114 @@ func testUnscrubbedWorkspaceStillBlocksAnotherAccount() async throws {
                 "\(label) [Phase 3 rule]: B's launch is held at the account-mismatch gate too")
 }
 
+/// The account-mismatch gate's escape hatch, for when no account can match
+/// the device's data (its owner deleted or recreated). With `ownerKeys` the
+/// gate comes from A's RN owner marker; without, from local data no owner
+/// was proven for. Either way a native workspace bound to another account
+/// is on disk too. "Remove data from this device" is the local half of a
+/// sign-out: everything every mismatch path checks is gone, the journal
+/// and RN sources stay (no re-import), and B then signs in normally.
+@MainActor
+func testMismatchGateRemovesOtherAccountData(ownerKeys: Bool) async throws {
+    let label = "mismatch escape hatch (ownerKeys: \(ownerKeys))"
+    resetHostKeychain()
+    let device = try FixtureDevice("mismatch-remove-\(ownerKeys)", ownerKeys: ownerKeys)
+    defer { device.cleanUp() }
+    let first = try migrateFirstLaunch(device, label)
+    _ = try NativeOnboardingStore(snapshotURL: device.storeURL).establish(
+        accountBinding: String(repeating: "a", count: 64),
+        imported: nil,
+        hasPersonalizedSettings: false
+    )
+    let workspaceURL = device.appDirectory.appendingPathComponent(NativeOnboardingStore.filename)
+    expect(exists(workspaceURL), "\(label): sanity: a workspace bound to another account is on disk")
+
+    try await first.removeOtherAccountDataFromDevice()
+    expect(exists(device.storeURL) && exists(workspaceURL) && exists(device.auxiliaryURL),
+           "\(label): outside the mismatch gate it removes nothing")
+
+    let bOutcome = try await device.signInOutcome(sessionB, subject: "user-b")
+    first.testBindInteractiveOwner(bOutcome, email: "b@example.invalid")
+    expectEqual(first.authenticationGateState, .accountMismatch, "\(label): sanity: B is held at the mismatch gate")
+
+    try await first.removeOtherAccountDataFromDevice()
+    expectEqual(first.authenticationGateState, .signedOut, "\(label): the gate returns to sign-in")
+    expect(!first.isAccountScrubBlocked && !exists(device.scrubMarkerURL), "\(label): the scrub finished")
+    expect(!exists(device.storeURL) && !exists(workspaceURL), "\(label): the snapshot and workspace are gone")
+    expect(!exists(device.auxiliaryURL) && !exists(device.activationURL), "\(label): A's RN-era account state is gone")
+    expectEqual(first.customers.map(\.id), [], "\(label): no records stay in memory")
+    expect(nativeSession() == nil, "\(label): the session is cleared")
+    expect(device.journalComplete, "\(label): the completed journal stays")
+    expect(exists(device.manifestURL) && device.legacySecureStore.legacyItemCount == 2,
+           "\(label): the RN sources stay (only a deletion erases them)")
+
+    let again = try await device.signInOutcome(sessionB, subject: "user-b")
+    expect(again.accountState != .ownerMismatch, "\(label): nothing names another owner now")
+    first.testBindInteractiveOwner(again, email: "b@example.invalid")
+    expect(isConfigurationPreflight(first.authenticationGateState),
+           "\(label): B's sign-in heads for B's initial sync (got \(first.authenticationGateState))")
+
+    let relaunched = try device.launch()
+    expectEqual(relaunched.customers.map(\.id), [], "\(label): the relaunch imports nothing")
+    expect(relaunched.launchMigrationNotice == nil, "\(label): the relaunch reports no migration")
+}
+
+/// An initial sync that brings the account's own cloud records.
+struct CloudRecordsInitialSync: NativeInitialSyncServing {
+    func pull(
+        sessionBytes: Data,
+        expectedUserSubject: String,
+        localSnapshot: Canonical.Snapshot
+    ) async throws -> Canonical.Snapshot {
+        var cloud = localSnapshot
+        let customer = try JSONDecoder().decode(Canonical.Customer.self, from: Data(
+            #"{"id":"cloud-b-1","name":"Cloud Customer","email":"","phone":"","address":"","notes":""}"#.utf8
+        ))
+        cloud.payload.customers = (cloud.payload.customers ?? []) + [customer]
+        return cloud
+    }
+}
+
+/// Device report (2026-10-16): after "Remove data from this device", an
+/// email sign-in landed on the account-mismatch gate again. On an empty
+/// device, an interactive sign-in to an account that already has cloud
+/// records must reach that account, not the mismatch gate: the records the
+/// initial sync just committed are the verified account's own.
+@MainActor
+func testFirstSignInWithCloudRecordsIsNotAMismatch() async throws {
+    let label = "first sign-in with cloud records"
+    resetHostKeychain()
+    let root = tempDirectory("cloud-records-sign-in")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let storeURL = root.appendingPathComponent("TradeReadyNative/store.json")
+    try FileManager.default.createDirectory(at: storeURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let group = TempAppGroup("cloud-records-sign-in")
+    defer { group.cleanUp() }
+    let store = AppStore(
+        fileURL: storeURL,
+        seedIfMissing: false,
+        appGroupAccountScrubber: group.scrubber,
+        initialSyncService: CloudRecordsInitialSync(),
+        subscriptionService: SubscriptionStub(),
+        widgetTimelineReloader: NoopReloader(),
+        secureSettingsStore: hostTestSecureSettingsStore()
+    )
+    expect(store.customers.isEmpty, "\(label): sanity: the device starts empty")
+    let outcome = try await NativeAuthenticatedIdentityActivator(
+        snapshotURL: storeURL,
+        sessionStore: hostTestSecureSettingsStore(),
+        verifier: FixtureVerifier(),
+        bindingProvider: FixtureBindingProvider()
+    ).installVerifiedSession(sessionBytes: sessionB, responseUserSubject: "user-b")
+    store.testBindInteractiveOwner(outcome, email: "b@example.invalid")
+    for _ in 0..<500 where store.authenticationGateState == .initialSyncLoading {
+        try await Task.sleep(nanoseconds: 10_000_000)
+    }
+    expectEqual(store.customers.map(\.name), ["Cloud Customer"], "\(label): sanity: the initial sync committed B's cloud record")
+    expect(store.authenticationGateState != .accountMismatch,
+           "\(label): B reaches B's own account (got \(store.authenticationGateState))")
+}
+
 /// These exits keep the workspace (and the journal), so a relaunch loads the
 /// same snapshot and never runs the importer.
 @MainActor
@@ -1922,6 +2030,10 @@ struct LegacyReimportTests {
             try await testSignedOutLaunchReprotects()
             try await testWorkspaceRetainingExits()
             try await testUnscrubbedWorkspaceStillBlocksAnotherAccount()
+            for ownerKeys in [true, false] {
+                try await testMismatchGateRemovesOtherAccountData(ownerKeys: ownerKeys)
+            }
+            try await testFirstSignInWithCloudRecordsIsNotAMismatch()
             try await testRetriedSignOutClearsPendingBookingWork()
             try await testUnreadableDeletionMarkerFailsClosed()
             try await testIdentityCheckOvertakenByAccountBoundary()
