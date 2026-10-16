@@ -41,7 +41,9 @@ carry over.
    - URL: `https://tradeready-backend.tradeready.workers.dev/api/stripe/webhook`
    - **Listen to: Events on Connected accounts** (NOT "your account" — this is the
      setting people miss; connected-account checkouts fire there)
-   - Event: `checkout.session.completed`
+   - Events: `checkout.session.completed` and `payment_intent.succeeded` (the second
+     added 2026-10 for Tap to Pay, roadmap Phase 18; both on this ONE endpoint, since the
+     Worker verifies every event against its single `STRIPE_CONNECT_WEBHOOK_SECRET`)
 2. Reveal and copy its signing secret (`whsec_...`). Keep it handy for Part 3.
 3. Live mode → Developers → API keys → copy the `sk_live_...` secret key.
 

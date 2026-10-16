@@ -348,20 +348,44 @@ duration) before Stage C entry, and update the App Store privacy nutrition label
 ## 7. Step 3a — App Review notes and demo account template
 
 **App Review notes (draft, for both external TestFlight Beta App Review and production
-review):**
+review; updated 2026-10-15 for the roadmap build, phases 25 → 18):** paste the quoted text
+into App Store Connect › the version › App Review Information › Notes. The demo account
+goes in that page's Sign-In Information fields, never in this note.
 
-> TradeReady is a field-service business app (scheduling, invoicing, estimates,
-> customers) for solo trade contractors. Sign in with the demo account below. On first
-> sign-in, choose "Start with sample data" during onboarding to seed a full synthetic
-> business (customers, jobs, invoices, estimates) with no real customer data. The
-> subscription paywall can be bypassed with the reviewer's sandbox/demo entitlement (see
-> below); Restore Purchases is available if the paywall reappears. Booking-link and
-> portal flows can be exercised from Settings › Booking link using the seeded sample
-> customer. No push notifications are sent in this release (booking alerts arrive by
-> email only, per a dated waiver) — this is expected, not a defect. Settings › Calendar
-> sync is optional: when turned on, it reads the calendars the user chooses for busy times
-> (only start and end times are sent, so the booking page skips them) and can add the
-> user's jobs to a "TradeReady" calendar on the device.
+> TradeReady is a field-service business app (scheduling, estimates, invoicing,
+> customers) for solo trade contractors. Sign in with the demo account in the Sign-In
+> Information fields. During onboarding, choose "Explore with sample data" to load a full
+> synthetic business (customers, jobs, estimates, invoices) with no real customer data.
+> The subscription paywall can be bypassed with the reviewer's sandbox/demo entitlement;
+> "Restore purchases" is available if the paywall reappears.
+>
+> Permissions: the camera prompt appears only when the user adds a photo. Settings ›
+> Calendar sync is optional: when turned on, it asks for calendar access, reads the
+> calendars the user chooses for busy times (only start and end times are sent, so the
+> booking page skips them), and can add the user's jobs to a "TradeReady" calendar on the
+> device. The app schedules local reminders (such as estimate follow-ups) only if the user
+> allows notifications; it does not use remote push, and booking alerts arrive by email.
+>
+> Payments: the contractor's customers pay for real-world services (labor and materials)
+> through the contractor's own Stripe account (Stripe Connect), using payment links and a
+> hosted payment page. Nothing digital is sold through Stripe; TradeReady Pro is sold only
+> through In-App Purchase. Payment features need a connected Stripe account (Settings ›
+> Payments) and are optional; the rest of the app works without one.
+>
+> Optional tools: booking-link and customer-portal flows can be tried from Settings ›
+> Booking link using the seeded sample customer. Settings › API access lets the user
+> create read-only API keys for their own bookkeeping tools; nothing is shared until the
+> user creates a key.
+
+What changed from the previous draft, and why (checked against `master` on 2026-10-15):
+the onboarding button is "Explore with sample data" (`N/NativeOnboardingView.swift`);
+the build has no `aps-environment` entitlement and no remote-push registration, but does
+schedule local estimate follow-up reminders (`N/NativeEstimateFollowUpNotifications.swift`),
+so "no push notifications" became "no remote push"; the Payments paragraph pre-empts an
+In-App Purchase question now that autopay, tips and the pay page exist; API access is on
+in this build (`NativeAPIAccessFeature.apiAccessEnabled`). Tap to Pay is hidden with its
+build flag off and e-signatures stay off until `ESIGN_V2`, so the note doesn't mention
+either. Re-check this note when either is turned on.
 
 **Demo account TEMPLATE (fields only — no real credentials; the owner fills this in a
 credential manager, never in this repo or this doc):**

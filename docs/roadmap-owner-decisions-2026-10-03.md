@@ -84,7 +84,7 @@ v1 sends from the phone, one composer per recipient with a resumable queue, and 
 
 | ID | Question | Recommended |
 |---|---|---|
-| 19-Q2 | Approve the electronic-records disclosure text | Yes, after one lawyer review |
+| 19-Q2 | Approve the electronic-records disclosure text | Yes, after one lawyer review. **2026-10-15 owner: lawyer review lifted; approved as drafted** (disclosure in `backend-workers/lib/esign/texts.js` and the esign spec §11.6 terms/privacy text) |
 | 19-Q3 | Approve the intent statement and checkbox wording | Yes |
 | 19-Q4 | Rewrite terms §8 and update the privacy §1 approval-records bullet | Yes |
 | 19-Q5 | Adopt the can-say / must-not-say claims lists, and never call it "legally binding" in the product | Yes |

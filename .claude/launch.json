@@ -7,6 +7,12 @@
       "runtimeArgs": ["expo", "start", "--web"],
       "port": 8081,
       "autoPort": true
+    },
+    {
+      "name": "Promo Remotion Studio",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "cd /Users/chadrector/dev/tradeready-promo && npx remotion studio --no-open --port 3123"],
+      "port": 3123
     }
   ]
 }
