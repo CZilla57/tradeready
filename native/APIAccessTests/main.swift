@@ -269,8 +269,8 @@ struct APIAccessTests {
 
     static func domain() {
         // Flag (spec §11 stage C): off, and off hides the Settings entry.
-        expect(NativeAPIAccessFeature.apiAccessEnabled == false, "flag: apiAccessEnabled defaults to OFF")
-        expect(!NativeAPIAccessFeature.showsSettingsEntry(), "flag: off hides the Settings entry")
+        expect(NativeAPIAccessFeature.apiAccessEnabled == true, "flag: apiAccessEnabled is ON")
+        expect(NativeAPIAccessFeature.showsSettingsEntry(), "flag: on shows the Settings entry")
         expect(NativeAPIAccessFeature.showsSettingsEntry(flag: true), "flag: on shows the Settings entry")
 
         // Scopes: the Worker's canonical order and presets (keys.js SCOPES/PRESETS).
@@ -889,7 +889,7 @@ struct APIAccessTests {
             let declaration = domain.components(separatedBy: "\n").first { $0.contains("struct NativeAPIKeySecret") } ?? ""
             expect(!declaration.isEmpty && !declaration.contains("Codable") && !declaration.contains("Encodable")
                    && !declaration.contains("Hashable"), "secret: the type is neither Codable nor Hashable")
-            expect(domain.contains("static let apiAccessEnabled = false"), "flag: the source default is off")
+            expect(domain.contains("static let apiAccessEnabled = true"), "flag: the source default is on")
         }
         if let settings = read("native/TradeReadyNative/SettingsView.swift") {
             let code = SourceFile(relativePath: "SettingsView.swift", text: settings).codeText

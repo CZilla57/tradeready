@@ -18,7 +18,7 @@ import Foundation
 enum NativeAPIAccessFeature {
     /// Stage C: Settings › API access stays fully hidden until the Worker and
     /// its migration are live. The owner turns it on at ship step 5 (§14.8).
-    static let apiAccessEnabled = false
+    static let apiAccessEnabled = true
 
     /// Whether Settings shows the "API access" row. Off means no row and no
     /// way to reach the screen.
