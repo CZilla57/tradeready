@@ -13,6 +13,12 @@
       "runtimeExecutable": "sh",
       "runtimeArgs": ["-c", "cd /Users/chadrector/dev/tradeready-promo && npx remotion studio --no-open --port 3123"],
       "port": 3123
+    },
+    {
+      "name": "Website (local)",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8099", "-d", "/Users/chadrector/dev/tradeready-legal"],
+      "port": 8099
     }
   ]
 }
