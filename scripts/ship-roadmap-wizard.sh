@@ -247,6 +247,19 @@ put_secret() {
   printf '  %s✓ set%s Worker secret %s\n' "$GREEN" "$RESET" "$1"
 }
 
+# api_get URL [curl args…] prints the body of a GET with $API_KEY. On a non-2xx
+# it prints the status and the Worker's error body (never the key) and fails.
+api_get() {
+  local out code
+  out=$(curl -sS -w '\n%{http_code}' -H "Authorization: Bearer $API_KEY" "$@") || return 1
+  code=${out##*$'\n'}; out=${out%$'\n'*}
+  if [[ "$code" != 2* ]]; then
+    printf '    %sHTTP %s%s %.300s\n' "$RED" "$code" "$RESET" "$out" >&2
+    return 1
+  fi
+  printf '%s' "$out"
+}
+
 need_db() {
   [[ -n "$DB_CHECKED" ]] && return 0
   if [[ -z "$DATABASE_URL" ]]; then
@@ -647,24 +660,28 @@ if begin S20 "Open API smoke test"; then
     defer "API smoke test (needs API access on, stage 18)"
   else
     step "In a build with API access (TestFlight is fine): Settings › API access › create a key with the Everything preset."
+    note "The app's Copy button keeps the key on the phone (no Universal Clipboard) and clears it after 2 minutes,"
+    note "so it won't paste on this Mac. Get it here another way, e.g. paste it into a note that syncs to this Mac."
+    note "This stage revokes the key at the end, so delete that note afterwards."
     ask_secret API_KEY "Paste the new key (kept in memory only):"
-    auth=(-H "Authorization: Bearer $API_KEY")
+    [[ "$API_KEY" =~ ^trk_[A-Za-z0-9_-]{107}$ ]] \
+      || die "That isn't a whole API key: expected trk_ plus 107 characters, got ${#API_KEY} characters. Re-run to retry."
     say "GET /v1/account:"
-    acct=$(curl -fsS "${auth[@]}" "$WORKER_BASE/v1/account") || die "/v1/account failed."
+    acct=$(api_get "$WORKER_BASE/v1/account") || die "/v1/account failed (error above)."
     printf '    %.400s\n' "$acct"
     say "GET /v1/customers?limit=1:"
-    page=$(curl -fsS "${auth[@]}" "$WORKER_BASE/v1/customers?limit=1") || die "List call failed."
+    page=$(api_get "$WORKER_BASE/v1/customers?limit=1") || die "List call failed (error above)."
     printf '    %.400s\n' "$page"
     cursor=$(printf '%s' "$page" | sed -n 's/.*"nextCursor":"\([^"]*\)".*/\1/p')
     if [[ -n "$cursor" ]]; then
-      curl -fsS -G "${auth[@]}" "$WORKER_BASE/v1/customers" --data-urlencode "limit=1" --data-urlencode "cursor=$cursor" >/dev/null \
+      api_get -G "$WORKER_BASE/v1/customers" --data-urlencode "limit=1" --data-urlencode "cursor=$cursor" >/dev/null \
         && printf '  %s✓%s followed nextCursor\n' "$GREEN" "$RESET"
     else
       note "No nextCursor (one customer or fewer), so paging wasn't exercised."
     fi
     step "Now rotate that key in the app, then revoke the new one."
     pause "Press Enter when both are done"
-    code=$(curl -s -o /dev/null -w '%{http_code}' "${auth[@]}" "$WORKER_BASE/v1/account")
+    code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $API_KEY" "$WORKER_BASE/v1/account")
     if [[ "$code" == 401 ]]; then printf '  %s✓%s old key now gets 401\n' "$GREEN" "$RESET"; else die "Old key got $code, expected 401."; fi
     unset API_KEY
     mark_done S20
